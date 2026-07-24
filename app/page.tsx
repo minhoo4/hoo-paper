@@ -1483,11 +1483,33 @@ async function submitFeedback() {
       }),
     });
 
-    const data = await response.json();
+    const responseText = await response.text();
+
+    let data: {
+      success?: boolean;
+      feedbackId?: string;
+      error?: string;
+    } = {};
+
+    if (responseText) {
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        console.error(
+          "피드백 API가 JSON이 아닌 응답을 반환했습니다:",
+          responseText,
+        );
+
+        throw new Error(
+          `피드백 서버 연결 오류가 발생했습니다. (${response.status})`,
+        );
+      }
+    }
 
     if (!response.ok) {
       throw new Error(
-        data.error ?? "피드백을 전송하지 못했습니다.",
+        data.error ??
+          `피드백을 전송하지 못했습니다. (${response.status})`,
       );
     }
 

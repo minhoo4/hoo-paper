@@ -57,7 +57,7 @@ export default function HooCommunityPanel({
   const loadRanking = useCallback(async () => {
     try {
       const response = await fetch(
-        `/api/sudoku/ranking?period=${period}&limit=20`,
+       `/api/sudoku/ranking?period=${period}&limit=100`,
         { cache: "no-store" },
       );
       const data = await response.json();
@@ -276,7 +276,13 @@ export default function HooCommunityPanel({
         ))}
       </div>
 
-      <div className="mt-3 max-h-[330px] space-y-2 overflow-y-auto pr-1">
+      <div
+  className="mt-3 max-h-[330px] space-y-2 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden"
+  style={{
+    scrollbarWidth: "none",
+    msOverflowStyle: "none",
+  }}
+>
         {rankings.length === 0 ? (
           <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm font-bold text-[#948da7]">
            첫 주인공이 되어보세요!
@@ -288,7 +294,9 @@ export default function HooCommunityPanel({
               className="flex items-center gap-3 rounded-2xl bg-white px-3 py-3"
             >
               <span className="w-7 text-center text-sm font-black text-[#675f7d]">
-                {index < 3 ? ["🥇", "🥈", "🥉"][index] : `${row.rank}위`}
+              {index < 3
+  ? ["🥇", "🥈", "🥉"][index]
+  : `${index + 1}위`}
               </span>
               <span className="text-xl">{row.avatarEmoji || "🦉"}</span>
               <div className="min-w-0 flex-1">

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "../../../../lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 
 export async function GET() {
   try {
@@ -7,47 +7,36 @@ export async function GET() {
 
     const {
       data: { user },
-      error: userError,
     } = await supabase.auth.getUser();
 
-    if (userError || !user) {
-      return NextResponse.json({
-        isLoggedIn: false,
-        isAdmin: false,
-        canManage: false,
-      });
+    if (!user) {
+      return NextResponse.json(
+        { stats: null },
+        { status: 200 },
+      );
     }
 
-    // 관리자 등록 여부
-    const { data: isAdmin, error: adminError } =
-      await supabase.rpc("is_admin");
+    const { data, error } = await supabase.rpc(
+      "get_my_sudoku_stats",
+    );
 
-    if (adminError) {
-      console.error("관리자 확인 실패:", adminError);
+    if (error) {
+      throw error;
     }
 
-    // 관리자 + MFA 완료 여부
-    const { data: canManage, error: manageError } =
-      await supabase.rpc("can_manage_admin_content");
-
-    if (manageError) {
-      console.error("관리 권한 확인 실패:", manageError);
-    }
+    const stats = Array.isArray(data)
+      ? data[0] ?? null
+      : data;
 
     return NextResponse.json({
-      isLoggedIn: true,
-      isAdmin: isAdmin === true,
-      canManage: canManage === true,
+      stats,
     });
   } catch (error) {
-    console.error("관리자 확인 API 오류:", error);
+    console.error("GET /api/sudoku/me 오류:", error);
 
     return NextResponse.json(
       {
-        isLoggedIn: false,
-        isAdmin: false,
-        canManage: false,
-        error: "관리자 정보를 확인하지 못했습니다.",
+        error: "내 스도쿠 기록을 불러오지 못했습니다.",
       },
       { status: 500 },
     );
