@@ -33,6 +33,13 @@ type Memo = {
   content: string;
   updatedAt: string;
 };
+type Notice = {
+  id: number;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+};
 type Favorite = {
   id: number;
   name: string;
@@ -244,6 +251,7 @@ function getSudokuDifficultyLabel(difficulty: SudokuDifficulty) {
 
 
 export default function Home() {
+  
   const today = useMemo(() => new Date(), []);
 
   /* 가로 스크롤 */
@@ -304,6 +312,53 @@ export default function Home() {
 
   const [memos, setMemos] = useState<Memo[]>([]);
   const [memoTitle, setMemoTitle] = useState("");
+
+ /* 전달사항 */
+
+const [notices, setNotices] = useState<Notice[]>([]);
+const [isNoticesLoading, setIsNoticesLoading] =
+  useState(true);
+const [selectedNotice, setSelectedNotice] =
+  useState<Notice | null>(null);
+  const [isNoticeOpen, setIsNoticeOpen] =
+  useState(false);
+  
+  const noticeRef = useRef<HTMLDivElement>(null);
+
+const [hasUnreadNotice, setHasUnreadNotice] =
+  useState(false);
+  
+const [isFeedbackOpen, setIsFeedbackOpen] =
+  useState(false);
+
+const feedbackRef = useRef<HTMLDivElement>(null);
+
+const [feedbackContent, setFeedbackContent] =
+  useState("");
+
+  useEffect(() => {
+  function handleFeedbackClickOutside(event: MouseEvent) {
+    if (
+      feedbackRef.current &&
+      !feedbackRef.current.contains(event.target as Node)
+    ) {
+      setIsFeedbackOpen(false);
+    }
+  }
+
+  document.addEventListener(
+    "mousedown",
+    handleFeedbackClickOutside,
+  );
+
+  return () => {
+    document.removeEventListener(
+      "mousedown",
+      handleFeedbackClickOutside,
+    );
+  };
+}, []);
+
   const [memoContent, setMemoContent] = useState("");
   const [editingMemoId, setEditingMemoId] = useState<
     string | null
@@ -365,6 +420,93 @@ export default function Home() {
       window.clearInterval(clockInterval);
     };
   }, []);
+/* ─────────────────────────────
+   전달사항 불러오기
+───────────────────────────── */
+
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadNotices() {
+    try {
+      const response = await fetch("/api/notices", {
+        cache: "no-store",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error ?? "공지를 불러오지 못했습니다.",
+        );
+      }
+
+     if (!cancelled) {
+  const loadedNotices = Array.isArray(data.notices)
+    ? data.notices
+    : [];
+
+  const latestNotice = loadedNotices[0] ?? null;
+
+setNotices(loadedNotices);
+setSelectedNotice(latestNotice);
+
+if (latestNotice) {
+  const lastReadId = localStorage.getItem(
+    "lastReadNoticeId",
+  );
+
+  setHasUnreadNotice(
+    String(latestNotice.id) !== lastReadId,
+  );
+} else {
+  setHasUnreadNotice(false);
+}
+}
+    } catch (error) {
+      console.error("전달사항 조회 실패:", error);
+
+      if (!cancelled) {
+        setNotices([]);
+      }
+    } finally {
+      if (!cancelled) {
+        setIsNoticesLoading(false);
+      }
+    }
+  }
+
+  void loadNotices();
+
+  return () => {
+    cancelled = true;
+  };
+}, []);
+
+useEffect(() => {
+  function handleClickOutside(event: MouseEvent) {
+    if (
+      noticeRef.current &&
+      !noticeRef.current.contains(
+        event.target as Node,
+      )
+    ) {
+      setIsNoticeOpen(false);
+    }
+  }
+
+  document.addEventListener(
+    "mousedown",
+    handleClickOutside,
+  );
+
+  return () => {
+    document.removeEventListener(
+      "mousedown",
+      handleClickOutside,
+    );
+  };
+}, []);
 
   /* ─────────────────────────────
      고정 헤더
@@ -679,21 +821,22 @@ useEffect(() => {
     if (!isSudokuCompleted || !sudokuPuzzleId) {
       return;
     }
+submittedSudokuIdRef.current = sudokuPuzzleId;
 
-    if (submittedSudokuIdRef.current === sudokuPuzzleId) {
-      return;
-    }
+console.log("SAVE:", {
+  puzzleId: sudokuPuzzleId,
+  difficulty: sudokuDifficulty,
+});
 
-    submittedSudokuIdRef.current = sudokuPuzzleId;
-    setIsSudokuSaving(true);
-    setSudokuSaveMessage("기록을 저장하고 있어요...");
+setIsSudokuSaving(true);
+setSudokuSaveMessage("기록을 저장하고 있어요...");
 
-    void submitSudokuCompletion({
-      puzzleId: sudokuPuzzleId,
-      difficulty: sudokuDifficulty,
-      elapsedSeconds: sudokuSeconds,
-      hintsUsed: 3 - sudokuHintCount,
-    })
+void submitSudokuCompletion({
+  puzzleId: sudokuPuzzleId,
+  difficulty: sudokuDifficulty,
+  elapsedSeconds: sudokuSeconds,
+  hintsUsed: 3 - sudokuHintCount,
+})
       .then((result) => {
         if (result.alreadyCompleted) {
           setSudokuSaveMessage("이미 점수를 받은 퍼즐이에요.");
@@ -1203,6 +1346,7 @@ useEffect(() => {
       : 0;
 
   function startSudokuGame(difficulty: SudokuDifficulty) {
+      console.log("START SUDOKU:", difficulty);
     const game = generateSudokuGame(difficulty);
     const puzzleId = createPuzzleId(difficulty);
 
@@ -1291,29 +1435,77 @@ useEffect(() => {
     }
   }
 
-  function moveHorizontalPage(nextPage: 0 | 1 | 2) {
-    if (isHorizontalAnimatingRef.current) {
-      return;
-    }
-
-    const section = horizontalSectionRef.current;
-
-    if (section) {
-      window.scrollTo({
-        top: section.offsetTop,
-        behavior: "auto",
-      });
-    }
-
-    isHorizontalAnimatingRef.current = true;
-    setHorizontalPage(nextPage);
-    setHorizontalProgress(nextPage);
-
-    window.setTimeout(() => {
-      isHorizontalAnimatingRef.current = false;
-    }, 750);
+function moveHorizontalPage(nextPage: 0 | 1 | 2) {
+  if (isHorizontalAnimatingRef.current) {
+    return;
   }
 
+  const section = horizontalSectionRef.current;
+
+  if (section) {
+    window.scrollTo({
+      top: section.offsetTop,
+      behavior: "auto",
+    });
+  }
+
+  isHorizontalAnimatingRef.current = true;
+  setHorizontalPage(nextPage);
+  setHorizontalProgress(nextPage);
+
+  window.setTimeout(() => {
+    isHorizontalAnimatingRef.current = false;
+  }, 750);
+}
+
+async function submitFeedback() {
+  const content = feedbackContent.trim();
+
+  if (!content) {
+    window.alert("내용을 입력해주세요.");
+    return;
+  }
+
+  if (content.length > 100) {
+    window.alert("피드백은 100자 이하로 입력해주세요.");
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/feedback", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        userId: null,
+        content,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.error ?? "피드백을 전송하지 못했습니다.",
+      );
+    }
+
+    window.alert("피드백이 전송되었습니다.");
+
+    setFeedbackContent("");
+    setIsFeedbackOpen(false);
+  } catch (error) {
+    console.error("피드백 전송 실패:", error);
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "피드백 전송에 실패했습니다.";
+
+    window.alert(message);
+  }
+}
   /* ─────────────────────────────
      화면
   ───────────────────────────── */
@@ -1718,63 +1910,6 @@ useEffect(() => {
                       </p>
                     </header>
 
-                    <section className="border-b border-[#dedaf0] px-6 py-4">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-xl font-black">
-                          일정 목록
-                        </h3>
-
-                        <span className="rounded-full bg-[#eeeafd] px-3 py-1 text-xs font-black text-[#7467d8]">
-                          {selectedSchedules.length}개
-                        </span>
-                      </div>
-
-                      {selectedSchedules.length === 0 ? (
-                        <div className="mt-3 rounded-2xl border-2 border-dashed border-[#ddd8ec] px-4 py-5 text-center text-sm font-bold text-[#aaa4b8]">
-                          이날의 일정이 아직 없어요.
-                        </div>
-                      ) : (
-                        <div className="mt-3 max-h-32 space-y-2 overflow-y-auto pr-1">
-                          {selectedSchedules.map(
-                            (schedule, index) => {
-                              const active =
-                                selectedScheduleId ===
-                                schedule.id;
-
-                              return (
-                                <button
-                                  type="button"
-                                  key={schedule.id}
-                                  onClick={() =>
-                                    setSelectedScheduleId(
-                                      schedule.id,
-                                    )
-                                  }
-                                  className={`flex w-full items-center gap-3 rounded-2xl px-4 py-2.5 text-left transition ${
-                                    active
-                                      ? "bg-[#7467d8] text-white"
-                                      : "bg-[#f0edf9] hover:bg-[#e4dff5]"
-                                  }`}
-                                >
-                                  <span
-                                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black text-[#423d53] ${getStickerClass(
-                                      index,
-                                    )}`}
-                                  >
-                                    {index + 1}
-                                  </span>
-
-                                  <span className="min-w-0 flex-1 truncate text-sm font-black">
-                                    {schedule.title}
-                                  </span>
-                                </button>
-                              );
-                            },
-                          )}
-                        </div>
-                      )}
-                    </section>
-
                     <section className="min-h-0 flex-1 overflow-y-auto border-b border-[#dedaf0] px-6 py-4">
                       <div className="flex items-center justify-between gap-3">
                         <h3 className="text-xl font-black">
@@ -1855,6 +1990,7 @@ useEffect(() => {
                         일정 저장
                       </button>
                     </form>
+
                   </aside>
                 </section>
               </div>
@@ -2393,6 +2529,190 @@ useEffect(() => {
           )}
         </div>
       </section>
+      {/* 왼쪽 하단 전달사항 */}
+<div
+  ref={noticeRef}
+className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
+>
+ <button
+  type="button"
+ onClick={() => {
+  setIsNoticeOpen((previous) => !previous);
+
+  const latestNotice = notices[0];
+
+  if (latestNotice) {
+    localStorage.setItem(
+      "lastReadNoticeId",
+      String(latestNotice.id),
+    );
+  }
+
+  setHasUnreadNotice(false);
+}}
+ className={`relative flex h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-black/45 text-3xl text-white shadow-2xl backdrop-blur-xl transition hover:scale-105 hover:bg-black/60 ${
+  hasUnreadNotice && notices.length > 0
+    ? "animate-bounce"
+    : ""
+}`}
+  aria-label="전달사항 열기"
+>
+
+    📢
+
+{hasUnreadNotice && notices.length > 0 && (
+  <span className="absolute -right-1 -top-1 flex h-7 min-w-7 animate-pulse items-center justify-center rounded-full bg-rose-500 px-2 text-sm font-black text-white shadow-lg">
+    1
+  </span>
+)}
+  </button>
+
+<div ref={feedbackRef} className="relative">
+  <button
+    type="button"
+    onClick={() =>
+      setIsFeedbackOpen((previous) => !previous)
+    }
+    className="flex h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-black/45 text-3xl text-white shadow-2xl backdrop-blur-xl transition hover:scale-105 hover:bg-black/60"
+    aria-label="피드백 열기"
+  >
+    💬
+  </button>
+
+  {isFeedbackOpen && (
+    <div className="absolute bottom-20 left-0 z-[9990] w-[340px] rounded-3xl border border-white/20 bg-black/60 p-5 text-white shadow-2xl backdrop-blur-xl">
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h3 className="text-lg font-black">
+            피드백 보내기
+          </h3>
+
+          <p className="mt-1 text-xs text-white/70">
+            궁금한 점, 문의사항, 건의사항을 남겨주세요.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setIsFeedbackOpen(false)}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xl font-black text-white transition hover:bg-white/20"
+          aria-label="피드백 창 닫기"
+        >
+          ×
+        </button>
+      </header>
+
+      <textarea
+        value={feedbackContent}
+        onChange={(event) =>
+          setFeedbackContent(event.target.value)
+        }
+        maxLength={100}
+        rows={4}
+        placeholder="100자 이하로 입력해주세요."
+        className="mt-4 w-full resize-none rounded-2xl border border-white/20 bg-white/10 p-3 text-sm text-white outline-none placeholder:text-white/40"
+      />
+
+      <div className="mt-2 flex justify-end text-xs text-white/60">
+        {feedbackContent.length}/100
+      </div>
+
+      <button
+        type="button"
+        onClick={submitFeedback}
+        className="mt-4 w-full rounded-2xl bg-blue-500 py-3 text-sm font-black text-white transition hover:bg-blue-600"
+      >
+        보내기
+      </button>
+    </div>
+  )}
+</div>
+
+  {isNoticeOpen && (
+    <section className="absolute bottom-20 left-0 w-[400px] overflow-hidden rounded-3xl border border-white/20 bg-black/55 text-white shadow-2xl backdrop-blur-2xl">
+      <header className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+        <h3 className="text-xl font-black">
+          📢 전달사항
+        </h3>
+
+        <button
+          type="button"
+          onClick={() => setIsNoticeOpen(false)}
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-xl font-black transition hover:bg-white/20"
+          aria-label="전달사항 닫기"
+        >
+          ×
+        </button>
+      </header>
+
+      <div className="max-h-[460px] overflow-y-auto p-4">
+        {isNoticesLoading ? (
+          <p className="text-base font-bold text-white/60">
+            불러오는 중...
+          </p>
+        ) : notices.length === 0 ? (
+          <p className="text-base font-bold text-white/60">
+            등록된 전달사항이 없습니다.
+          </p>
+        ) : (
+          <>
+            <div className="space-y-2">
+              {notices.slice(0, 5).map((notice) => (
+                <button
+                  key={notice.id}
+                  type="button"
+                  onClick={() =>
+                    setSelectedNotice(notice)
+                  }
+                  className={`w-full rounded-2xl px-4 py-3 text-left transition ${
+                    selectedNotice?.id === notice.id
+                      ? "bg-white/20"
+                      : "bg-white/10 hover:bg-white/15"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+  <div className="flex items-center gap-2">
+    <span className="truncate text-base font-black">
+      {notice.title}
+    </span>
+
+   {hasUnreadNotice &&
+  notice.id === notices[0]?.id && (
+    <span className="rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-black text-white">
+      NEW
+    </span>
+  )}
+  </div>
+</div>
+
+                    <span className="shrink-0 text-xs font-bold text-white/55">
+                      {new Date(
+                        notice.created_at,
+                      ).toLocaleDateString("ko-KR")}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            {selectedNotice && (
+              <article className="mt-4 rounded-2xl bg-white/10 p-4">
+                <h4 className="text-lg font-black">
+                  {selectedNotice.title}
+                </h4>
+
+                <p className="mt-3 whitespace-pre-wrap break-words text-base font-bold leading-7 text-white/80">
+                  {selectedNotice.content}
+                </p>
+              </article>
+            )}
+          </>
+        )}
+      </div>
+    </section>
+  )}
+</div>
  <FocusMode />
     </main>
   );

@@ -51,16 +51,33 @@ export async function POST(request: Request) {
       p_hints_used: hintsUsed,
     });
 
-    if (error) {
-      if (error.code === "23505") {
-        return NextResponse.json({
-          score: 0,
-          totalScore: null,
-          alreadyCompleted: true,
-        });
-      }
-      throw error;
-    }
+   if (error) {
+  console.error("complete_sudoku RPC error:", {
+    code: error.code,
+    message: error.message,
+    details: error.details,
+    hint: error.hint,
+  });
+
+  if (error.code === "23505") {
+    return NextResponse.json({
+      score: 0,
+      totalScore: null,
+      alreadyCompleted: true,
+    });
+  }
+
+  return NextResponse.json(
+    {
+      error: "complete_sudoku 함수 실행 실패",
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    },
+    { status: 500 },
+  );
+}
 
     const result = Array.isArray(data) ? data[0] : data;
     return NextResponse.json({

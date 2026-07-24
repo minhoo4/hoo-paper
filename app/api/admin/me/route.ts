@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "../../../../lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 
 export async function GET() {
   try {
@@ -18,26 +18,24 @@ export async function GET() {
       });
     }
 
-    // 관리자 등록 여부
     const { data: isAdmin, error: adminError } =
       await supabase.rpc("is_admin");
 
-    if (adminError) {
-      console.error("관리자 확인 실패:", adminError);
-    }
-
-    // 관리자 + MFA 완료 여부
     const { data: canManage, error: manageError } =
       await supabase.rpc("can_manage_admin_content");
 
-    if (manageError) {
-      console.error("관리 권한 확인 실패:", manageError);
+    if (adminError || manageError) {
+      console.error({
+        adminError,
+        manageError,
+      });
     }
 
     return NextResponse.json({
       isLoggedIn: true,
       isAdmin: isAdmin === true,
       canManage: canManage === true,
+      userId: user.id,
     });
   } catch (error) {
     console.error("관리자 확인 API 오류:", error);
@@ -47,7 +45,6 @@ export async function GET() {
         isLoggedIn: false,
         isAdmin: false,
         canManage: false,
-        error: "관리자 정보를 확인하지 못했습니다.",
       },
       { status: 500 },
     );
