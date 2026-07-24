@@ -47,6 +47,22 @@ type Favorite = {
   icon: string;
 };
 
+type TodoItem = {
+  id: string;
+  content: string;
+  completed: boolean;
+  source: "user" | "hoo";
+  gameId?: string;
+  createdAt: string;
+};
+
+type HooRecommendedTask = {
+  gameId: string;
+  gameName: string;
+  content: string;
+  enabled: boolean;
+};
+
 type SudokuDifficulty = "easy" | "normal" | "hard";
 type SudokuBoard = number[][];
 type SudokuCell = { row: number; column: number };
@@ -61,9 +77,39 @@ const SCHEDULE_STORAGE_KEY = "hoo-calendar-schedules";
 const MEMO_STORAGE_KEY = "hoo-memos";
 const FAVORITE_STORAGE_KEY = "hoo-favorites";
 
+const TODO_STORAGE_KEY = "hoo-todos";
+
+const RECOMMENDED_TODO_STORAGE_KEY =
+  "hoo-recommended-todo-completed";
+
+  const MINIGAME_COMPLETION_COUNT_STORAGE_KEY =
+  "hoo-minigame-completion-count";
+
+  const MINIGAME_COMPLETION_DATE_STORAGE_KEY =
+  "hoo-minigame-completion-date";
+
+const HOO_RECOMMENDED_TASKS: HooRecommendedTask[] = [
+  {
+    gameId: "minigame",
+    gameName: "미니게임",
+    content: "미니게임 2판하기",
+    enabled: true,
+  },
+];
+
 /* ─────────────────────────────
    공통 함수
 ───────────────────────────── */
+
+function getTodayStorageDate() {
+  const now = new Date();
+
+  return createDateKey(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  );
+}
 
 function createId() {
   if (
@@ -263,17 +309,43 @@ export default function Home() {
     useState(0);
 
   const [horizontalPage, setHorizontalPage] =
-    useState<0 | 1 | 2>(0);
+  useState<-1 | 0 | 1 | 2>(0);
 
   const isHorizontalAnimatingRef = useRef(false);
+
+
+
+const [showMissionCompleteToast,
+  setShowMissionCompleteToast] =
+  useState(false);
+
+  const [showTodoCompleteCelebration,
+  setShowTodoCompleteCelebration] =
+  useState(false);
+
+  const [isSearchBarCollapsed, setIsSearchBarCollapsed] =
+  useState(false);
+
   const [showStickyHeader, setShowStickyHeader] =
     useState(false);
 
+    
   /* 즐겨찾기 */
 
   const [favorites, setFavorites] = useState<Favorite[]>(
     createDefaultFavorites,
   );
+
+  /* 투두리스트 */
+
+const [todos, setTodos] = useState<TodoItem[]>([]);
+const [todoContent, setTodoContent] = useState("");
+
+const [isRecommendedTodoCompleted, setIsRecommendedTodoCompleted] =
+  useState(false);
+
+  const [minigameCompletionCount, setMinigameCompletionCount] =
+  useState(0);
 
   /* 현재 시각 */
 
@@ -532,110 +604,112 @@ useEffect(() => {
      캘린더 고정 및 가로 화면 전환
   ───────────────────────────── */
 
-  useEffect(() => {
-    function handleWheel(event: WheelEvent) {
-      const section = horizontalSectionRef.current;
+useEffect(() => {
+  function handleWheel(event: WheelEvent) {
+    const section = horizontalSectionRef.current;
 
-      if (!section) {
-        return;
-      }
+    if (!section) {
+      return;
+    }
 
-      const sectionTop = section.offsetTop;
-      const currentScroll = window.scrollY;
-      const pinTolerance = 12;
+    const sectionTop = section.offsetTop;
+    const currentScroll = window.scrollY;
+    const pinTolerance = 12;
 
-      const enteringHorizontalSection =
-        event.deltaY > 0 &&
-        currentScroll >=
-          sectionTop - window.innerHeight * 0.25 &&
-        currentScroll < sectionTop - pinTolerance;
+    const enteringHorizontalSection =
+      event.deltaY > 0 &&
+      currentScroll >=
+        sectionTop - window.innerHeight * 0.25 &&
+      currentScroll < sectionTop - pinTolerance;
 
-      if (enteringHorizontalSection) {
-        event.preventDefault();
-
-        setHorizontalPage(0);
-        setHorizontalProgress(0);
-
-        window.scrollTo({
-          top: sectionTop,
-          behavior: "auto",
-        });
-
-        return;
-      }
-
-      const isPinned =
-        Math.abs(currentScroll - sectionTop) <=
-        pinTolerance;
-
-      if (!isPinned) {
-        return;
-      }
-
+    if (enteringHorizontalSection) {
       event.preventDefault();
+
+      setHorizontalPage(0);
+      setHorizontalProgress(0);
 
       window.scrollTo({
         top: sectionTop,
         behavior: "auto",
       });
 
-      if (isHorizontalAnimatingRef.current) {
-        return;
-      }
-
-      if (event.deltaY > 0 && horizontalPage < 2) {
-        const nextPage = (horizontalPage + 1) as
-          | 0
-          | 1
-          | 2;
-
-        isHorizontalAnimatingRef.current = true;
-        setHorizontalPage(nextPage);
-        setHorizontalProgress(nextPage);
-
-        window.setTimeout(() => {
-          isHorizontalAnimatingRef.current = false;
-        }, 750);
-
-        return;
-      }
-
-      if (event.deltaY < 0 && horizontalPage > 0) {
-        const previousPage = (horizontalPage - 1) as
-          | 0
-          | 1
-          | 2;
-
-        isHorizontalAnimatingRef.current = true;
-        setHorizontalPage(previousPage);
-        setHorizontalProgress(previousPage);
-
-        window.setTimeout(() => {
-          isHorizontalAnimatingRef.current = false;
-        }, 750);
-
-        return;
-      }
-
-      if (event.deltaY < 0 && horizontalPage === 0) {
-        window.scrollTo({
-          top: Math.max(
-            0,
-            sectionTop - window.innerHeight,
-          ),
-          behavior: "smooth",
-        });
-      }
+      return;
     }
 
-    window.addEventListener("wheel", handleWheel, {
-      passive: false,
+    const isPinned =
+      Math.abs(currentScroll - sectionTop) <=
+      pinTolerance;
+
+    if (!isPinned) {
+      return;
+    }
+
+    event.preventDefault();
+
+    window.scrollTo({
+      top: sectionTop,
+      behavior: "auto",
     });
 
-    return () => {
-      window.removeEventListener("wheel", handleWheel);
-    };
-  }, [horizontalPage]);
+    if (isHorizontalAnimatingRef.current) {
+      return;
+    }
+
+    if (event.deltaY > 0 && horizontalPage < 2) {
+      const nextPage = (horizontalPage + 1) as
+        | -1
+        | 0
+        | 1
+        | 2;
+
+      isHorizontalAnimatingRef.current = true;
+      setHorizontalPage(nextPage);
+      setHorizontalProgress(nextPage);
+
+      window.setTimeout(() => {
+        isHorizontalAnimatingRef.current = false;
+      }, 750);
+
+      return;
+    }
+
+    if (event.deltaY < 0 && horizontalPage > -1) {
+      const previousPage = (horizontalPage - 1) as
+        | -1
+        | 0
+        | 1
+        | 2;
+
+      isHorizontalAnimatingRef.current = true;
+      setHorizontalPage(previousPage);
+      setHorizontalProgress(previousPage);
+
+      window.setTimeout(() => {
+        isHorizontalAnimatingRef.current = false;
+      }, 750);
+
+      return;
+    }
+
+    if (event.deltaY < 0 && horizontalPage === -1) {
+      window.scrollTo({
+        top: Math.max(
+          0,
+          sectionTop - window.innerHeight,
+        ),
+        behavior: "smooth",
+      });
+    }
+  }
+
+  window.addEventListener("wheel", handleWheel, {
+    passive: false,
+  });
+
+  return () => {
+    window.removeEventListener("wheel", handleWheel);
+  };
+}, [horizontalPage]);
 
   /* ─────────────────────────────
      저장 데이터 불러오기
@@ -655,6 +729,24 @@ useEffect(() => {
         FAVORITE_STORAGE_KEY,
       );
 
+      const savedTodos = window.localStorage.getItem(
+  TODO_STORAGE_KEY,
+);
+const savedRecommendedTodo =
+  window.localStorage.getItem(
+    RECOMMENDED_TODO_STORAGE_KEY,
+  );
+
+  const savedMinigameCompletionCount =
+  window.localStorage.getItem(
+    MINIGAME_COMPLETION_COUNT_STORAGE_KEY,
+  );
+
+  const savedMinigameCompletionDate =
+  window.localStorage.getItem(
+    MINIGAME_COMPLETION_DATE_STORAGE_KEY,
+  );
+
       if (savedSchedules) {
         setSchedules(JSON.parse(savedSchedules));
       }
@@ -668,6 +760,44 @@ useEffect(() => {
           normalizeFavorites(JSON.parse(savedFavorites)),
         );
       }
+
+      if (savedTodos) {
+  const parsedTodos = JSON.parse(savedTodos);
+
+  if (Array.isArray(parsedTodos)) {
+    setTodos(parsedTodos);
+  }
+}
+
+if (savedRecommendedTodo !== null) {
+  setIsRecommendedTodoCompleted(
+    savedRecommendedTodo === "true",
+  );
+}
+
+const todayStorageDate = getTodayStorageDate();
+
+if (savedMinigameCompletionDate === todayStorageDate) {
+  const parsedCount = Number(
+    savedMinigameCompletionCount,
+  );
+
+  if (Number.isFinite(parsedCount)) {
+    const safeCount = Math.max(0, parsedCount);
+
+    setMinigameCompletionCount(safeCount);
+    setIsRecommendedTodoCompleted(safeCount >= 2);
+  }
+} else {
+  setMinigameCompletionCount(0);
+  setIsRecommendedTodoCompleted(false);
+
+  window.localStorage.setItem(
+    MINIGAME_COMPLETION_DATE_STORAGE_KEY,
+    todayStorageDate,
+  );
+}
+
     } catch (error) {
       console.error(
         "저장된 데이터를 불러오지 못했어요.",
@@ -750,6 +880,77 @@ useEffect(() => {
     );
   };
 }, []);
+
+/* ─────────────────────────────
+   투두리스트 자동 저장
+───────────────────────────── */
+
+
+useEffect(() => {
+  if (!isLoaded) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    TODO_STORAGE_KEY,
+    JSON.stringify(todos),
+  );
+}, [todos, isLoaded]);
+
+/* ─────────────────────────────
+   추천 투두 자동 저장
+───────────────────────────── */
+
+/* ─────────────────────────────
+   미니게임 2판 완료 시 추천 투두 자동 완료
+───────────────────────────── */
+useEffect(() => {
+  if (minigameCompletionCount >= 2) {
+    setIsRecommendedTodoCompleted(true);
+    setShowMissionCompleteToast(true);
+
+    const timer = setTimeout(() => {
+      setShowMissionCompleteToast(false);
+    }, 2200);
+
+    return () => clearTimeout(timer);
+  }
+
+  setIsRecommendedTodoCompleted(false);
+  setShowMissionCompleteToast(false);
+}, [minigameCompletionCount]);
+
+/* ─────────────────────────────
+   미니게임 완료 횟수 자동 저장
+───────────────────────────── */
+
+useEffect(() => {
+  if (!isLoaded) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    MINIGAME_COMPLETION_COUNT_STORAGE_KEY,
+    String(minigameCompletionCount),
+  );
+
+  window.localStorage.setItem(
+    MINIGAME_COMPLETION_DATE_STORAGE_KEY,
+    getTodayStorageDate(),
+  );
+}, [minigameCompletionCount, isLoaded]);
+
+useEffect(() => {
+  if (!isLoaded) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    RECOMMENDED_TODO_STORAGE_KEY,
+    String(isRecommendedTodoCompleted),
+  );
+}, [isRecommendedTodoCompleted, isLoaded]);
+
   /* ─────────────────────────────
      즐겨찾기 자동 저장
   ───────────────────────────── */
@@ -817,11 +1018,18 @@ useEffect(() => {
      스도쿠 완료 기록 저장
   ───────────────────────────── */
 
-  useEffect(() => {
-    if (!isSudokuCompleted || !sudokuPuzzleId) {
-      return;
-    }
-submittedSudokuIdRef.current = sudokuPuzzleId;
+useEffect(() => {
+  if (!isSudokuCompleted || !sudokuPuzzleId) {
+    return;
+  }
+
+  if (submittedSudokuIdRef.current === sudokuPuzzleId) {
+    return;
+  }
+
+  submittedSudokuIdRef.current = sudokuPuzzleId;
+
+  setMinigameCompletionCount((previous) => previous + 1);
 
 console.log("SAVE:", {
   puzzleId: sudokuPuzzleId,
@@ -1216,6 +1424,86 @@ void submitSudokuCompletion({
     );
   }
 
+  function addTodo(event: FormEvent<HTMLFormElement>) {
+  event.preventDefault();
+
+  const content = todoContent.trim();
+
+  if (!content) {
+    return;
+  }
+
+  const newTodo: TodoItem = {
+    id: createId(),
+    content,
+    completed: false,
+    source: "user",
+    createdAt: new Date().toISOString(),
+  };
+
+  setTodos((previousTodos) => [
+    ...previousTodos,
+    newTodo,
+  ]);
+
+  setTodoContent("");
+}
+
+function toggleTodo(todoId: string) {
+  setTodos((previousTodos) =>
+    previousTodos.map((todo) =>
+      todo.id === todoId
+        ? {
+            ...todo,
+            completed: !todo.completed,
+          }
+        : todo,
+    ),
+  );
+}
+
+function deleteTodo(todoId: string) {
+  setTodos((previousTodos) =>
+    previousTodos.filter(
+      (todo) => todo.id !== todoId,
+    ),
+  );
+}
+
+function moveHorizontalPage(
+  direction: "prev" | "next",
+) {
+  if (isHorizontalAnimatingRef.current) {
+    return;
+  }
+
+  const nextPage =
+    direction === "next"
+      ? Math.min(horizontalPage + 1, 2)
+      : Math.max(horizontalPage - 1, -1);
+
+  if (nextPage === horizontalPage) {
+    return;
+  }
+
+  isHorizontalAnimatingRef.current = true;
+
+  setHorizontalPage(nextPage as -1 | 0 | 1 | 2);
+  setHorizontalProgress(nextPage);
+
+  const section = horizontalSectionRef.current;
+
+  if (section) {
+    window.scrollTo({
+      top: section.offsetTop,
+      behavior: "auto",
+    });
+  }
+
+  window.setTimeout(() => {
+    isHorizontalAnimatingRef.current = false;
+  }, 750);
+}
   /* ─────────────────────────────
      타이머
   ───────────────────────────── */
@@ -1435,28 +1723,6 @@ void submitSudokuCompletion({
     }
   }
 
-function moveHorizontalPage(nextPage: 0 | 1 | 2) {
-  if (isHorizontalAnimatingRef.current) {
-    return;
-  }
-
-  const section = horizontalSectionRef.current;
-
-  if (section) {
-    window.scrollTo({
-      top: section.offsetTop,
-      behavior: "auto",
-    });
-  }
-
-  isHorizontalAnimatingRef.current = true;
-  setHorizontalPage(nextPage);
-  setHorizontalProgress(nextPage);
-
-  window.setTimeout(() => {
-    isHorizontalAnimatingRef.current = false;
-  }, 750);
-}
 
 async function submitFeedback() {
   const content = feedbackContent.trim();
@@ -1532,6 +1798,79 @@ async function submitFeedback() {
      화면
   ───────────────────────────── */
 
+  const completedTodoCount =
+  todos.filter((todo) => todo.completed).length +
+  (isRecommendedTodoCompleted ? 1 : 0);
+
+const totalTodoCount = todos.length + 1;
+
+
+const todoProgressPercent = Math.round(
+  (completedTodoCount / totalTodoCount) * 100,
+);
+
+const safeTodoProgressPercent =
+  Number.isFinite(todoProgressPercent)
+    ? todoProgressPercent
+    : 0;
+
+const todoProgressMessage =
+  todoProgressPercent === 100
+    ? "오늘의 목표를 모두 완료했어요! 🎉"
+    : todoProgressPercent >= 75
+      ? "거의 다 왔어요. 마지막까지 힘내요!"
+      : todoProgressPercent >= 50
+        ? "절반을 넘었어요. 좋은 흐름이에요!"
+        : todoProgressPercent >= 25
+          ? "차근차근 잘 해내고 있어요."
+          : "작은 목표 하나부터 시작해보세요.";
+
+const todoProgressStyle =
+  todoProgressPercent === 100
+    ? {
+        text: "text-[#25955a]",
+        bar: "bg-[#49bd7b]",
+        card: "bg-[#effdf5]",
+        border: "border-[#9be0b8]",
+      }
+    : todoProgressPercent >= 75
+      ? {
+          text: "text-[#3579c7]",
+          bar: "bg-[#5597df]",
+          card: "bg-[#f0f7ff]",
+          border: "border-[#b8d8f5]",
+        }
+      : todoProgressPercent >= 50
+        ? {
+            text: "text-[#6659bf]",
+            bar: "bg-[#7467d8]",
+            card: "bg-[#f7f5ff]",
+            border: "border-[#d8d0ff]",
+          }
+        : {
+            text: "text-[#8c849d]",
+            bar: "bg-[#aaa4b8]",
+            card: "bg-[#faf9fc]",
+            border: "border-[#e3deea]",
+          };
+
+useEffect(() => {
+  if (safeTodoProgressPercent !== 100) {
+    setShowTodoCompleteCelebration(false);
+    return;
+  }
+
+  setShowTodoCompleteCelebration(true);
+
+  const timer = window.setTimeout(() => {
+    setShowTodoCompleteCelebration(false);
+  }, 2500);
+
+  return () => {
+    window.clearTimeout(timer);
+  };
+}, [safeTodoProgressPercent]);
+
   return (
     <main
       className="relative min-h-screen overflow-x-hidden bg-[#102f24] text-[#332f45]"
@@ -1540,6 +1879,23 @@ async function submitFeedback() {
           '"Arial Rounded MT Bold", "Trebuchet MS", "Malgun Gothic", sans-serif',
       }}
     >
+      
+      {showTodoCompleteCelebration && (
+  <div className="pointer-events-none fixed inset-0 z-[10000] flex items-center justify-center">
+    <div className="hoo-todo-celebration rounded-[32px] border border-[#9be0b8] bg-white/95 px-10 py-8 text-center shadow-[0_25px_80px_rgba(37,149,90,0.35)] backdrop-blur-xl">
+      <p className="text-5xl">🏆</p>
+
+      <p className="mt-4 text-2xl font-black text-[#25955a]">
+        오늘의 목표 완료!
+      </p>
+
+      <p className="mt-2 text-sm font-bold text-[#6d7d72]">
+        오늘의 모든 목표를 멋지게 해냈어요.
+      </p>
+    </div>
+  </div>
+)}
+
       {/* 고정 배경 */}
       <div
         aria-hidden="true"
@@ -1563,7 +1919,7 @@ async function submitFeedback() {
             : "-translate-y-full pointer-events-none opacity-0"
         }`}
       >
-        <div className="mx-auto mt-3 flex w-[95%] max-w-7xl items-center gap-4 rounded-2xl border border-white/20 bg-slate-900/80 px-5 py-3 shadow-2xl backdrop-blur-xl">
+       <div className="relative mx-auto mt-3 flex w-[95%] max-w-7xl items-center gap-4 rounded-2xl border border-white/20 bg-slate-900/80 px-5 py-3 shadow-2xl backdrop-blur-xl">
           <button
             type="button"
             onClick={() =>
@@ -1620,12 +1976,26 @@ async function submitFeedback() {
           >
             ↑
           </button>
+          
+          <button
+  type="button"
+  onClick={() =>
+    setIsSearchBarCollapsed(!isSearchBarCollapsed)
+  }
+  className="absolute -bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-white/20 bg-slate-900 px-4 py-1 text-xs font-black text-white shadow-xl transition hover:bg-slate-800"
+>
+  {isSearchBarCollapsed
+    ? "▼ 검색창 펼치기"
+    : "▲ 검색창 접기"}
+</button>
+
+
         </div>
       </header>
 
       {/* 첫 화면 */}
       <section className="relative z-10 flex min-h-screen items-start justify-center px-5 pt-20 text-white">
-        <div className="flex w-full max-w-3xl flex-col items-center">
+        <div className="relative flex w-full max-w-3xl flex-col items-center">
           <h1 className="text-7xl font-black tracking-[-0.08em] drop-shadow-[0_7px_20px_rgba(0,0,0,0.7)] md:text-8xl">
             HOO
           </h1>
@@ -1770,13 +2140,291 @@ async function submitFeedback() {
       >
         <div className="sticky top-0 h-screen overflow-hidden">
           <div
-           className="flex h-full w-[300vw] transition-transform duration-700 ease-in-out will-change-transform"
+         className="flex h-full w-[400vw] transition-transform duration-700 ease-in-out will-change-transform"
             style={{
-              transform: `translate3d(-${
-                horizontalProgress * 100
-              }vw, 0, 0)`,
+           transform: `translate3d(-${
+  (horizontalProgress + 1) * 100
+}vw, 0, 0)`,
             }}
           >
+
+          {/* 왼쪽 패널: 투두리스트 */}
+
+<section className="flex h-screen w-screen shrink-0 items-center overflow-hidden px-4 py-16 md:px-7">
+  <div className="mx-auto w-full max-w-[1380px]">
+    <section className="grid min-h-[630px] overflow-hidden rounded-[34px] border border-white/55 bg-white/90 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl xl:grid-cols-[1.3fr_0.7fr]">
+      <article className="border-b border-[#dedaf0] p-6 md:p-8 xl:border-b-0 xl:border-r">
+        <header>
+          <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
+            HOO TO DO
+          </p>
+
+          <h2 className="mt-1 text-3xl font-black text-[#332f45]">
+            오늘의 할 일
+          </h2>
+
+          <p className="mt-2 text-sm font-bold text-[#8b849d]">
+            작은 목표부터 하나씩 완료해보세요.
+          </p>
+        </header>
+
+        <form
+          onSubmit={addTodo}
+          className="mt-6 flex gap-2"
+        >
+          <input
+            type="text"
+            value={todoContent}
+            maxLength={100}
+            onChange={(event) =>
+              setTodoContent(event.target.value)
+            }
+            placeholder="오늘 할 일을 입력하세요."
+            className="min-w-0 flex-1 rounded-2xl border border-[#ded8ef] bg-white px-5 py-3 text-sm font-bold outline-none focus:border-[#7467d8]"
+          />
+
+          <button
+            type="submit"
+            className="shrink-0 rounded-2xl bg-[#7467d8] px-6 py-3 text-sm font-black text-white transition hover:bg-[#6255c7]"
+          >
+            추가
+          </button>
+        </form>
+
+        <div
+          className="mt-5 max-h-[400px] space-y-3 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden"
+          style={{
+            scrollbarWidth: "none",
+            msOverflowStyle: "none",
+          }}
+        >
+          {todos.length === 0 ? (
+            <div className="flex min-h-48 items-center justify-center rounded-3xl border-2 border-dashed border-[#ded8ef] bg-[#faf9ff] px-5 text-center text-sm font-bold text-[#aaa4b8]">
+              오늘의 첫 번째 할 일을 추가해보세요.
+            </div>
+          ) : (
+            todos.map((todo, index) => (
+              <article
+                key={todo.id}
+                className="flex items-center gap-3 rounded-2xl bg-[#faf9ff] px-4 py-3"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleTodo(todo.id)}
+                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-sm font-black transition ${
+                    todo.completed
+                      ? "border-[#7467d8] bg-[#7467d8] text-white"
+                      : "border-[#cfc9df] bg-white text-transparent"
+                  }`}
+                  aria-label={`${todo.content} 완료 상태 변경`}
+                >
+                  ✓
+                </button>
+
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={`break-words text-sm font-black ${
+                      todo.completed
+                        ? "text-[#aaa4b8] line-through"
+                        : "text-[#423c55]"
+                    }`}
+                  >
+                    {index + 1}. {todo.content}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => deleteTodo(todo.id)}
+                  className="shrink-0 rounded-full bg-[#ffe2e8] px-3 py-1.5 text-xs font-black text-[#d94f6b]"
+                >
+                  삭제
+                </button>
+              </article>
+            ))
+          )}
+        </div>
+
+  <div
+  className={`mt-5 rounded-3xl border p-5 shadow-sm transition-all duration-500 ${
+    isRecommendedTodoCompleted
+      ? "hoo-mission-complete-animation border-[#6dd39b] bg-[#effdf5] shadow-[0_0_25px_rgba(109,211,155,0.25)]"
+      : "border-[#d8d0ff] bg-[#f8f6ff]"
+  }`}
+>
+
+  {showMissionCompleteToast && (
+  <div className="mb-4 rounded-2xl border border-[#8ce0af] bg-[#ecfff3] px-4 py-3 animate-[fadeInUp_0.4s_ease]">
+    <p className="text-sm font-black text-[#27955b]">
+      🏆 MISSION COMPLETE!
+    </p>
+
+    <p className="mt-1 text-xs font-bold text-[#4d6b58]">
+      오늘의 추천 미션을 완료했습니다.
+    </p>
+  </div>
+)}
+
+
+  <div className="flex items-start justify-between">
+
+    <div className="flex gap-4">
+
+      <span
+        className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border-2 text-xl transition ${
+          isRecommendedTodoCompleted
+            ? "border-[#7467d8] bg-[#7467d8] text-white"
+            : "border-[#d7cffc] bg-white text-[#7467d8]"
+        }`}
+      >
+       {isRecommendedTodoCompleted ? "🏆" : "🎮"}
+      </span>
+
+      <div>
+
+      <p
+  className={`text-[11px] font-black tracking-[0.18em] ${
+    isRecommendedTodoCompleted
+      ? "text-[#39a86b]"
+      : "text-[#8b83b7]"
+  }`}
+>
+  {isRecommendedTodoCompleted
+    ? "MISSION COMPLETE"
+    : "HOO DAILY MISSION"}
+</p>
+
+        <h3
+          className={`mt-1 text-lg font-black ${
+            isRecommendedTodoCompleted
+              ? "line-through text-[#9e98b3]"
+              : "text-[#332f45]"
+          }`}
+        >
+          {HOO_RECOMMENDED_TASKS[0].content}
+        </h3>
+
+        <p className="mt-2 text-xs font-bold text-[#938cb0]">
+          미니게임을 플레이하면 자동으로 진행됩니다.
+        </p>
+
+<div className="mt-4 h-2.5 w-full overflow-hidden rounded-full bg-[#e8e3f8]">
+  <div
+    className="h-full rounded-full bg-[#7467d8] transition-all duration-500"
+    style={{
+      width: `${
+        (Math.min(minigameCompletionCount, 2) / 2) *
+        100
+      }%`,
+    }}
+  />
+</div>
+
+      </div>
+
+    </div>
+
+    <div className="text-right">
+
+      <div
+  className={`rounded-full border px-4 py-1 transition-all ${
+    isRecommendedTodoCompleted
+      ? "border-[#6dd39b] bg-[#dcfaea]"
+      : "border-[#d9d3ff] bg-white"
+  }`}
+>
+
+       <span
+  className={`text-sm font-black ${
+    isRecommendedTodoCompleted
+      ? "text-[#25955a]"
+      : "text-[#7467d8]"
+  }`}
+>
+
+          {Math.min(minigameCompletionCount, 2)} / 2
+
+        </span>
+
+      </div>
+
+      <p className="mt-2 text-[11px] font-black text-[#9b95b4]">
+
+        {isRecommendedTodoCompleted
+          ? "MISSION COMPLETE"
+          : "진행 중"}
+
+      </p>
+
+    </div>
+
+  </div>
+
+</div>
+
+      </article>
+
+      <aside className="bg-[#f7f5ff] p-6 md:p-8">
+        <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
+          TODAY PROGRESS
+        </p>
+
+        <h3 className="mt-1 text-2xl font-black text-[#332f45]">
+          오늘의 달성률
+        </h3>
+
+        <div
+  className={`mt-7 rounded-[28px] border p-6 text-center shadow-inner transition-all duration-500 ${todoProgressStyle.card} ${todoProgressStyle.border}`}
+>
+
+          <p
+  className={`text-5xl font-black transition-colors ${todoProgressStyle.text}`}
+>
+
+         {safeTodoProgressPercent}
+            %
+          </p>
+
+          <p className="mt-3 text-sm font-bold text-[#928ba8]">
+
+          {completedTodoCount}
+개 완료 · {totalTodoCount}개 목표
+
+          </p>
+
+          <div className="mt-5 h-3 overflow-hidden rounded-full bg-[#e7e3f1]">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${todoProgressStyle.bar}`}
+
+
+              style={{
+              width: `${safeTodoProgressPercent}%`,
+              }}
+            />
+          </div>
+        </div>
+
+        <div
+  className={`mt-5 rounded-3xl border p-5 transition-all duration-500 ${todoProgressStyle.card} ${todoProgressStyle.border}`}
+>
+  <p
+    className={`text-sm font-black ${todoProgressStyle.text}`}
+  >
+    {todoProgressMessage}
+  </p>
+
+  <p className="mt-2 text-xs font-bold leading-6 text-[#7d768d]">
+    목표는 완벽함이 아니라 꾸준함입니다.
+    오늘도 한 걸음씩 앞으로 나아가 보세요.
+  </p>
+</div>
+
+      </aside>
+    </section>
+  </div>
+</section>
+
+
             {/* 첫 번째 패널: 캘린더 */}
            <section className="flex h-screen w-screen shrink-0 items-center overflow-hidden px-4 py-16 md:px-7">
               <div className="mx-auto w-full max-w-[1380px]">
@@ -2511,46 +3159,46 @@ async function submitFeedback() {
           </div>
           
 
-          {/* 가로 화면 이동 화살표 */}
-          {horizontalPage > 0 && (
-            <button
-              type="button"
-              onClick={() =>
-                moveHorizontalPage(
-                  (horizontalPage - 1) as 0 | 1 | 2,
-                )
-              }
-              className="group absolute left-3 top-1/2 z-50 flex h-28 w-16 -translate-y-1/2 items-center justify-center rounded-r-3xl bg-black/0 transition hover:bg-black/15 focus:outline-none md:left-6"
-              aria-label={
-                horizontalPage === 2
-                  ? "메모와 타이머 화면으로 이동"
-                  : "캘린더 화면으로 이동"
-              }
-            >
-              <span className="h-0 w-0 border-y-[15px] border-r-[23px] border-y-transparent border-r-white/55 drop-shadow-[0_3px_8px_rgba(0,0,0,0.55)] transition duration-300 group-hover:-translate-x-1 group-hover:border-r-white/95" />
-            </button>
-          )}
+{/* 가로 화면 이동 화살표 */}
 
-          {horizontalPage < 2 && (
-            <button
-              type="button"
-              onClick={() =>
-                moveHorizontalPage(
-                  (horizontalPage + 1) as 0 | 1 | 2,
-                )
-              }
-              className="group absolute right-3 top-1/2 z-50 flex h-28 w-16 -translate-y-1/2 items-center justify-center rounded-l-3xl bg-black/0 transition hover:bg-black/15 focus:outline-none md:right-6"
-              aria-label={
-                horizontalPage === 0
-                  ? "메모와 타이머 화면으로 이동"
-                  : "스도쿠 화면으로 이동"
-              }
-            >
-              <span className="h-0 w-0 border-y-[15px] border-l-[23px] border-y-transparent border-l-white/55 drop-shadow-[0_3px_8px_rgba(0,0,0,0.55)] transition duration-300 group-hover:translate-x-1 group-hover:border-l-white/95" />
-            </button>
-          )}
-        </div>
+{horizontalPage > -1 && (
+  <button
+    type="button"
+    onClick={() => moveHorizontalPage("prev")}
+    className="group absolute left-3 top-1/2 z-50 flex h-28 w-16 -translate-y-1/2 items-center justify-center rounded-r-3xl bg-black/0 transition hover:bg-black/15 focus:outline-none md:left-6"
+    aria-label={
+      horizontalPage === 0
+        ? "투두리스트 화면으로 이동"
+        : horizontalPage === 1
+          ? "캘린더 화면으로 이동"
+          : "메모와 타이머 화면으로 이동"
+    }
+  >
+    <span className="h-0 w-0 border-y-[15px] border-r-[23px] border-y-transparent border-r-white/55 drop-shadow-[0_3px_8px_rgba(0,0,0,0.55)] transition duration-300 group-hover:-translate-x-1 group-hover:border-r-white/95" />
+  </button>
+)}
+
+{horizontalPage < 2 && (
+  <button
+    type="button"
+    onClick={() => moveHorizontalPage("next")}
+    className="group absolute right-3 top-1/2 z-50 flex h-28 w-16 -translate-y-1/2 items-center justify-center rounded-l-3xl bg-black/0 transition hover:bg-black/15 focus:outline-none md:right-6"
+    aria-label={
+      horizontalPage === -1
+        ? "캘린더 화면으로 이동"
+        : horizontalPage === 0
+          ? "메모와 타이머 화면으로 이동"
+          : "미니게임 화면으로 이동"
+    }
+  >
+    <span className="h-0 w-0 border-y-[15px] border-l-[23px] border-y-transparent border-l-white/55 drop-shadow-[0_3px_8px_rgba(0,0,0,0.55)] transition duration-300 group-hover:translate-x-1 group-hover:border-l-white/95" />
+  </button>
+)}
+
+ </div>
       </section>
+
+
       {/* 왼쪽 하단 전달사항 */}
 <div
   ref={noticeRef}
