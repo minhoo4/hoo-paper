@@ -34,7 +34,7 @@ export default function GameSelector({
   return (
     <nav
       aria-label="게임 선택"
-      className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+     className="grid grid-cols-1 gap-4 sm:grid-cols-2"
     >
       {GAMES.map((game) => {
         const isActive = activeGame === game.id;
@@ -46,7 +46,7 @@ export default function GameSelector({
             onClick={() => onChange(game.id)}
             aria-pressed={isActive}
             className={[
-              "flex min-h-[88px] items-center gap-4 rounded-[22px] border px-5 py-4 text-left transition",
+              "flex min-h-[110px] items-center gap-4 rounded-[26px] border px-5 py-4 text-left transition",
               isActive
                 ? "border-[#7467d8] bg-[#7467d8] text-white shadow-[0_12px_35px_rgba(116,103,216,0.3)]"
                 : "border-white/70 bg-white/85 text-[#4a445d] shadow-[0_10px_30px_rgba(35,28,60,0.1)] hover:-translate-y-0.5 hover:bg-white",

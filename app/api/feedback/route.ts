@@ -1,13 +1,35 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
 
 export async function POST(request: Request) {
   try {
+
+        const supabaseUrl =
+      process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+    const supabaseServiceRoleKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      console.error(
+        "Supabase 환경변수가 설정되지 않았습니다.",
+      );
+
+      return NextResponse.json(
+        {
+          error:
+            "서버 환경설정 오류가 발생했습니다.",
+        },
+        { status: 500 },
+      );
+    }
+
+    const supabase = createClient(
+      supabaseUrl,
+      supabaseServiceRoleKey,
+    );
+    
     const body = await request.json();
 
     const userId =

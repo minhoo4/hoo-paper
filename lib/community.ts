@@ -1,22 +1,33 @@
 import type { SudokuDifficulty } from "./community-types";
 
-export const SCORE_BY_DIFFICULTY: Record<SudokuDifficulty, number> = {
- easy: 10,
+export const SCORE_BY_DIFFICULTY: Record<
+  SudokuDifficulty,
+  number
+> = {
+  easy: 10,
   normal: 25,
   hard: 50,
 };
-export function createPuzzleId(difficulty: SudokuDifficulty): string {
+
+export function createPuzzleId(
+  difficulty: SudokuDifficulty,
+): string {
   const randomPart =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
+    typeof crypto !== "undefined" &&
+    "randomUUID" in crypto
       ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      : `${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2)}`;
 
   return `${difficulty}-${randomPart}`;
 }
 
 const MAX_LEVEL = 1500;
 
-function getRequiredXpForNextLevel(level: number): number {
+function getRequiredXpForNextLevel(
+  level: number,
+): number {
   if (level <= 10) {
     return 50;
   }
@@ -36,16 +47,25 @@ function getRequiredXpForNextLevel(level: number): number {
   return 300;
 }
 
-export function getLevelFromXp(totalXp: number): number {
-  const safeTotalXp = Math.max(0, Math.floor(totalXp));
+export function getLevelFromXp(
+  totalXp: number,
+): number {
+  const safeTotalXp = Math.max(
+    0,
+    Math.floor(totalXp),
+  );
 
   let level = 1;
   let accumulatedXp = 0;
 
   while (level < MAX_LEVEL) {
-    const requiredXp = getRequiredXpForNextLevel(level);
+    const requiredXp =
+      getRequiredXpForNextLevel(level);
 
-    if (safeTotalXp < accumulatedXp + requiredXp) {
+    if (
+      safeTotalXp <
+      accumulatedXp + requiredXp
+    ) {
       break;
     }
 
@@ -57,7 +77,11 @@ export function getLevelFromXp(totalXp: number): number {
 }
 
 export function getLevelProgress(totalXp: number) {
-  const safeTotalXp = Math.max(0, Math.floor(totalXp));
+  const safeTotalXp = Math.max(
+    0,
+    Math.floor(totalXp),
+  );
+
   const level = getLevelFromXp(safeTotalXp);
 
   let levelStartXp = 0;
@@ -81,9 +105,14 @@ export function getLevelProgress(totalXp: number) {
     };
   }
 
-  const neededXp = getRequiredXpForNextLevel(level);
-  const currentLevelXp = safeTotalXp - levelStartXp;
-  const nextLevelXp = levelStartXp + neededXp;
+  const neededXp =
+    getRequiredXpForNextLevel(level);
+
+  const currentLevelXp =
+    safeTotalXp - levelStartXp;
+
+  const nextLevelXp =
+    levelStartXp + neededXp;
 
   const progressPercent = Math.max(
     0,
@@ -108,16 +137,61 @@ export async function submitSudokuCompletion(input: {
   elapsedSeconds: number;
   hintsUsed: number;
 }) {
-  const response = await fetch("/api/sudoku/complete", {
+  const response = await fetch(
+    "/api/sudoku/complete",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(input),
+    },
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data.error ?? "기록 저장에 실패했습니다.",
+    );
+  }
+
+  return data as {
+    score: number;
+    totalScore: number;
+    alreadyCompleted: boolean;
+  };
+}
+
+export async function submit2048Completion(input: {
+  difficulty: "easy" | "normal" | "hard";
+  score: number;
+  elapsedSeconds: number;
+  maxTile: number;
+}) {
+  const response = await fetch("/api/2048", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify(input),
   });
 
   const data = await response.json();
+
   if (!response.ok) {
-    throw new Error(data.error ?? "기록 저장에 실패했습니다.");
+    throw new Error(
+      data.error ??
+        "2048 기록 저장에 실패했습니다.",
+    );
   }
 
-  return data as { score: number; totalScore: number; alreadyCompleted: boolean };
+  return data as {
+    score: number;
+    difficulty: "easy" | "normal" | "hard";
+    elapsedSeconds: number;
+    maxTile: number;
+    awardedScore: number;
+    totalScore: number;
+  };
 }

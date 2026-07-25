@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import type { RankingPeriod } from "@/lib/community-types";
 
-const PERIODS = new Set<RankingPeriod>(["today", "week", "all"]);
+const GAMES = new Set(["sudoku", "2048"]);
 
 export async function GET(request: NextRequest) {
   try {
-    const periodParam = request.nextUrl.searchParams.get("period") ?? "all";
+    const gameParam =
+      request.nextUrl.searchParams.get("game") ?? "sudoku";
 
-    const period = PERIODS.has(periodParam as RankingPeriod)
-      ? (periodParam as RankingPeriod)
-      : "all";
+    const game = GAMES.has(gameParam)
+      ? gameParam
+      : "sudoku";
 
     const limit = Math.min(
       100,
@@ -23,9 +23,9 @@ export async function GET(request: NextRequest) {
     const supabase = await createClient();
 
     const { data, error } = await supabase.rpc(
-      "get_sudoku_ranking",
+      "get_time_attack_ranking",
       {
-        p_period: period,
+        p_game: game,
         p_limit: limit,
       },
     );
@@ -36,11 +36,11 @@ export async function GET(request: NextRequest) {
       rankings: data ?? [],
     });
   } catch (error) {
-    console.error("GET /api/sudoku/ranking", error);
+    console.error("GET /api/timeattack/ranking", error);
 
     return NextResponse.json(
       {
-        error: "랭킹을 불러오지 못했습니다.",
+        error: "타임어택 랭킹을 불러오지 못했습니다.",
       },
       {
         status: 500,

@@ -9,6 +9,7 @@ import {
 } from "react";
 import FocusMode from "@/components/FocusMode/FocusMode";
 import HooCommunityPanel from "@/components/HooCommunityPanel";
+import Hoo2048Game from "@/components/Hoo2048Game";
 import {
   createPuzzleId,
   submitSudokuCompletion,
@@ -67,6 +68,20 @@ type SudokuDifficulty = "easy" | "normal" | "hard";
 type SudokuBoard = number[][];
 type SudokuCell = { row: number; column: number };
 
+type SudokuBestTimes = Record<
+  SudokuDifficulty,
+  number | null
+>;
+
+type MinigameScreen = "menu" | "sudoku" | "2048";
+
+type Hoo2048Difficulty = "easy" | "normal" | "hard";
+
+type Hoo2048BestScores = Record<
+  Hoo2048Difficulty,
+  number
+>;
+
 /* ─────────────────────────────
    기본값
 ───────────────────────────── */
@@ -78,6 +93,12 @@ const MEMO_STORAGE_KEY = "hoo-memos";
 const FAVORITE_STORAGE_KEY = "hoo-favorites";
 
 const TODO_STORAGE_KEY = "hoo-todos";
+
+const SUDOKU_BEST_TIMES_STORAGE_KEY =
+  "hoo-sudoku-best-times";
+
+  const HOO2048_BEST_SCORES_STORAGE_KEY =
+  "hoo-2048-best-scores";
 
 const RECOMMENDED_TODO_STORAGE_KEY =
   "hoo-recommended-todo-completed";
@@ -451,18 +472,45 @@ const [feedbackContent, setFeedbackContent] =
   const [isTimerRunning, setIsTimerRunning] =
     useState(false);
 
+
+/* 미니게임 화면 */
+
+const [minigameScreen, setMinigameScreen] =
+  useState<MinigameScreen>("menu");
+
+const [hoo2048Difficulty, setHoo2048Difficulty] =
+  useState<Hoo2048Difficulty>("easy");
+
+const [hoo2048BestScores, setHoo2048BestScores] =
+  useState<Hoo2048BestScores>({
+    easy: 0,
+    normal: 0,
+    hard: 0,
+  });
   /* 스도쿠 */
+
+  const [sudokuBestTimes, setSudokuBestTimes] =
+  useState<SudokuBestTimes>({
+    easy: null,
+    normal: null,
+    hard: null,
+  });
 
   const [sudokuDifficulty, setSudokuDifficulty] =
     useState<SudokuDifficulty>("easy");
+
   const [sudokuPuzzle, setSudokuPuzzle] =
     useState<SudokuBoard>([]);
+
   const [sudokuBoard, setSudokuBoard] =
     useState<SudokuBoard>([]);
+
   const [sudokuSolution, setSudokuSolution] =
     useState<SudokuBoard>([]);
+
   const [selectedSudokuCell, setSelectedSudokuCell] =
     useState<SudokuCell | null>(null);
+
   const [sudokuHintCount, setSudokuHintCount] = useState(3);
   const [sudokuSeconds, setSudokuSeconds] = useState(0);
   const [isSudokuRunning, setIsSudokuRunning] = useState(false);
@@ -728,6 +776,58 @@ useEffect(() => {
       const savedFavorites = window.localStorage.getItem(
         FAVORITE_STORAGE_KEY,
       );
+
+      const savedSudokuBestTimes =
+  window.localStorage.getItem(
+    SUDOKU_BEST_TIMES_STORAGE_KEY,
+  );
+
+  const savedHoo2048BestScores =
+  window.localStorage.getItem(
+    HOO2048_BEST_SCORES_STORAGE_KEY,
+  );
+
+  if (savedSudokuBestTimes) {
+  const parsedBestTimes = JSON.parse(
+    savedSudokuBestTimes,
+  ) as Partial<SudokuBestTimes>;
+
+  setSudokuBestTimes({
+    easy:
+      typeof parsedBestTimes.easy === "number"
+        ? parsedBestTimes.easy
+        : null,
+    normal:
+      typeof parsedBestTimes.normal === "number"
+        ? parsedBestTimes.normal
+        : null,
+    hard:
+      typeof parsedBestTimes.hard === "number"
+        ? parsedBestTimes.hard
+        : null,
+  });
+}
+
+if (savedHoo2048BestScores) {
+  const parsedBestScores = JSON.parse(
+    savedHoo2048BestScores,
+  ) as Partial<Hoo2048BestScores>;
+
+  setHoo2048BestScores({
+    easy:
+      typeof parsedBestScores.easy === "number"
+        ? parsedBestScores.easy
+        : 0,
+    normal:
+      typeof parsedBestScores.normal === "number"
+        ? parsedBestScores.normal
+        : 0,
+    hard:
+      typeof parsedBestScores.hard === "number"
+        ? parsedBestScores.hard
+        : 0,
+  });
+}
 
       const savedTodos = window.localStorage.getItem(
   TODO_STORAGE_KEY,
@@ -1015,6 +1115,33 @@ useEffect(() => {
 
 
   /* ─────────────────────────────
+   스도쿠 최고기록 자동 저장
+───────────────────────────── */
+
+useEffect(() => {
+  if (!isLoaded) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    SUDOKU_BEST_TIMES_STORAGE_KEY,
+    JSON.stringify(sudokuBestTimes),
+  );
+}, [sudokuBestTimes, isLoaded]);
+
+
+useEffect(() => {
+  if (!isLoaded) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    HOO2048_BEST_SCORES_STORAGE_KEY,
+    JSON.stringify(hoo2048BestScores),
+  );
+}, [hoo2048BestScores, isLoaded]);
+
+  /* ─────────────────────────────
      스도쿠 완료 기록 저장
   ───────────────────────────── */
 
@@ -1022,6 +1149,23 @@ useEffect(() => {
   if (!isSudokuCompleted || !sudokuPuzzleId) {
     return;
   }
+
+  setSudokuBestTimes((previousBestTimes) => {
+  const previousTime =
+    previousBestTimes[sudokuDifficulty];
+
+  if (
+    previousTime !== null &&
+    sudokuSeconds >= previousTime
+  ) {
+    return previousBestTimes;
+  }
+
+  return {
+    ...previousBestTimes,
+    [sudokuDifficulty]: sudokuSeconds,
+  };
+});
 
   if (submittedSudokuIdRef.current === sudokuPuzzleId) {
     return;
@@ -1919,7 +2063,13 @@ useEffect(() => {
             : "-translate-y-full pointer-events-none opacity-0"
         }`}
       >
-       <div className="relative mx-auto mt-3 flex w-[95%] max-w-7xl items-center gap-4 rounded-2xl border border-white/20 bg-slate-900/80 px-5 py-3 shadow-2xl backdrop-blur-xl">
+     <div
+  className={`relative mt-3 flex max-w-7xl items-center gap-4 rounded-2xl border border-white/20 bg-slate-900/80 px-5 py-3 shadow-2xl backdrop-blur-xl transition-[left,width,transform] duration-500 ease-in-out ${
+    isSearchBarCollapsed
+      ? "left-3 w-[300px] translate-x-0"
+      : "left-1/2 w-[95%] -translate-x-1/2"
+  }`}
+>
           <button
             type="button"
             onClick={() =>
@@ -1942,52 +2092,53 @@ useEffect(() => {
                 : "00:00:00"}
             </p>
           </div>
-
-          <form
-            action="https://www.google.com/search"
-            method="GET"
-            target="_blank"
-            className="flex flex-1 overflow-hidden rounded-full bg-white"
-          >
-            <input
-              type="search"
-              name="q"
-              placeholder="Google 검색"
-              className="flex-1 px-5 py-2 text-black outline-none"
-            />
-
-            <button
-              type="submit"
-              className="bg-blue-600 px-6 text-white transition hover:bg-blue-700"
-            >
-              검색
-            </button>
-          </form>
-
-          <button
-            type="button"
-            onClick={() =>
-              window.scrollTo({
-                top: 0,
-                behavior: "smooth",
-              })
-            }
-            className="rounded-full bg-white/20 px-4 py-2 text-white transition hover:bg-white/30"
-          >
-            ↑
-          </button>
-          
-          <button
-  type="button"
-  onClick={() =>
-    setIsSearchBarCollapsed(!isSearchBarCollapsed)
-  }
-  className="absolute -bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-white/20 bg-slate-900 px-4 py-1 text-xs font-black text-white shadow-xl transition hover:bg-slate-800"
+<div
+  className={`flex items-center transition-all duration-300 ${
+    isSearchBarCollapsed
+      ? "w-9 flex-none"
+      : "min-w-0 flex-1 gap-2"
+  }`}
 >
-  {isSearchBarCollapsed
-    ? "▼ 검색창 펼치기"
-    : "▲ 검색창 접기"}
-</button>
+  <form
+    action="https://www.google.com/search"
+    method="GET"
+    target="_blank"
+    className={`flex overflow-hidden rounded-full bg-white transition-all duration-300 ${
+      isSearchBarCollapsed
+        ? "pointer-events-none w-0 opacity-0"
+        : "min-w-0 flex-1 opacity-100"
+    }`}
+  >
+    <input
+      type="search"
+      name="q"
+      placeholder="Google 검색"
+      className="min-w-0 flex-1 px-5 py-2 text-black outline-none"
+    />
+
+    <button
+      type="submit"
+      className="shrink-0 bg-blue-600 px-6 text-white transition hover:bg-blue-700"
+    >
+      검색
+    </button>
+  </form>
+
+  <button
+    type="button"
+    onClick={() =>
+      setIsSearchBarCollapsed((previous) => !previous)
+    }
+    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 bg-slate-800 text-xs font-black text-white shadow-lg transition hover:bg-slate-700"
+    aria-label={
+      isSearchBarCollapsed
+        ? "검색창 펼치기"
+        : "검색창 접기"
+    }
+  >
+    {isSearchBarCollapsed ? "▶" : "◀"}
+  </button>
+</div>
 
 
         </div>
@@ -2937,224 +3088,462 @@ useEffect(() => {
               </div>
             </section>
 
-            {/* 세 번째 패널: 스도쿠 */}
+                   {/* 세 번째 패널: 미니게임 */}
+<section className="flex h-screen w-screen shrink-0 items-center overflow-hidden px-4 py-16 md:px-7">
+  <div className="mx-auto w-full max-w-[1380px]">
+    {minigameScreen === "menu" && (
+      <section className="grid h-[625px] items-stretch gap-7 xl:grid-cols-[1.35fr_0.65fr]">
 
-            <section className="flex h-screen w-screen shrink-0 items-center overflow-hidden px-4 py-16 md:px-7">
-              <div className="mx-auto grid w-full max-w-[1500px] items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <article className="rounded-[34px] border border-white/55 bg-white/90 p-6 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl md:p-8">
-                  <header className="flex flex-wrap items-end justify-between gap-4">
-                    <div>
-                      <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
-                        HOO MINI GAME
-                      </p>
-                      <h2 className="mt-1 text-3xl font-black text-[#332f45]">
-                        스도쿠
-                      </h2>
-                    </div>
 
-                    {sudokuBoard.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-2 text-xs font-black">
-                        <span className="rounded-full bg-[#eeeafd] px-4 py-2 text-[#6659bf]">
-                          {getSudokuDifficultyLabel(sudokuDifficulty)}
-                        </span>
-                        <span className="rounded-full bg-[#e6f6ed] px-4 py-2 text-[#39775a]">
-                          {formatSudokuTime(sudokuSeconds)}
-                        </span>
-                        <span className="rounded-full bg-[#fff0c7] px-4 py-2 text-[#987019]">
-                          힌트 {sudokuHintCount}
-                        </span>
-                      </div>
-                    )}
-                  </header>
+        {/* 왼쪽: 게임 선택 */}
+     <article className="h-full rounded-[34px] border border-white/55 bg-white/90 p-6 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl md:p-8">
+          <header>
+            <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
+              HOO MINI GAME
+            </p>
 
-                  {sudokuBoard.length === 0 ? (
-                    <div className="mt-6 flex min-h-[500px] flex-col items-center justify-center rounded-[28px] border-2 border-dashed border-[#d9d4eb] bg-[#faf9ff] px-5 text-center">
-                      <p className="text-6xl">🧩</p>
-                      <p className="mt-5 text-xl font-black text-[#554e6b]">
-                        난이도를 선택해 게임을 시작하세요
-                      </p>
-                      <div className="mt-7 flex flex-wrap justify-center gap-3">
-                        {(["easy", "normal", "hard"] as SudokuDifficulty[]).map(
-                          (difficulty) => (
-                            <button
-                              key={difficulty}
-                              type="button"
-                              onClick={() => startSudokuGame(difficulty)}
-                              className="rounded-2xl bg-[#7467d8] px-7 py-3 text-sm font-black text-white transition hover:-translate-y-0.5 hover:bg-[#6255c7]"
-                            >
-                              {getSudokuDifficultyLabel(difficulty)}
-                            </button>
-                          ),
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-6 grid items-center gap-7 lg:grid-cols-[minmax(0,620px)_1fr]">
-                      <div>
-                        <div className="mx-auto grid aspect-square w-full max-w-[620px] grid-cols-9 overflow-hidden rounded-2xl border-[3px] border-[#4f4964] bg-white">
-                          {sudokuBoard.map((row, rowIndex) =>
-                            row.map((value, columnIndex) => {
-                              const fixed = sudokuPuzzle[rowIndex][columnIndex] !== 0;
-                              const selected =
-                                selectedSudokuCell?.row === rowIndex &&
-                                selectedSudokuCell?.column === columnIndex;
-                              const related =
-                                selectedSudokuCell !== null &&
-                                (selectedSudokuCell.row === rowIndex ||
-                                  selectedSudokuCell.column === columnIndex ||
-                                  (Math.floor(selectedSudokuCell.row / 3) ===
-                                    Math.floor(rowIndex / 3) &&
-                                    Math.floor(selectedSudokuCell.column / 3) ===
-                                      Math.floor(columnIndex / 3)));
-                              const incorrect =
-                                value !== 0 &&
-                                value !== sudokuSolution[rowIndex][columnIndex];
+            <h2 className="mt-1 text-3xl font-black text-[#332f45]">
+              게임 선택
+            </h2>
 
-                              return (
-                                <button
-                                  key={`${rowIndex}-${columnIndex}`}
-                                  type="button"
-                                  onClick={() =>
-                                    setSelectedSudokuCell({
-                                      row: rowIndex,
-                                      column: columnIndex,
-                                    })
-                                  }
-                                  className={`relative flex items-center justify-center border-[#cfc9dc] text-lg font-black transition md:text-2xl ${
-                                    columnIndex % 3 === 2 && columnIndex !== 8
-                                      ? "border-r-[3px] border-r-[#6a637e]"
-                                      : "border-r"
-                                  } ${
-                                    rowIndex % 3 === 2 && rowIndex !== 8
-                                      ? "border-b-[3px] border-b-[#6a637e]"
-                                      : "border-b"
-                                  } ${
-                                    selected
-                                      ? "bg-[#7467d8] text-white"
-                                      : related
-                                        ? "bg-[#f0edff]"
-                                        : "bg-white"
-                                  } ${
-                                    fixed
-                                      ? "text-[#332f45]"
-                                      : incorrect
-                                        ? "text-[#e05370]"
-                                        : "text-[#6659bf]"
-                                  }`}
-                                  aria-label={`${rowIndex + 1}행 ${columnIndex + 1}열`}
-                                >
-                                  {value || ""}
-                                </button>
-                              );
-                            }),
-                          )}
-                        </div>
-                      </div>
+            <p className="mt-2 text-sm font-bold text-[#8b849d]">
+              원하는 게임과 난이도를 선택해 플레이하세요.
+            </p>
+          </header>
 
-                      <div className="max-h-[calc(100vh-170px)] space-y-4 overflow-y-auto pr-1">
-                        <aside className="rounded-[28px] bg-[#f7f5ff] p-5">
-                        {isSudokuCompleted ? (
-                          <div className="rounded-2xl bg-[#e5f7eb] px-4 py-5 text-center">
-                            <p className="text-3xl">✨</p>
-                            <p className="mt-2 text-xl font-black text-[#39775a]">
-                              완성했습니다!
-                            </p>
-                            <p className="mt-1 text-sm font-bold text-[#609071]">
-                              기록 {formatSudokuTime(sudokuSeconds)}
-                            </p>
-                          </div>
-                        ) : (
-                          <p className="text-center text-sm font-black text-[#756e8b]">
-                            빈칸을 선택한 뒤 숫자를 눌러주세요.
-                          </p>
-                        )}
+          <div className="mt-7 grid gap-5 lg:grid-cols-2">
+            {/* 스도쿠 카드 */}
+            <article className="rounded-[28px] border border-[#ded8ef] bg-[#faf9ff] p-6 shadow-sm">
+              <div className="flex items-center gap-4">
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#eeeafd] text-3xl">
+                  🧩
+                </span>
 
-                        <div className="mt-5 grid grid-cols-3 gap-2">
-                          {SUDOKU_NUMBERS.map((number) => (
-                            <button
-                              key={number}
-                              type="button"
-                              onClick={() => selectSudokuNumber(number)}
-                              className="rounded-2xl bg-white py-4 text-xl font-black text-[#5d538f] shadow-sm transition hover:-translate-y-0.5 hover:bg-[#eeeafd]"
-                            >
-                              {number}
-                            </button>
-                          ))}
-                        </div>
+                <div>
+                  <p className="text-[11px] font-black tracking-[0.16em] text-[#928ba8]">
+                    NUMBER PUZZLE
+                  </p>
 
-                        <button
-                          type="button"
-                          onClick={() => selectSudokuNumber(0)}
-                          className="mt-2 w-full rounded-2xl bg-white py-3 text-sm font-black text-[#827a96] transition hover:bg-[#eeeafd]"
-                        >
-                          선택한 숫자 지우기
-                        </button>
-
-                        <div className="mt-4 grid grid-cols-2 gap-2">
-                          <button
-                            type="button"
-                            onClick={useSudokuHint}
-                            disabled={sudokuHintCount <= 0 || isSudokuCompleted}
-                            className="rounded-2xl bg-[#e3b936] py-3 text-sm font-black text-white transition hover:bg-[#cfaa2f] disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            힌트
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => startSudokuGame(sudokuDifficulty)}
-                            className="rounded-2xl bg-[#7467d8] py-3 text-sm font-black text-white transition hover:bg-[#6255c7]"
-                          >
-                            새 게임
-                          </button>
-                        </div>
-
-                        <div className="mt-3 grid grid-cols-3 gap-2">
-                          {(["easy", "normal", "hard"] as SudokuDifficulty[]).map(
-                            (difficulty) => (
-                              <button
-                                key={difficulty}
-                                type="button"
-                                onClick={() => startSudokuGame(difficulty)}
-                                className={`rounded-xl py-2 text-xs font-black transition ${
-                                  sudokuDifficulty === difficulty
-                                    ? "bg-[#51479a] text-white"
-                                    : "bg-white text-[#6f6785] hover:bg-[#eeeafd]"
-                                }`}
-                              >
-                                {getSudokuDifficultyLabel(difficulty)}
-                              </button>
-                            ),
-                          )}
-                        </div>
-                        </aside>
-
-                        {(isSudokuCompleted || sudokuSaveMessage) && (
-                          <div
-                            className={`rounded-2xl px-4 py-3 text-center text-xs font-black ${
-                              isSudokuSaving
-                                ? "bg-[#eeeafd] text-[#6659bf]"
-                                : sudokuSaveMessage.includes("저장됐어요")
-                                  ? "bg-[#e5f7eb] text-[#39775a]"
-                                  : "bg-[#fff8dc] text-[#8a6a20]"
-                            }`}
-                          >
-                            {sudokuSaveMessage}
-                          </div>
-                        )}
-
-                        <HooCommunityPanel
-                          refreshKey={communityRefreshKey}
-                        />
-                      </div>
-                    </div>
-                                  )}
-                </article>
-
-                <div className="min-h-0">
-                  <HooCommunityPanel />
+                  <h3 className="text-2xl font-black text-[#332f45]">
+                    스도쿠
+                  </h3>
                 </div>
               </div>
-            </section>
+
+              <div className="mt-6 grid grid-cols-3 gap-2">
+                {(["easy", "normal", "hard"] as SudokuDifficulty[]).map(
+                  (difficulty) => (
+                    <button
+                      key={difficulty}
+                      type="button"
+                      onClick={() =>
+                        setSudokuDifficulty(difficulty)
+                      }
+                      className={`rounded-xl py-2 text-xs font-black transition ${
+                        sudokuDifficulty === difficulty
+                          ? "bg-[#7467d8] text-white"
+                          : "bg-white text-[#827b95] hover:bg-[#eeeafd]"
+                      }`}
+                    >
+                      {getSudokuDifficultyLabel(difficulty)}
+                    </button>
+                  ),
+                )}
+              </div>
+
+              <div className="mt-6 space-y-3 rounded-2xl bg-white p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#928ba8]">
+                    최고기록
+                  </span>
+
+                 <strong className="text-lg font-black text-[#332f45]">
+  {sudokuBestTimes[sudokuDifficulty] === null
+    ? "--:--"
+    : formatSudokuTime(
+        sudokuBestTimes[sudokuDifficulty] as number,
+      )}
+</strong>
+
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#928ba8]">
+                    타임어택
+                  </span>
+
+                  <strong className="text-sm font-black text-[#7467d8]">
+                    10:00
+                  </strong>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  startSudokuGame(sudokuDifficulty);
+                  setMinigameScreen("sudoku");
+                }}
+                className="mt-6 w-full rounded-2xl bg-[#7467d8] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#6255c7]"
+              >
+                스도쿠 플레이
+              </button>
+            </article>
+
+            {/* 2048 카드 */}
+            <article className="rounded-[28px] border border-[#ded8ef] bg-[#faf9ff] p-6 shadow-sm">
+              <div className="flex items-center gap-4">
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#fff0d9] text-3xl">
+                  🔢
+                </span>
+
+                <div>
+                  <p className="text-[11px] font-black tracking-[0.16em] text-[#928ba8]">
+                    NUMBER MERGE
+                  </p>
+
+                  <h3 className="text-2xl font-black text-[#332f45]">
+                    HOO 2048
+                  </h3>
+                </div>
+              </div>
+
+             <div className="mt-6 grid grid-cols-3 gap-2">
+  {(
+    [
+      ["easy", "쉬움"],
+      ["normal", "보통"],
+      ["hard", "어려움"],
+    ] as const
+  ).map(([difficulty, label]) => (
+    <button
+      key={difficulty}
+      type="button"
+      onClick={() =>
+        setHoo2048Difficulty(difficulty)
+      }
+      className={`rounded-xl py-2 text-xs font-black transition ${
+        hoo2048Difficulty === difficulty
+          ? "bg-[#7467d8] text-white"
+          : "bg-white text-[#827b95] hover:bg-[#eeeafd]"
+      }`}
+    >
+      {label}
+    </button>
+  ))}
+</div>
+
+              <div className="mt-6 space-y-3 rounded-2xl bg-white p-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#928ba8]">
+                    최고점수
+                  </span>
+
+                 <strong className="text-lg font-black text-[#332f45]">
+  {hoo2048BestScores[
+    hoo2048Difficulty
+  ].toLocaleString("ko-KR")}
+</strong>
+
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#928ba8]">
+                    타임어택
+                  </span>
+
+                  <strong className="text-sm font-black text-[#7467d8]">
+                    제한 없음
+                  </strong>
+                </div>
+              </div>
+
+                          <button
+                type="button"
+                onClick={() => setMinigameScreen("2048")}
+                className="mt-6 w-full rounded-2xl bg-[#f0a33a] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#df9027]"
+              >
+                HOO 2048 플레이
+              </button>
+            </article>
+          </div>
+        </article>
+
+      <div className="h-full">
+        
+  <HooCommunityPanel
+    refreshKey={communityRefreshKey}
+  />
+</div>
+
+              <p className="mt-1 text-2xl font-black text-[#332f45]">
+                -위
+              </p>
+      </section>
+    )}
+
+    {minigameScreen === "2048" && (
+      <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <article className="rounded-[34px] border border-white/55 bg-white/90 p-6 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl md:p-8">
+          <header className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
+                HOO MINI GAME
+              </p>
+
+              <h2 className="mt-1 text-3xl font-black text-[#332f45]">
+                HOO 2048
+              </h2>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setMinigameScreen("menu")}
+              className="rounded-full bg-[#eeeafd] px-5 py-2.5 text-sm font-black text-[#665e82] transition hover:bg-[#ddd7fa]"
+            >
+              ← 게임 선택
+            </button>
+          </header>
+
+          <div className="mt-6">
+         
+  <Hoo2048Game
+  difficulty={hoo2048Difficulty}
+  bestScore={
+    hoo2048BestScores[
+      hoo2048Difficulty
+    ]
+  }
+  onScoreChange={(score) => {
+    setHoo2048BestScores(
+      (previousScores) => {
+        if (
+          score <=
+          previousScores[
+            hoo2048Difficulty
+          ]
+        ) {
+          return previousScores;
+        }
+
+        return {
+          ...previousScores,
+          [hoo2048Difficulty]: score,
+        };
+      },
+    );
+  }}
+  onRecordSaved={() => {
+    setCommunityRefreshKey(
+      (previous) => previous + 1,
+    );
+  }}
+/>
+
+          </div>
+        </article>
+
+        <div className="min-h-0">
+          <HooCommunityPanel
+            refreshKey={communityRefreshKey}
+          />
+        </div>
+      </section>
+    )}
+
+    {minigameScreen === "sudoku" && (
+      <section className="rounded-[34px] border border-white/55 bg-white/90 p-8 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl">
+        <header className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
+              HOO MINI GAME
+            </p>
+
+            <h2 className="mt-1 text-3xl font-black text-[#332f45]">
+              스도쿠
+            </h2>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsSudokuRunning(false);
+              setMinigameScreen("menu");
+            }}
+            className="rounded-full bg-[#eeeafd] px-5 py-2.5 text-sm font-black text-[#665e82] transition hover:bg-[#ddd7fa]"
+          >
+            ← 게임 선택
+          </button>
+        </header>
+
+      <div className="mt-7 grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+  {/* 왼쪽: 스도쿠 게임판 */}
+  <article className="rounded-[28px] border border-[#ded8ef] bg-[#faf9ff] p-5 md:p-7">
+    <div className="mx-auto grid w-full max-w-[540px] grid-cols-9 overflow-hidden rounded-2xl border-4 border-[#4f4965] bg-[#4f4965]">
+      {sudokuBoard.map((row, rowIndex) =>
+        row.map((value, columnIndex) => {
+          const isFixed =
+            sudokuPuzzle[rowIndex]?.[columnIndex] !== 0;
+
+          const isSelected =
+            selectedSudokuCell?.row === rowIndex &&
+            selectedSudokuCell?.column === columnIndex;
+
+          const isIncorrect =
+            value !== 0 &&
+            value !==
+              sudokuSolution[rowIndex]?.[columnIndex];
+
+          const thickRightBorder =
+            columnIndex === 2 || columnIndex === 5;
+
+          const thickBottomBorder =
+            rowIndex === 2 || rowIndex === 5;
+
+          return (
+            <button
+              key={`${rowIndex}-${columnIndex}`}
+              type="button"
+              disabled={isFixed || isSudokuCompleted}
+              onClick={() =>
+                setSelectedSudokuCell({
+                  row: rowIndex,
+                  column: columnIndex,
+                })
+              }
+              className={`aspect-square border border-[#d9d4e7] text-base font-black transition md:text-xl ${
+                thickRightBorder
+                  ? "border-r-[3px] border-r-[#4f4965]"
+                  : ""
+              } ${
+                thickBottomBorder
+                  ? "border-b-[3px] border-b-[#4f4965]"
+                  : ""
+              } ${
+                isFixed
+                  ? "bg-[#eeeafd] text-[#3f3955]"
+                  : isSelected
+                    ? "bg-[#dcd5ff] text-[#6255c7]"
+                    : "bg-white text-[#7467d8] hover:bg-[#f5f2ff]"
+              } ${
+                isIncorrect
+                  ? "bg-[#ffe3e8] text-[#d94f6b]"
+                  : ""
+              }`}
+            >
+              {value === 0 ? "" : value}
+            </button>
+          );
+        }),
+      )}
+    </div>
+
+    {/* 숫자 선택 */}
+    <div className="mx-auto mt-6 grid w-full max-w-[540px] grid-cols-9 gap-2">
+      {SUDOKU_NUMBERS.map((number) => (
+        <button
+          key={number}
+          type="button"
+          disabled={
+            !selectedSudokuCell || isSudokuCompleted
+          }
+          onClick={() => selectSudokuNumber(number)}
+          className="aspect-square rounded-xl bg-[#7467d8] text-sm font-black text-white transition hover:scale-105 hover:bg-[#6255c7] disabled:cursor-not-allowed disabled:bg-[#c9c4d8]"
+        >
+          {number}
+        </button>
+      ))}
+    </div>
+  </article>
+
+  {/* 오른쪽: 게임 정보 */}
+  <aside className="rounded-[28px] border border-[#ded8ef] bg-[#f7f5ff] p-6">
+    <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
+      GAME STATUS
+    </p>
+
+    <h3 className="mt-1 text-2xl font-black text-[#332f45]">
+      게임 정보
+    </h3>
+
+    <div className="mt-6 rounded-2xl bg-white p-5 text-center">
+      <p className="text-xs font-bold text-[#928ba8]">
+        진행 시간
+      </p>
+
+      <p className="mt-2 text-4xl font-black text-[#7467d8]">
+        {formatSudokuTime(sudokuSeconds)}
+      </p>
+    </div>
+
+    <div className="mt-4 space-y-3">
+      <div className="flex items-center justify-between rounded-2xl bg-white p-4">
+        <span className="text-xs font-bold text-[#928ba8]">
+          난이도
+        </span>
+
+        <strong className="text-sm font-black text-[#332f45]">
+          {getSudokuDifficultyLabel(sudokuDifficulty)}
+        </strong>
+      </div>
+
+      <div className="flex items-center justify-between rounded-2xl bg-white p-4">
+        <span className="text-xs font-bold text-[#928ba8]">
+          남은 힌트
+        </span>
+
+        <strong className="text-sm font-black text-[#f0a33a]">
+          {sudokuHintCount}개
+        </strong>
+      </div>
+    </div>
+
+    <button
+      type="button"
+      disabled={
+        sudokuHintCount <= 0 || isSudokuCompleted
+      }
+      onClick={useSudokuHint}
+      className="mt-5 w-full rounded-2xl bg-[#f0a33a] py-3.5 text-sm font-black text-white transition hover:bg-[#df9027] disabled:cursor-not-allowed disabled:bg-[#c9c4d8]"
+    >
+      힌트 사용
+    </button>
+
+    <button
+      type="button"
+      onClick={() =>
+        startSudokuGame(sudokuDifficulty)
+      }
+      className="mt-3 w-full rounded-2xl bg-[#eeeafd] py-3.5 text-sm font-black text-[#665e82] transition hover:bg-[#ddd7fa]"
+    >
+      다시 시작
+    </button>
+
+    {isSudokuCompleted && (
+      <div className="mt-5 rounded-2xl border border-[#8ce0af] bg-[#ecfff3] p-4 text-center">
+        <p className="text-xl font-black text-[#27955b]">
+          🎉 스도쿠 완료!
+        </p>
+
+        <p className="mt-2 text-xs font-bold text-[#557061]">
+          기록 {formatSudokuTime(sudokuSeconds)}
+        </p>
+      </div>
+    )}
+
+    {sudokuSaveMessage && (
+      <p className="mt-4 rounded-2xl bg-white px-4 py-3 text-center text-xs font-bold text-[#746d83]">
+        {isSudokuSaving
+          ? "기록 저장 중..."
+          : sudokuSaveMessage}
+      </p>
+    )}
+  </aside>
+</div>
+      </section>
+    )}
+  </div>
+</section>
 
           </div>
           

@@ -31,7 +31,7 @@ type MyStats = {
 const PERIOD_LABEL: Record<RankingPeriod, string> = {
   today: "오늘",
   week: "이번 주",
-  all: "역대",
+  all: "종합 점수",
 };
 
 type HooCommunityPanelProps = {
@@ -44,6 +44,27 @@ export default function HooCommunityPanel({
   const supabase = useMemo(() => createClient(), []);
   const [user, setUser] = useState<SessionUser>(null);
   const [period, setPeriod] = useState<RankingPeriod>("all");
+
+  const [rankingMode, setRankingMode] = useState<
+    "score" | "timeAttack"
+  >("score");
+
+const [selectedGame, setSelectedGame] =
+  useState<"sudoku" | "2048">("sudoku");
+
+
+  const [timeAttackRankings, setTimeAttackRankings] =
+  useState<
+    Array<{
+      userId: string;
+      nickname: string;
+      avatarEmoji: string;
+      elapsedSeconds: number;
+      difficulty: string;
+      hintsUsed: number;
+    }>
+  >([]);
+
   const [rankings, setRankings] = useState<RankingRow[]>([]);
   const [stats, setStats] = useState<MyStats>(null);
   const [loading, setLoading] = useState(true);
@@ -57,7 +78,7 @@ export default function HooCommunityPanel({
   const loadRanking = useCallback(async () => {
     try {
       const response = await fetch(
-       `/api/sudoku/ranking?period=${period}&limit=100`,
+        `/api/sudoku/ranking?period=${period}&limit=100`,
         { cache: "no-store" },
       );
       const data = await response.json();
@@ -66,6 +87,23 @@ export default function HooCommunityPanel({
       console.error("랭킹 불러오기 오류:", error);
     }
   }, [period]);
+
+  const loadTimeAttackRanking = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `/api/timeattack/ranking?game=${selectedGame}&limit=100`,
+        { cache: "no-store" },
+      );
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setTimeAttackRankings(data.rankings ?? []);
+      }
+    } catch (error) {
+      console.error("타임어택 랭킹 불러오기 오류:", error);
+    }
+  }, [selectedGame]);
 
   const loadMe = useCallback(async () => {
     try {
@@ -109,10 +147,33 @@ export default function HooCommunityPanel({
   }, [loadRanking]);
 
   useEffect(() => {
-    if (refreshKey <= 0) return;
-    void loadRanking();
-    if (user) void loadMe();
-  }, [loadMe, loadRanking, refreshKey, user]);
+    if (rankingMode !== "timeAttack") return;
+
+    void loadTimeAttackRanking();
+  }, [loadTimeAttackRanking, rankingMode]);
+
+ useEffect(() => {
+  if (refreshKey <= 0) {
+    return;
+  }
+
+  void loadRanking();
+
+  if (rankingMode === "timeAttack") {
+    void loadTimeAttackRanking();
+  }
+
+  if (user) {
+    void loadMe();
+  }
+}, [
+  loadMe,
+  loadRanking,
+  loadTimeAttackRanking,
+  rankingMode,
+  refreshKey,
+  user,
+]);
 
   useEffect(() => {
     if (user) void loadMe();
@@ -188,8 +249,9 @@ export default function HooCommunityPanel({
 
   const level = getLevelProgress(stats?.total_score ?? 0);
 
-  return (
-    <aside className="rounded-[28px] bg-[#f7f5ff] p-5 shadow-inner">
+return (
+  <aside className="flex h-full flex-col rounded-[34px] bg-[#f7f5ff] p-6">
+    
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs font-black tracking-[0.16em] text-[#928ba8]">
@@ -259,62 +321,207 @@ export default function HooCommunityPanel({
         </p>
       )}
 
-      <div className="mt-4 grid grid-cols-3 gap-2">
-        {(Object.keys(PERIOD_LABEL) as RankingPeriod[]).map((item) => (
-          <button
-            type="button"
-            key={item}
-            onClick={() => setPeriod(item)}
-            className={`rounded-xl py-2 text-xs font-black ${
-              period === item
-                ? "bg-[#51479a] text-white"
-                : "bg-white text-[#716a85]"
-            }`}
-          >
-            {PERIOD_LABEL[item]}
-          </button>
-        ))}
+      <div className="mt-4 grid grid-cols-2 gap-2">
+  <button
+    type="button"
+    onClick={() => setRankingMode("score")}
+    className={`rounded-xl py-2.5 text-xs font-black transition ${
+      rankingMode === "score"
+        ? "bg-[#51479a] text-white"
+        : "bg-white text-[#716a85]"
+    }`}
+  >
+    🏆 종합 점수
+  </button>
+
+  <button
+    type="button"
+    onClick={() => setRankingMode("timeAttack")}
+    className={`rounded-xl py-2.5 text-xs font-black transition ${
+      rankingMode === "timeAttack"
+        ? "bg-[#51479a] text-white"
+        : "bg-white text-[#716a85]"
+    }`}
+  >
+    ⚡ 타임어택
+  </button>
       </div>
 
-      <div
-  className="mt-3 max-h-[330px] space-y-2 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden"
-  style={{
-    scrollbarWidth: "none",
-    msOverflowStyle: "none",
-  }}
->
-        {rankings.length === 0 ? (
-          <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm font-bold text-[#948da7]">
-           첫 주인공이 되어보세요!
-          </p>
-        ) : (
-          rankings.map((row, index) => (
-            <div
-              key={row.userId}
-              className="flex items-center gap-3 rounded-2xl bg-white px-3 py-3"
+      {rankingMode === "score" && (
+        <>
+          <div className="mt-4 grid grid-cols-3 gap-2">
+            {(Object.keys(PERIOD_LABEL) as RankingPeriod[]).map((item) => (
+              <button
+                type="button"
+                key={item}
+                onClick={() => setPeriod(item)}
+                className={`rounded-xl py-2 text-xs font-black ${
+                  period === item
+                    ? "bg-[#51479a] text-white"
+                    : "bg-white text-[#716a85]"
+                }`}
+              >
+                {PERIOD_LABEL[item]}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-4">
+            <h4 className="text-sm font-black text-[#403a54]">
+              🏆{" "}
+              {period === "all"
+                ? "종합 점수 랭킹"
+                : `${PERIOD_LABEL[period]} 점수 랭킹`}
+            </h4>
+
+            <p className="mt-1 text-[11px] font-bold text-[#9b94aa]">
+              {period === "all"
+                ? "모든 미니게임에서 획득한 점수를 합산한 랭킹입니다."
+                : `${PERIOD_LABEL[period]} 동안 획득한 점수 랭킹입니다.`}
+            </p>
+          </div>
+
+          <div
+            className="mt-3 max-h-[330px] space-y-2 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden"
+            style={{
+              scrollbarWidth: "none",
+              msOverflowStyle: "none",
+            }}
+          >
+            {rankings.length === 0 ? (
+              <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm font-bold text-[#948da7]">
+                첫 주인공이 되어보세요!
+              </p>
+            ) : (
+              rankings.map((row, index) => (
+                <div
+                  key={row.userId}
+                  className="flex items-center gap-3 rounded-2xl bg-white px-3 py-3"
+                >
+                  <span className="w-7 text-center text-sm font-black text-[#675f7d]">
+                    {index < 3
+                      ? ["🥇", "🥈", "🥉"][index]
+                      : `${index + 1}위`}
+                  </span>
+
+                  <span className="text-xl">
+                    {row.avatarEmoji || "🦉"}
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-black text-[#403a54]">
+                      {row.nickname}
+                    </p>
+
+                    <p className="text-[11px] font-bold text-[#9b94aa]">
+                      쉬움 {row.easyCount} · 보통 {row.normalCount} · 어려움{" "}
+                      {row.hardCount}
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-sm font-black text-[#6659bf]">
+                      {row.totalScore}점
+                    </p>
+
+                    <p className="text-[10px] text-[#9b94aa]">
+                      Lv.{row.level}
+                    </p>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+
+      {rankingMode === "timeAttack" && (
+        <div className="mt-4 rounded-2xl bg-white p-4">
+          <div>
+            <h4 className="text-sm font-black text-[#403a54]">
+              ⚡ 타임어택 랭킹
+            </h4>
+
+            <p className="mt-1 text-[11px] font-bold text-[#9b94aa]">
+              게임별 가장 빠른 클리어 기록을 보여줍니다.
+            </p>
+          </div>
+
+          <div className="mt-4">
+            <label
+              htmlFor="time-attack-game"
+              className="text-[11px] font-black text-[#8f88a3]"
             >
-              <span className="w-7 text-center text-sm font-black text-[#675f7d]">
-              {index < 3
-  ? ["🥇", "🥈", "🥉"][index]
-  : `${index + 1}위`}
-              </span>
-              <span className="text-xl">{row.avatarEmoji || "🦉"}</span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-black text-[#403a54]">
-                  {row.nickname}
-                </p>
+              게임 선택
+            </label>
+
+            <select
+              id="time-attack-game"
+              value={selectedGame}
+              
+             onChange={(event) =>
+  setSelectedGame(event.target.value as "sudoku" | "2048")
+}
+
+              className="mt-2 w-full rounded-xl border border-[#ded8ef] bg-[#f8f6ff] px-4 py-3 text-sm font-black text-[#403a54] outline-none focus:border-[#7467d8]"
+            >
+
+            <option value="sudoku">스도쿠</option>
+<option value="2048">HOO2048</option>
+
+
+            </select>
+          </div>
+
+          <div
+            className="mt-4 max-h-[330px] space-y-2 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden"
+            style={{
+              scrollbarWidth: "none",
+              msOverflowStyle: "none",
+            }}
+          >
+            {timeAttackRankings.length === 0 ? (
+              <p className="rounded-2xl bg-[#f7f5ff] px-4 py-8 text-center text-sm font-bold text-[#948da7]">
+                아직 등록된 타임어택 기록이 없어요.
+              </p>
+            ) : (
+              timeAttackRankings.map((row, index) => (
+                <div
+                  key={`${row.userId}-${index}`}
+                  className="flex items-center gap-3 rounded-2xl bg-[#f7f5ff] px-3 py-3"
+                >
+                  <span className="w-7 text-center text-sm font-black text-[#675f7d]">
+                    {index < 3
+                      ? ["🥇", "🥈", "🥉"][index]
+                      : `${index + 1}위`}
+                  </span>
+
+                  <span className="text-xl">
+                    {row.avatarEmoji || "🦉"}
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-black text-[#403a54]">
+                      {row.nickname}
+                    </p>
+
                 <p className="text-[11px] font-bold text-[#9b94aa]">
-                  쉬움 {row.easyCount} · 보통 {row.normalCount} · 어려움 {row.hardCount}
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-sm font-black text-[#6659bf]">{row.totalScore}점</p>
-                <p className="text-[10px] text-[#9b94aa]">Lv.{row.level}</p>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+  {selectedGame === "sudoku"
+    ? `${row.difficulty} · 힌트 ${row.hintsUsed}회`
+    : row.difficulty}
+</p>
+                  </div>
+
+                  <p className="text-sm font-black text-[#6659bf]">
+                    {Math.floor(row.elapsedSeconds / 60)}:
+                    {String(row.elapsedSeconds % 60).padStart(2, "0")}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {authOpen &&
         typeof document !== "undefined" &&
