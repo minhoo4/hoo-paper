@@ -35,6 +35,7 @@ type Schedule = {
   date: string;
   repeatType: ScheduleRepeatType;
   createdAt: string;
+  isSecret: boolean;
 };
 
 type ScheduleMap = Record<string, Schedule[]>;
@@ -44,7 +45,9 @@ type Memo = {
   title: string;
   content: string;
   updatedAt: string;
+  isSecret: boolean;
 };
+
 type Notice = {
   id: number;
   title: string;
@@ -101,6 +104,10 @@ const WEEK_DAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
 const SCHEDULE_STORAGE_KEY = "hoo-calendar-schedules";
 const MEMO_STORAGE_KEY = "hoo-memos";
+
+const SECRET_PIN_STORAGE_KEY =
+  "hoo-secret-pin";
+  
 const FAVORITE_STORAGE_KEY = "hoo-favorites";
 
 const TODO_STORAGE_KEY = "hoo-todos";
@@ -483,6 +490,35 @@ const [scheduleTitle, setScheduleTitle] = useState("");
   const [scheduleContent, setScheduleContent] =
     useState("");
 
+    const [isScheduleSecret, setIsScheduleSecret] =
+  useState(false);
+
+const [isSecretLayerOn, setIsSecretLayerOn] =
+  useState(false);
+
+  const [secretPin, setSecretPin] =
+  useState("1234");
+
+const [secretPinInput, setSecretPinInput] =
+  useState("");
+
+const [isSecretPinModalOpen, setIsSecretPinModalOpen] =
+  useState(false);
+
+  const [
+  isSecretPinChangeModalOpen,
+  setIsSecretPinChangeModalOpen,
+] = useState(false);
+
+const [currentSecretPinInput, setCurrentSecretPinInput] =
+  useState("");
+
+const [newSecretPinInput, setNewSecretPinInput] =
+  useState("");
+
+const [confirmSecretPinInput, setConfirmSecretPinInput] =
+  useState("");
+
     const [
   scheduleRepeatType,
   setScheduleRepeatType,
@@ -516,6 +552,9 @@ const [
 
   const [memos, setMemos] = useState<Memo[]>([]);
   const [memoTitle, setMemoTitle] = useState("");
+
+  const [isMemoSecret, setIsMemoSecret] =
+  useState(false);
 
  /* 전달사항 */
 
@@ -914,6 +953,11 @@ useEffect(() => {
         MEMO_STORAGE_KEY,
       );
 
+      const savedSecretPin =
+  window.localStorage.getItem(
+    SECRET_PIN_STORAGE_KEY,
+  );
+
       const savedFavorites = window.localStorage.getItem(
         FAVORITE_STORAGE_KEY,
       );
@@ -995,6 +1039,13 @@ const savedRecommendedTodo =
       if (savedMemos) {
         setMemos(JSON.parse(savedMemos));
       }
+
+      if (
+  savedSecretPin &&
+  /^\d{4}$/.test(savedSecretPin)
+) {
+  setSecretPin(savedSecretPin);
+}
 
       if (savedFavorites) {
         setFavorites(
@@ -1078,6 +1129,24 @@ if (savedMinigameCompletionDate === todayStorageDate) {
       JSON.stringify(memos),
     );
   }, [memos, isLoaded]);
+
+
+/* ─────────────────────────────
+   시크릿 PIN 자동 저장
+───────────────────────────── */
+
+useEffect(() => {
+  if (!isLoaded) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    SECRET_PIN_STORAGE_KEY,
+    secretPin,
+  );
+}, [secretPin, isLoaded]);
+
+
 /* ─────────────────────────────
    Focus Mode 메모 실시간 동기화
 ───────────────────────────── */
@@ -1429,14 +1498,25 @@ void submitSudokuCompletion({
     }).format(date);
   }, [selectedDateInfo]);
 
-  const selectedSchedules =
-    schedules[selectedDate] ?? [];
+ const selectedSchedules = (
+  schedules[selectedDate] ?? []
+).filter(
+  (schedule) =>
+    !isSecretLayerOn ||
+    !schedule.isSecret,
+);
 
   const selectedSchedule =
     selectedSchedules.find(
       (schedule) =>
         schedule.id === selectedScheduleId,
     ) ?? null;
+
+    const visibleMemos = memos.filter(
+  (memo) =>
+    !isSecretLayerOn ||
+    !memo.isSecret,
+);
 
   useEffect(() => {
     if (selectedSchedules.length === 0) {
@@ -1617,7 +1697,7 @@ if (
   const createdAt =
     new Date().toISOString();
 
- const newSchedules =
+const newSchedules =
   scheduleDates.map(
     (date): Schedule => ({
       id: createId(),
@@ -1628,6 +1708,7 @@ if (
       repeatType:
         activeRepeatType,
       createdAt,
+      isSecret: isScheduleSecret,
     }),
   );
 
@@ -1677,9 +1758,8 @@ if (
   setScheduleEndDate("");
   setScheduleRepeatUntil("");
 
-  setScheduleRepeatType("none");
-setScheduleEndDate("");
-setScheduleRepeatUntil("");
+  setIsScheduleSecret(false);
+
 
 }
 
@@ -1773,21 +1853,23 @@ function deleteSchedule(
         previousMemos.map((memo) =>
           memo.id === editingMemoId
             ? {
-                ...memo,
-                title: title || "제목 없는 메모",
-                content,
-                updatedAt: new Date().toISOString(),
-              }
+    ...memo,
+    title: title || "제목 없는 메모",
+    content,
+    updatedAt: new Date().toISOString(),
+    isSecret: isMemoSecret,
+  }
             : memo,
         ),
       );
     } else {
       const newMemo: Memo = {
-        id: createId(),
-        title: title || "제목 없는 메모",
-        content,
-        updatedAt: new Date().toISOString(),
-      };
+  id: createId(),
+  title: title || "제목 없는 메모",
+  content,
+  updatedAt: new Date().toISOString(),
+  isSecret: isMemoSecret,
+};
 
       setMemos((previousMemos) => [
         newMemo,
@@ -1799,16 +1881,18 @@ function deleteSchedule(
   }
 
   function startMemoEditing(memo: Memo) {
-    setEditingMemoId(memo.id);
-    setMemoTitle(memo.title);
-    setMemoContent(memo.content);
-  }
+  setEditingMemoId(memo.id);
+  setMemoTitle(memo.title);
+  setMemoContent(memo.content);
+  setIsMemoSecret(memo.isSecret ?? false);
+}
 
-  function cancelMemoEditing() {
-    setEditingMemoId(null);
-    setMemoTitle("");
-    setMemoContent("");
-  }
+ function cancelMemoEditing() {
+  setEditingMemoId(null);
+  setMemoTitle("");
+  setMemoContent("");
+  setIsMemoSecret(false);
+}
 
   function deleteMemo(memoId: string) {
     setMemos((previousMemos) =>
@@ -2423,6 +2507,220 @@ useEffect(() => {
       }}
     >
 
+{isSecretPinModalOpen && (
+  <div className="fixed inset-0 z-[11000] flex items-center justify-center bg-black/50 px-5 backdrop-blur-sm">
+    <div className="w-full max-w-sm rounded-[28px] bg-white p-7 shadow-2xl">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-xs font-black text-[#7467d8]">
+            SECRET LAYER
+          </p>
+
+          <h2 className="mt-1 text-xl font-black text-[#332f45]">
+            PIN 번호 입력
+          </h2>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            setIsSecretPinModalOpen(false);
+            setSecretPinInput("");
+          }}
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-[#f1eff7] text-xl font-black text-[#777083] transition hover:bg-[#e5e1ef]"
+          aria-label="PIN 입력창 닫기"
+        >
+          ×
+        </button>
+      </div>
+
+      <p className="mt-3 text-sm font-bold leading-6 text-[#8b849d]">
+  시크릿 일정과 메모를 표시하려면 PIN을 입력하세요.
+</p>
+
+      <form
+        className="mt-6"
+        onSubmit={(event) => {
+          event.preventDefault();
+
+          if (secretPinInput !== secretPin) {
+            window.alert("PIN 번호가 올바르지 않습니다.");
+            setSecretPinInput("");
+            return;
+          }
+
+          setIsSecretLayerOn(false);
+setIsSecretPinModalOpen(false);
+setSecretPinInput("");
+        }}
+      >
+        <input
+          type="password"
+          inputMode="numeric"
+          autoFocus
+          maxLength={4}
+          value={secretPinInput}
+          onChange={(event) => {
+            const nextValue =
+              event.target.value.replace(
+                /[^0-9]/g,
+                "",
+              );
+
+            setSecretPinInput(nextValue);
+          }}
+          placeholder="4자리 PIN"
+          className="w-full rounded-2xl border border-[#ded8ef] bg-[#faf9ff] px-5 py-4 text-center text-2xl font-black tracking-[0.5em] text-[#5145b5] outline-none transition focus:border-[#7467d8]"
+        />
+
+        <div className="mt-5 flex gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              setIsSecretPinModalOpen(false);
+              setSecretPinInput("");
+            }}
+            className="flex-1 rounded-2xl border border-[#ded8ef] bg-white px-4 py-3 text-sm font-black text-[#777083] transition hover:bg-[#f7f5ff]"
+          >
+            취소
+          </button>
+
+          <button
+            type="submit"
+            disabled={secretPinInput.length !== 4}
+            className="flex-1 rounded-2xl bg-[#7467d8] px-4 py-3 text-sm font-black text-white transition hover:bg-[#6255c7] disabled:cursor-not-allowed disabled:bg-[#c9c4df]"
+          >
+            확인
+          </button>
+        </div>
+      </form>
+
+       <button
+        type="button"
+        onClick={() => {
+          setIsSecretPinModalOpen(false);
+          setSecretPinInput("");
+          setCurrentSecretPinInput("");
+          setNewSecretPinInput("");
+          setConfirmSecretPinInput("");
+          setIsSecretPinChangeModalOpen(true);
+        }}
+        className="mt-4 w-full text-center text-xs font-black text-[#7467d8] transition hover:text-[#5145b5]"
+      >
+        PIN 번호 변경
+      </button>
+    </div>
+  </div>
+)}
+
+{isSecretPinChangeModalOpen && (
+  <div className="fixed inset-0 z-[11000] flex items-center justify-center bg-black/50 px-5 backdrop-blur-sm">
+    <div className="w-full max-w-sm rounded-[28px] bg-white p-7 shadow-2xl">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-black text-[#332f45]">
+          PIN 번호 변경
+        </h2>
+
+        <button
+          type="button"
+          onClick={() => {
+            setIsSecretPinChangeModalOpen(false);
+            setCurrentSecretPinInput("");
+            setNewSecretPinInput("");
+            setConfirmSecretPinInput("");
+          }}
+        >
+          ×
+        </button>
+      </div>
+
+      <form
+        className="mt-6 space-y-3"
+        onSubmit={(event) => {
+          event.preventDefault();
+
+          if (currentSecretPinInput !== secretPin) {
+            window.alert("현재 PIN 번호가 올바르지 않습니다.");
+            setCurrentSecretPinInput("");
+            return;
+          }
+
+          if (!/^\d{4}$/.test(newSecretPinInput)) {
+            window.alert("새 PIN은 숫자 4자리로 입력해주세요.");
+            return;
+          }
+
+          if (
+            newSecretPinInput !==
+            confirmSecretPinInput
+          ) {
+            window.alert("새 PIN 번호가 서로 다릅니다.");
+            setConfirmSecretPinInput("");
+            return;
+          }
+
+          setSecretPin(newSecretPinInput);
+          setIsSecretPinChangeModalOpen(false);
+          setCurrentSecretPinInput("");
+          setNewSecretPinInput("");
+          setConfirmSecretPinInput("");
+
+          window.alert("PIN 번호가 변경되었습니다.");
+        }}
+      >
+        <input
+          type="password"
+          inputMode="numeric"
+          maxLength={4}
+          value={currentSecretPinInput}
+          onChange={(event) =>
+            setCurrentSecretPinInput(
+              event.target.value.replace(/[^0-9]/g, ""),
+            )
+          }
+          placeholder="현재 PIN"
+          className="w-full rounded-2xl border px-5 py-4 text-center"
+        />
+
+        <input
+          type="password"
+          inputMode="numeric"
+          maxLength={4}
+          value={newSecretPinInput}
+          onChange={(event) =>
+            setNewSecretPinInput(
+              event.target.value.replace(/[^0-9]/g, ""),
+            )
+          }
+          placeholder="새 PIN"
+          className="w-full rounded-2xl border px-5 py-4 text-center"
+        />
+
+        <input
+          type="password"
+          inputMode="numeric"
+          maxLength={4}
+          value={confirmSecretPinInput}
+          onChange={(event) =>
+            setConfirmSecretPinInput(
+              event.target.value.replace(/[^0-9]/g, ""),
+            )
+          }
+          placeholder="새 PIN 확인"
+          className="w-full rounded-2xl border px-5 py-4 text-center"
+        />
+
+        <button
+          type="submit"
+          className="w-full rounded-2xl bg-[#7467d8] px-4 py-3 font-black text-white"
+        >
+          변경
+        </button>
+      </form>
+    </div>
+  </div>
+)}
+
       {isRepeatScheduleModalOpen && (
   <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/45 backdrop-blur-sm">
     <div className="w-full max-w-2xl rounded-[32px] bg-white p-8 shadow-2xl">
@@ -2442,14 +2740,15 @@ useEffect(() => {
         </h2>
 
         <button
-          type="button"
-          onClick={() =>
-            setIsRepeatScheduleModalOpen(false)
-          }
-          className="text-3xl font-bold"
-        >
-          ×
-        </button>
+  type="button"
+  onClick={() => {
+    setIsRepeatScheduleModalOpen(false);
+    setIsScheduleSecret(false);
+  }}
+>
+  ×
+</button>
+
       </div>
 
      <p className="mt-2 text-sm font-bold text-[#8b849d]">
@@ -2499,6 +2798,7 @@ useEffect(() => {
   </div>
 
   <div className="grid gap-4 sm:grid-cols-2">
+    
     <div>
       <label className="mb-2 block text-sm font-black text-[#423c55]">
         시작 날짜
@@ -2546,16 +2846,52 @@ useEffect(() => {
   </div>
 </div>
 
-<div className="mt-8 flex justify-end gap-3">
-  <button
-    type="button"
-    onClick={() =>
-      setIsRepeatScheduleModalOpen(false)
-    }
-    className="rounded-2xl border border-[#ded8ef] bg-white px-5 py-3 text-sm font-black text-[#777083] transition hover:bg-[#f7f5ff]"
+<button
+  type="button"
+  onClick={() =>
+    setIsScheduleSecret(
+      (previous) => !previous,
+    )
+  }
+  className={`mt-5 flex w-full items-center justify-between rounded-2xl border px-5 py-4 text-left transition ${
+    isScheduleSecret
+      ? "border-[#7467d8] bg-[#eeeaff] text-[#5145b5]"
+      : "border-[#ded8ef] bg-[#faf9ff] text-[#777083]"
+  }`}
+>
+  <div>
+    <p className="text-sm font-black">
+      시크릿레이어에 저장
+    </p>
+
+    <p className="mt-1 text-xs font-bold opacity-70">
+      생성되는 반복 일정 전체가 시크릿으로 저장됩니다.
+    </p>
+  </div>
+
+  <span
+    className={`flex h-6 w-11 items-center rounded-full p-1 transition ${
+      isScheduleSecret
+        ? "justify-end bg-[#7467d8]"
+        : "justify-start bg-[#d7d2df]"
+    }`}
   >
-    취소
-  </button>
+    <span className="h-4 w-4 rounded-full bg-white shadow-sm" />
+  </span>
+</button>
+
+<div className="mt-8 flex justify-end gap-3">
+ 
+ <button
+  type="button"
+  onClick={() => {
+    setIsRepeatScheduleModalOpen(false);
+    setIsScheduleSecret(false);
+  }}
+  className="rounded-2xl border border-[#ded8ef] bg-white px-5 py-3 text-sm font-black text-[#777083] transition hover:bg-[#f7f5ff]"
+>
+  취소
+</button>
 
 <button
   type="button"
@@ -3160,6 +3496,31 @@ useEffect(() => {
                           ←
                         </button>
 
+<button
+  type="button"
+
+ onClick={() => {
+  if (!isSecretLayerOn) {
+    setIsSecretLayerOn(true);
+    return;
+  }
+
+  setSecretPinInput("");
+  setIsSecretPinModalOpen(true);
+}}
+
+  className={`rounded-full border px-4 py-2.5 text-xs font-black transition hover:scale-105 ${
+    isSecretLayerOn
+      ? "border-[#5145b5] bg-[#5145b5] text-white"
+      : "border-[#d8d2ec] bg-[#f3f0ff] text-[#6255b5]"
+  }`}
+  aria-pressed={isSecretLayerOn}
+>
+  {isSecretLayerOn
+    ? "시크릿 ON"
+    : "시크릿 OFF"}
+</button>
+
                         <button
                           type="button"
                           onClick={moveToday}
@@ -3212,8 +3573,13 @@ useEffect(() => {
                           day,
                         );
 
-                        const dateSchedules =
-                          schedules[dateKey] ?? [];
+                        const dateSchedules = (
+  schedules[dateKey] ?? []
+).filter(
+  (schedule) =>
+    !isSecretLayerOn ||
+    !schedule.isSecret,
+);
 
                         const selected =
                           dateKey === selectedDate;
@@ -3403,9 +3769,17 @@ useEffect(() => {
       }
     </p>
 
-    <h4 className="mt-3 break-words text-xl font-black">
-      {selectedSchedule.title}
-    </h4>
+    <div className="mt-3 flex flex-wrap items-center gap-2">
+  <h4 className="break-words text-xl font-black">
+    {selectedSchedule.title}
+  </h4>
+
+  {selectedSchedule.isSecret && (
+    <span className="rounded-full bg-[#5145b5] px-2.5 py-1 text-[10px] font-black text-white">
+      SECRET
+    </span>
+  )}
+</div>
   </div>
 
   {selectedSchedules.length > 1 && (
@@ -3604,6 +3978,40 @@ useEffect(() => {
                         className="mt-2 w-full resize-none rounded-2xl border border-[#ded8ef] bg-white px-4 py-3 text-sm font-bold leading-6 outline-none focus:border-[#7467d8]"
                       />
 
+                      <button
+  type="button"
+  onClick={() =>
+    setIsScheduleSecret(
+      (previous) => !previous,
+    )
+  }
+  className={`mt-3 flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
+    isScheduleSecret
+      ? "border-[#7467d8] bg-[#eeeaff] text-[#5145b5]"
+      : "border-[#ded8ef] bg-white text-[#777083]"
+  }`}
+>
+  <div>
+    <p className="text-sm font-black">
+      시크릿레이어에 저장
+    </p>
+
+    <p className="mt-1 text-[11px] font-bold opacity-70">
+      시크릿 ON 상태에서는 화면에 표시되지 않습니다.
+    </p>
+  </div>
+
+  <span
+    className={`flex h-6 w-11 items-center rounded-full p-1 transition ${
+      isScheduleSecret
+        ? "justify-end bg-[#7467d8]"
+        : "justify-start bg-[#d7d2df]"
+    }`}
+  >
+    <span className="h-4 w-4 rounded-full bg-white shadow-sm" />
+  </span>
+</button>
+
                       <div className="mt-5 space-y-4">
 
   <div>
@@ -3768,6 +4176,40 @@ useEffect(() => {
                         placeholder="기억하고 싶은 내용을 적어보세요."
                         className="mt-3 h-72 w-full resize-none rounded-2xl border border-[#eadb9c] bg-white/80 px-4 py-4 text-sm font-bold leading-7 outline-none focus:border-[#d1ac37]"
                       />
+                      
+                      <button
+  type="button"
+  onClick={() =>
+    setIsMemoSecret(
+      (previous) => !previous,
+    )
+  }
+  className={`mt-3 flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition ${
+    isMemoSecret
+      ? "border-[#7467d8] bg-[#eeeaff] text-[#5145b5]"
+      : "border-[#e4d99f] bg-white/70 text-[#7d7142]"
+  }`}
+>
+  <div>
+    <p className="text-sm font-black">
+      시크릿레이어에 저장
+    </p>
+
+    <p className="mt-1 text-[11px] font-bold opacity-70">
+      시크릿 ON 상태에서는 메모 목록에서 숨겨집니다.
+    </p>
+  </div>
+
+  <span
+    className={`flex h-6 w-11 items-center rounded-full p-1 transition ${
+      isMemoSecret
+        ? "justify-end bg-[#7467d8]"
+        : "justify-start bg-[#d7d2df]"
+    }`}
+  >
+    <span className="h-4 w-4 rounded-full bg-white shadow-sm" />
+  </span>
+</button>
 
                       <div className="mt-3 flex gap-2">
                         <button
@@ -3798,17 +4240,19 @@ useEffect(() => {
                         </h3>
 
                         <span className="rounded-full bg-[#fff0a9] px-3 py-1 text-xs font-black text-[#93751d]">
-                          {memos.length}개
+                          {visibleMemos.length}개
                         </span>
                       </div>
 
-                      {memos.length === 0 ? (
+                     {visibleMemos.length === 0 ? (
                         <div className="mt-4 flex min-h-80 items-center justify-center rounded-3xl border-2 border-dashed border-[#e5dfc6] text-sm font-bold text-[#aaa18a]">
-                          저장된 메모가 없어요.
+                          {isSecretLayerOn
+  ? "표시할 메모가 없어요."
+  : "저장된 메모가 없어요."}
                         </div>
                       ) : (
                         <div className="mt-4 max-h-[440px] space-y-3 overflow-y-auto pr-2">
-                          {memos.map((memo, index) => (
+                         {visibleMemos.map((memo, index) => (
                             <article
                               key={memo.id}
                               className={`rounded-3xl p-4 shadow-sm ${getStickerClass(
@@ -3816,9 +4260,19 @@ useEffect(() => {
                               )}`}
                             >
                               <div className="flex items-start justify-between gap-3">
-                                <h4 className="min-w-0 flex-1 break-words text-base font-black text-[#453e3b]">
-                                  {memo.title}
-                                </h4>
+                                <div className="min-w-0 flex-1">
+  <div className="flex flex-wrap items-center gap-2">
+    <h4 className="break-words text-base font-black text-[#453e3b]">
+      {memo.title}
+    </h4>
+
+    {memo.isSecret && (
+      <span className="rounded-full bg-[#5145b5] px-2 py-1 text-[9px] font-black text-white">
+        SECRET
+      </span>
+    )}
+  </div>
+</div>
 
                                 <div className="flex shrink-0 gap-1">
                                   <button
