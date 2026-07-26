@@ -55,7 +55,26 @@ import {
   saveHooMemo,
 } from "./utils/memoStorage";
 
-export default function FocusMode() {
+type FocusModeProps = {
+  floatingButtonsDirection:
+    | "toSearch"
+    | "fromSearch"
+    | null;
+
+  showFloatingButtons: boolean;
+
+  floatingButtonsTarget: {
+    x: number;
+    y: number;
+  };
+};
+
+export default function FocusMode({
+  floatingButtonsDirection,
+  showFloatingButtons,
+  floatingButtonsTarget,
+}: FocusModeProps) {
+
   const [isOpen, setIsOpen] =
     useState(false);
 
@@ -645,17 +664,27 @@ export default function FocusMode() {
 
   return (
     <>
-      <FocusLaunchers
-        profileImageUrl={
-          profileImageUrl
-        }
-        onOpenProfile={
-          openProfile
-        }
-        onOpenFocus={
-          openFocusMode
-        }
-      />
+    <FocusLaunchers
+  profileImageUrl={
+    profileImageUrl
+  }
+  onOpenProfile={
+    openProfile
+  }
+  onOpenFocus={
+    openFocusMode
+  }
+  floatingButtonsDirection={
+    floatingButtonsDirection
+  }
+  showFloatingButtons={
+    showFloatingButtons
+  }
+  floatingButtonsTarget={
+    floatingButtonsTarget
+  }
+/>
+
 
       <ProfileModal
         isOpen={isProfileOpen}

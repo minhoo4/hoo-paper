@@ -250,7 +250,7 @@ const [selectedGame, setSelectedGame] =
   const level = getLevelProgress(stats?.total_score ?? 0);
 
 return (
-  <aside className="flex h-full flex-col rounded-[34px] bg-[#f7f5ff] p-6">
+  <aside className="flex h-[calc(100vh-140px)] max-h-[760px] min-h-0 flex-col overflow-hidden rounded-[34px] bg-[#f7f5ff] p-6">
     
       <div className="flex items-center justify-between gap-3">
         <div>
@@ -348,7 +348,7 @@ return (
       </div>
 
       {rankingMode === "score" && (
-        <>
+        <div className="flex min-h-0 flex-1 flex-col">
           <div className="mt-4 grid grid-cols-3 gap-2">
             {(Object.keys(PERIOD_LABEL) as RankingPeriod[]).map((item) => (
               <button
@@ -382,7 +382,7 @@ return (
           </div>
 
           <div
-            className="mt-3 max-h-[330px] space-y-2 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden"
+            className="mt-3 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-1 [&::-webkit-scrollbar]:hidden"
             style={{
               scrollbarWidth: "none",
               msOverflowStyle: "none",
@@ -432,11 +432,11 @@ return (
               ))
             )}
           </div>
-        </>
+        </div>
       )}
 
       {rankingMode === "timeAttack" && (
-        <div className="mt-4 rounded-2xl bg-white p-4">
+        <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white p-4">
           <div>
             <h4 className="text-sm font-black text-[#403a54]">
               ⚡ 타임어택 랭킹
@@ -474,7 +474,7 @@ return (
           </div>
 
           <div
-            className="mt-4 max-h-[330px] space-y-2 overflow-y-auto pr-1 [&::-webkit-scrollbar]:hidden"
+            className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-1 [&::-webkit-scrollbar]:hidden"
             style={{
               scrollbarWidth: "none",
               msOverflowStyle: "none",

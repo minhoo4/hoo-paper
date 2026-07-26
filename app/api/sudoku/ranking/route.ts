@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
       Math.max(
         1,
         Number(request.nextUrl.searchParams.get("limit") ?? 20),
-      ),
+      )
     );
 
     const supabase = await createClient();

@@ -25,7 +25,6 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-
 @keyframes hoo-mission-complete {
   0% {
     transform: scale(1);
@@ -64,32 +63,6 @@ body {
   }
 }
 
-@keyframes hoo-mission-complete {
-  0% {
-    transform: scale(1);
-    box-shadow: 0 0 0 rgba(109, 211, 155, 0);
-  }
-
-  35% {
-    transform: scale(1.025);
-    box-shadow: 0 0 34px rgba(109, 211, 155, 0.45);
-  }
-
-  70% {
-    transform: scale(0.995);
-    box-shadow: 0 0 22px rgba(109, 211, 155, 0.3);
-  }
-
-  100% {
-    transform: scale(1);
-    box-shadow: 0 0 25px rgba(109, 211, 155, 0.25);
-  }
-}
-
-.hoo-mission-complete-animation {
-  animation: hoo-mission-complete 0.8s ease-out;
-}
-
 @keyframes hoo-todo-celebration {
   0% {
     opacity: 0;
@@ -109,5 +82,93 @@ body {
 
 .hoo-todo-celebration {
   animation: hoo-todo-celebration 0.7s ease-out;
+}
+
+@keyframes hoo-floating-buttons-return {
+  0% {
+    transform:
+      translate(
+        var(--hoo-floating-target-x),
+        var(--hoo-floating-target-y)
+      )
+      scale(0.2);
+
+    opacity: 0.05;
+    filter: blur(8px);
+  }
+
+  100% {
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+@keyframes hoo-schedule-current-from-right {
+  0% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes hoo-schedule-current-from-left {
+  0% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes hoo-schedule-previous-to-left {
+  0% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+
+  100% {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+}
+
+@keyframes hoo-schedule-previous-to-right {
+  0% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+
+  100% {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.hoo-schedule-current-from-right {
+  animation: hoo-schedule-current-from-right 320ms
+    cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hoo-schedule-current-from-left {
+  animation: hoo-schedule-current-from-left 320ms
+    cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hoo-schedule-previous-to-left {
+  animation: hoo-schedule-previous-to-left 320ms
+    cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.hoo-schedule-previous-to-right {
+  animation: hoo-schedule-previous-to-right 320ms
+    cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 

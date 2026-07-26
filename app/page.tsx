@@ -15,14 +15,25 @@ import {
   submitSudokuCompletion,
 } from "@/lib/community";
 
+import {
+  createScheduleDates,
+  type ScheduleRepeatType,
+} from "./utils/scheduleRepeat";
+
+import { ChevronLeft, ChevronRight } from "lucide-react";
+
 /* ─────────────────────────────
    타입
 ───────────────────────────── */
 
+
 type Schedule = {
   id: string;
+  groupId: string;
   title: string;
   content: string;
+  date: string;
+  repeatType: ScheduleRepeatType;
   createdAt: string;
 };
 
@@ -185,6 +196,42 @@ function getStickerClass(index: number) {
   return stickerClasses[index % stickerClasses.length];
 }
 
+function getScheduleVisual(schedule: Schedule) {
+  switch (schedule.repeatType) {
+    case "dailyRange":
+      return {
+        icon: "━",
+        label: "연속 일정",
+        className:
+          "border-[#c8bdf7] bg-[#eee9ff] text-[#5c4fb5]",
+      };
+
+    case "weekly":
+      return {
+        icon: "↻",
+        label: "매주 반복",
+        className:
+          "border-[#b9d8f7] bg-[#eaf5ff] text-[#3473a8]",
+      };
+
+    case "monthly":
+      return {
+        icon: "▣",
+        label: "매달 반복",
+        className:
+          "border-[#d9c3f2] bg-[#f3eaff] text-[#7951a8]",
+      };
+
+    default:
+      return {
+        icon: "",
+        label: "하루 일정",
+        className:
+          "border-[#f0d590] bg-[#fff4c9] text-[#776021]",
+      };
+  }
+}
+
 function createDefaultFavorites(): Favorite[] {
   return Array.from({ length: 8 }, (_, index) => ({
     id: index,
@@ -326,6 +373,19 @@ export default function Home() {
   const horizontalSectionRef =
     useRef<HTMLElement | null>(null);
 
+ const searchToggleButtonRef =
+  useRef<HTMLButtonElement | null>(null);
+
+const floatingButtonsTimerRef =
+  useRef<number | null>(null);
+
+const [floatingButtonsTarget, setFloatingButtonsTarget] =
+  useState({
+    x: 0,
+    y: 0,
+  });
+
+
   const [horizontalProgress, setHorizontalProgress] =
     useState(0);
 
@@ -347,6 +407,12 @@ const [showMissionCompleteToast,
   const [isSearchBarCollapsed, setIsSearchBarCollapsed] =
   useState(false);
 
+ const [floatingButtonsDirection, setFloatingButtonsDirection] =
+  useState<"toSearch" | "fromSearch" | null>(null);
+
+const [showFloatingButtons, setShowFloatingButtons] =
+  useState(true);
+  
   const [showStickyHeader, setShowStickyHeader] =
     useState(false);
 
@@ -395,11 +461,56 @@ const [isRecommendedTodoCompleted, setIsRecommendedTodoCompleted] =
     useState<ScheduleMap>({});
 
   const [selectedScheduleId, setSelectedScheduleId] =
-    useState<string | null>(null);
+  useState<string | null>(null);
 
-  const [scheduleTitle, setScheduleTitle] = useState("");
+const scheduleDragStartXRef =
+  useRef<number | null>(null);
+
+const scheduleDragCurrentXRef =
+  useRef<number | null>(null);
+
+  const [scheduleSlideDirection, setScheduleSlideDirection] =
+  useState<"left" | "right" | null>(null);
+
+const [previousSchedule, setPreviousSchedule] =
+  useState<Schedule | null>(null);
+
+const [isScheduleSliding, setIsScheduleSliding] =
+  useState(false);
+
+const [scheduleTitle, setScheduleTitle] = useState("");
+
   const [scheduleContent, setScheduleContent] =
     useState("");
+
+    const [
+  scheduleRepeatType,
+  setScheduleRepeatType,
+] =
+  useState<ScheduleRepeatType>("none");
+
+const [
+  scheduleEndDate,
+  setScheduleEndDate,
+] = useState("");
+
+const [
+  scheduleRepeatUntil,
+  setScheduleRepeatUntil,
+] = useState("");
+
+const [
+  isRepeatScheduleModalOpen,
+  setIsRepeatScheduleModalOpen,
+] = useState(false);
+
+const [
+  repeatScheduleModalType,
+  setRepeatScheduleModalType,
+] =
+  useState<ScheduleRepeatType>(
+    "dailyRange",
+  );
 
   /* 메모 */
 
@@ -633,20 +744,50 @@ useEffect(() => {
   ───────────────────────────── */
 
   useEffect(() => {
-    function handleScroll() {
-      setShowStickyHeader(window.scrollY > 420);
+  function handleScroll() {
+    const shouldShowStickyHeader =
+      window.scrollY > 420;
+
+    setShowStickyHeader(
+      shouldShowStickyHeader,
+    );
+
+    if (!shouldShowStickyHeader) {
+      if (
+        floatingButtonsTimerRef.current !==
+        null
+      ) {
+        window.clearTimeout(
+          floatingButtonsTimerRef.current,
+        );
+
+        floatingButtonsTimerRef.current =
+          null;
+      }
+
+      setIsSearchBarCollapsed(false);
+      setShowFloatingButtons(true);
+      setFloatingButtonsDirection(null);
     }
+  }
 
-    handleScroll();
+  handleScroll();
 
-    window.addEventListener("scroll", handleScroll, {
+  window.addEventListener(
+    "scroll",
+    handleScroll,
+    {
       passive: true,
-    });
+    },
+  );
 
-    return () => {
-      window.removeEventListener("scroll", handleScroll);
-    };
-  }, []);
+  return () => {
+    window.removeEventListener(
+      "scroll",
+      handleScroll,
+    );
+  };
+}, []);
 
   /* ─────────────────────────────
      캘린더 고정 및 가로 화면 전환
@@ -1313,6 +1454,62 @@ void submitSudokuCompletion({
     }
   }, [selectedSchedules, selectedScheduleId]);
 
+
+function moveSelectedSchedule(
+  direction: "previous" | "next",
+) {
+  if (
+    selectedSchedules.length <= 1 ||
+    isScheduleSliding
+  ) {
+    return;
+  }
+
+  const currentIndex =
+    selectedSchedules.findIndex(
+      (schedule) =>
+        schedule.id === selectedScheduleId,
+    );
+
+  const safeCurrentIndex =
+    currentIndex >= 0 ? currentIndex : 0;
+
+  const currentSchedule =
+    selectedSchedules[safeCurrentIndex];
+
+  const nextIndex =
+    direction === "next"
+      ? (safeCurrentIndex + 1) %
+        selectedSchedules.length
+      : (
+          safeCurrentIndex -
+          1 +
+          selectedSchedules.length
+        ) %
+        selectedSchedules.length;
+
+  setPreviousSchedule(currentSchedule);
+
+  setScheduleSlideDirection(
+    direction === "next"
+      ? "left"
+      : "right",
+  );
+
+  setIsScheduleSliding(true);
+
+  setSelectedScheduleId(
+    selectedSchedules[nextIndex].id,
+  );
+
+  window.setTimeout(() => {
+    setPreviousSchedule(null);
+    setScheduleSlideDirection(null);
+    setIsScheduleSliding(false);
+  }, 320);
+}
+
+
   /* ─────────────────────────────
      캘린더 이동
   ───────────────────────────── */
@@ -1364,60 +1561,198 @@ void submitSudokuCompletion({
      일정 저장·삭제
   ───────────────────────────── */
 
-  function addSchedule(
-    event: FormEvent<HTMLFormElement>,
-  ) {
-    event.preventDefault();
+ function addSchedule(
+  event?: FormEvent<HTMLFormElement>,
+  requestedRepeatType?: ScheduleRepeatType,
+) {
+  event?.preventDefault();
 
-    const title = scheduleTitle.trim();
-    const content = scheduleContent.trim();
+  const activeRepeatType =
+    requestedRepeatType ?? scheduleRepeatType;
 
-    if (!title) {
-      return;
-    }
+  const title = scheduleTitle.trim();
 
-    const newSchedule: Schedule = {
-      id: createId(),
-      title,
-      content,
-      createdAt: new Date().toISOString(),
-    };
+  const content = scheduleContent.trim();
 
-    setSchedules((previousSchedules) => ({
-      ...previousSchedules,
-      [selectedDate]: [
-        ...(previousSchedules[selectedDate] ?? []),
-        newSchedule,
-      ],
-    }));
-
-    setSelectedScheduleId(newSchedule.id);
-    setScheduleTitle("");
-    setScheduleContent("");
+  if (!title) {
+    return;
   }
 
-  function deleteSchedule(scheduleId: string) {
-    setSchedules((previousSchedules) => {
-      const remainingSchedules = (
-        previousSchedules[selectedDate] ?? []
-      ).filter(
-        (schedule) => schedule.id !== scheduleId,
-      );
+  if (
+    activeRepeatType === "dailyRange" &&
+    !scheduleEndDate
+  ) {
+    window.alert(
+      "일별 묶기의 마지막 날짜를 선택해주세요.",
+    );
+    return;
+  }
 
+if (
+  (
+    activeRepeatType === "weekly" ||
+    activeRepeatType === "monthly"
+  ) &&
+  !scheduleRepeatUntil
+) {
+  window.alert(
+    "반복 종료 날짜를 선택해주세요.",
+  );
+  return;
+}
+
+  const scheduleDates =
+    createScheduleDates({
+      startDate: selectedDate,
+      endDate: scheduleEndDate,
+      repeatUntil: scheduleRepeatUntil,
+      repeatType: activeRepeatType,
+    });
+
+    if (!event) {
+  setIsRepeatScheduleModalOpen(false);
+}
+
+  const groupId = createId();
+  const createdAt =
+    new Date().toISOString();
+
+ const newSchedules =
+  scheduleDates.map(
+    (date): Schedule => ({
+      id: createId(),
+      groupId,
+      title,
+      content,
+      date,
+      repeatType:
+        activeRepeatType,
+      createdAt,
+    }),
+  );
+
+
+  setSchedules(
+    (previousSchedules) => {
       const nextSchedules = {
         ...previousSchedules,
       };
 
-      if (remainingSchedules.length === 0) {
-        delete nextSchedules[selectedDate];
-      } else {
-        nextSchedules[selectedDate] =
-          remainingSchedules;
-      }
+      newSchedules.forEach(
+        (schedule) => {
+          const schedulesForDate =
+            nextSchedules[
+              schedule.date
+            ] ?? [];
+
+          nextSchedules[
+            schedule.date
+          ] = [
+            ...schedulesForDate,
+            schedule,
+          ];
+        },
+      );
 
       return nextSchedules;
-    });
+    },
+  );
+
+  const selectedDateSchedule =
+    newSchedules.find(
+      (schedule) =>
+        schedule.date ===
+        selectedDate,
+    );
+
+  setSelectedScheduleId(
+    selectedDateSchedule?.id ??
+      newSchedules[0]?.id ??
+      null,
+  );
+
+  setScheduleTitle("");
+  setScheduleContent("");
+  setScheduleRepeatType("none");
+  setScheduleEndDate("");
+  setScheduleRepeatUntil("");
+
+  setScheduleRepeatType("none");
+setScheduleEndDate("");
+setScheduleRepeatUntil("");
+
+}
+
+function deleteSchedule(
+  scheduleId: string,
+) {
+  
+  const targetSchedule =
+  schedules[selectedDate]?.find(
+    (schedule) =>
+      schedule.id === scheduleId,
+  );
+
+  if (!targetSchedule) {
+    return;
   }
+
+  const isRepeatedSchedule =
+  Boolean(targetSchedule.groupId) &&
+  targetSchedule.repeatType !== undefined &&
+  targetSchedule.repeatType !== "none";
+
+  let deleteWholeGroup = false;
+
+  if (isRepeatedSchedule) {
+    deleteWholeGroup =
+      window.confirm(
+        "반복 일정 전체를 삭제할까요?\n\n확인: 반복 일정 전체 삭제\n취소: 선택한 일정만 삭제",
+      );
+  }
+
+  setSchedules(
+    (previousSchedules) => {
+      const nextSchedules: ScheduleMap =
+        {};
+
+      Object.entries(
+        previousSchedules,
+      ).forEach(
+        ([dateKey, dateSchedules]) => {
+          const filteredSchedules =
+            dateSchedules.filter(
+              (schedule) => {
+                if (deleteWholeGroup) {
+                  return (
+                    schedule.groupId !==
+                    targetSchedule.groupId
+                  );
+                }
+
+                return (
+                  schedule.id !==
+                  scheduleId
+                );
+              },
+            );
+
+          if (
+            filteredSchedules.length > 0
+          ) {
+            nextSchedules[dateKey] =
+              filteredSchedules;
+          }
+        },
+      );
+
+      return nextSchedules;
+    },
+  );
+
+  setSelectedScheduleId(null);
+}
+
 
   /* ─────────────────────────────
      메모 저장·수정·삭제
@@ -1632,10 +1967,14 @@ function moveHorizontalPage(
 
   isHorizontalAnimatingRef.current = true;
 
-  setHorizontalPage(nextPage as -1 | 0 | 1 | 2);
+  setHorizontalPage(
+    nextPage as -1 | 0 | 1 | 2,
+  );
+
   setHorizontalProgress(nextPage);
 
-  const section = horizontalSectionRef.current;
+  const section =
+    horizontalSectionRef.current;
 
   if (section) {
     window.scrollTo({
@@ -1645,8 +1984,68 @@ function moveHorizontalPage(
   }
 
   window.setTimeout(() => {
-    isHorizontalAnimatingRef.current = false;
+    isHorizontalAnimatingRef.current =
+      false;
   }, 750);
+}
+
+function toggleSearchBar() {
+  if (floatingButtonsDirection !== null) {
+    return;
+  }
+
+  if (floatingButtonsTimerRef.current !== null) {
+    window.clearTimeout(
+      floatingButtonsTimerRef.current,
+    );
+
+    floatingButtonsTimerRef.current = null;
+  }
+
+  const searchButton =
+    searchToggleButtonRef.current;
+
+  if (searchButton) {
+    const rect =
+      searchButton.getBoundingClientRect();
+
+    setFloatingButtonsTarget({
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    });
+  }
+
+  if (!isSearchBarCollapsed) {
+    setFloatingButtonsDirection(
+      "toSearch",
+    );
+
+    floatingButtonsTimerRef.current =
+      window.setTimeout(() => {
+        setIsSearchBarCollapsed(true);
+        setShowFloatingButtons(false);
+        setFloatingButtonsDirection(null);
+
+        floatingButtonsTimerRef.current =
+          null;
+      }, 900);
+
+    return;
+  }
+
+  setIsSearchBarCollapsed(false);
+  setShowFloatingButtons(true);
+  setFloatingButtonsDirection(
+    "fromSearch",
+  );
+
+  floatingButtonsTimerRef.current =
+    window.setTimeout(() => {
+      setFloatingButtonsDirection(null);
+
+      floatingButtonsTimerRef.current =
+        null;
+    }, 900);
 }
   /* ─────────────────────────────
      타이머
@@ -2023,6 +2422,165 @@ useEffect(() => {
           '"Arial Rounded MT Bold", "Trebuchet MS", "Malgun Gothic", sans-serif',
       }}
     >
+
+      {isRepeatScheduleModalOpen && (
+  <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/45 backdrop-blur-sm">
+    <div className="w-full max-w-2xl rounded-[32px] bg-white p-8 shadow-2xl">
+
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-black">
+
+          {repeatScheduleModalType === "dailyRange" &&
+            "연속 일정 만들기"}
+
+          {repeatScheduleModalType === "weekly" &&
+            "주간 일정 만들기"}
+
+          {repeatScheduleModalType === "monthly" &&
+            "월간 일정 만들기"}
+
+        </h2>
+
+        <button
+          type="button"
+          onClick={() =>
+            setIsRepeatScheduleModalOpen(false)
+          }
+          className="text-3xl font-bold"
+        >
+          ×
+        </button>
+      </div>
+
+     <p className="mt-2 text-sm font-bold text-[#8b849d]">
+  {repeatScheduleModalType === "dailyRange" &&
+    "시작일부터 종료일까지 이어지는 일정을 설정합니다."}
+
+  {repeatScheduleModalType === "weekly" &&
+    "시작 날짜의 요일을 기준으로 매주 반복합니다."}
+
+  {repeatScheduleModalType === "monthly" &&
+    "시작 날짜의 주차와 요일을 기준으로 매달 반복합니다."}
+</p>
+
+<div className="mt-7 space-y-5">
+  <div>
+    <label className="mb-2 block text-sm font-black text-[#423c55]">
+      일정 제목
+    </label>
+
+    <input
+      type="text"
+      value={scheduleTitle}
+      maxLength={50}
+      onChange={(event) =>
+        setScheduleTitle(event.target.value)
+      }
+      placeholder="일정 제목을 입력하세요."
+      className="w-full rounded-2xl border border-[#ded8ef] bg-[#faf9ff] px-5 py-3 text-sm font-bold outline-none transition focus:border-[#7467d8]"
+    />
+  </div>
+
+  <div>
+    <label className="mb-2 block text-sm font-black text-[#423c55]">
+      일정 내용
+    </label>
+
+    <textarea
+      value={scheduleContent}
+      maxLength={300}
+      onChange={(event) =>
+        setScheduleContent(event.target.value)
+      }
+      placeholder="일정 내용을 입력하세요."
+      rows={4}
+      className="w-full resize-none rounded-2xl border border-[#ded8ef] bg-[#faf9ff] px-5 py-3 text-sm font-bold leading-6 outline-none transition focus:border-[#7467d8]"
+    />
+  </div>
+
+  <div className="grid gap-4 sm:grid-cols-2">
+    <div>
+      <label className="mb-2 block text-sm font-black text-[#423c55]">
+        시작 날짜
+      </label>
+
+      <input
+        type="date"
+        value={selectedDate}
+        readOnly
+        className="w-full rounded-2xl border border-[#ded8ef] bg-[#f1eff7] px-5 py-3 text-sm font-bold text-[#716a82] outline-none"
+      />
+    </div>
+
+    <div>
+      <label className="mb-2 block text-sm font-black text-[#423c55]">
+        종료 날짜
+      </label>
+
+      {repeatScheduleModalType === "dailyRange" ? (
+        <input
+          type="date"
+          value={scheduleEndDate}
+          min={selectedDate}
+          onChange={(event) =>
+            setScheduleEndDate(
+              event.target.value,
+            )
+          }
+          className="w-full rounded-2xl border border-[#ded8ef] bg-white px-5 py-3 text-sm font-bold outline-none transition focus:border-[#7467d8]"
+        />
+      ) : (
+        <input
+          type="date"
+          value={scheduleRepeatUntil}
+          min={selectedDate}
+          onChange={(event) =>
+            setScheduleRepeatUntil(
+              event.target.value,
+            )
+          }
+          className="w-full rounded-2xl border border-[#ded8ef] bg-white px-5 py-3 text-sm font-bold outline-none transition focus:border-[#7467d8]"
+        />
+      )}
+    </div>
+  </div>
+</div>
+
+<div className="mt-8 flex justify-end gap-3">
+  <button
+    type="button"
+    onClick={() =>
+      setIsRepeatScheduleModalOpen(false)
+    }
+    className="rounded-2xl border border-[#ded8ef] bg-white px-5 py-3 text-sm font-black text-[#777083] transition hover:bg-[#f7f5ff]"
+  >
+    취소
+  </button>
+
+<button
+  type="button"
+  onClick={() =>
+    addSchedule(
+      undefined,
+      repeatScheduleModalType,
+    )
+  }
+  className="rounded-2xl bg-[#7467d8] px-6 py-3 text-sm font-black text-white transition hover:bg-[#6255c7]"
+>
+  {repeatScheduleModalType === "dailyRange" &&
+    "연속 일정 만들기"}
+
+  {repeatScheduleModalType === "weekly" &&
+    "주간 일정 만들기"}
+
+  {repeatScheduleModalType === "monthly" &&
+    "월간 일정 만들기"}
+</button>
+</div>
+    </div>
+  </div>
+)}
+
       
       {showTodoCompleteCelebration && (
   <div className="pointer-events-none fixed inset-0 z-[10000] flex items-center justify-center">
@@ -2034,11 +2592,12 @@ useEffect(() => {
       </p>
 
       <p className="mt-2 text-sm font-bold text-[#6d7d72]">
-        오늘의 모든 목표를 멋지게 해냈어요.
+        오늘의 모든 목표를 멋지게 해냈어요!
       </p>
     </div>
   </div>
 )}
+
 
       {/* 고정 배경 */}
       <div
@@ -2124,20 +2683,20 @@ useEffect(() => {
     </button>
   </form>
 
-  <button
-    type="button"
-    onClick={() =>
-      setIsSearchBarCollapsed((previous) => !previous)
-    }
-    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 bg-slate-800 text-xs font-black text-white shadow-lg transition hover:bg-slate-700"
-    aria-label={
-      isSearchBarCollapsed
-        ? "검색창 펼치기"
-        : "검색창 접기"
-    }
-  >
-    {isSearchBarCollapsed ? "▶" : "◀"}
-  </button>
+<button
+  ref={searchToggleButtonRef}
+  type="button"
+  onClick={toggleSearchBar}
+  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/20 bg-slate-800 text-xs font-black text-white shadow-lg transition hover:bg-slate-700"
+ 
+  aria-label={
+    isSearchBarCollapsed
+      ? "검색창 펼치기"
+      : "검색창 접기"
+  }
+>
+  {isSearchBarCollapsed ? "▶" : "◀"}
+</button>
 </div>
 
 
@@ -2411,7 +2970,7 @@ useEffect(() => {
     </p>
 
     <p className="mt-1 text-xs font-bold text-[#4d6b58]">
-      오늘의 추천 미션을 완료했습니다.
+      오늘의 추천 미션을 완료했는!
     </p>
   </div>
 )}
@@ -2686,23 +3245,29 @@ useEffect(() => {
                             </span>
 
                             <div className="mt-1 space-y-1">
-                              {dateSchedules
-                                .slice(0, 2)
-                                .map(
-                                  (
-                                    schedule,
-                                    scheduleIndex,
-                                  ) => (
-                                    <div
-                                      key={schedule.id}
-                                      className={`truncate rounded-md px-1.5 py-1 text-[9px] font-black text-[#423d53] shadow-sm ${getStickerClass(
-                                        scheduleIndex,
-                                      )}`}
-                                    >
-                                      {schedule.title}
-                                    </div>
-                                  ),
-                                )}
+
+                             {dateSchedules
+  .slice(0, 2)
+  .map((schedule) => {
+    const scheduleVisual =
+      getScheduleVisual(schedule);
+
+    return (
+      <div
+        key={schedule.id}
+        className={`truncate rounded-md border px-1.5 py-1 text-[9px] font-black shadow-sm ${scheduleVisual.className}`}
+        title={scheduleVisual.label}
+      >
+        {scheduleVisual.icon && (
+          <span className="mr-1">
+            {scheduleVisual.icon}
+          </span>
+        )}
+
+        {schedule.title}
+      </div>
+    );
+  })}
 
                               {dateSchedules.length > 2 && (
                                 <p className="text-[9px] font-black opacity-70">
@@ -2732,42 +3297,277 @@ useEffect(() => {
                     </header>
 
                     <section className="min-h-0 flex-1 overflow-y-auto border-b border-[#dedaf0] px-6 py-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-xl font-black">
-                          일정 내용
-                        </h3>
+                      
+                     <div className="flex items-center justify-between gap-3">
+  <h3 className="text-xl font-black">
+    일정 내용
+  </h3>
 
-                        {selectedSchedule && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              deleteSchedule(
-                                selectedSchedule.id,
-                              )
-                            }
-                            className="rounded-full bg-[#ffe2e8] px-4 py-2 text-xs font-black text-[#d94f6b] transition hover:bg-[#ffcbd6]"
-                          >
-                            삭제
-                          </button>
-                        )}
-                      </div>
+  {selectedSchedule && (
+    <button
+      type="button"
+      onClick={() => {
+        if (!selectedSchedule) {
+          return;
+        }
 
-                      {selectedSchedule ? (
-                        <article className="mt-3 rounded-3xl bg-white p-5 shadow-sm">
-                          <h4 className="text-xl font-black">
-                            {selectedSchedule.title}
-                          </h4>
+        deleteSchedule(
+          selectedSchedule.id,
+        );
+      }}
+      className="rounded-full bg-[#ffe2e8] px-4 py-2 text-xs font-black text-[#d94f6b] transition hover:bg-[#ffcbd6]"
+    >
+      {selectedSchedule.repeatType === "none"
+        ? "일정 삭제"
+        : "반복 일정 삭제"}
+    </button>
+  )}
+</div>
 
-                          <p className="mt-3 whitespace-pre-wrap break-words text-sm font-bold leading-7 text-[#777083]">
-                            {selectedSchedule.content ||
-                              "상세 내용이 작성되지 않았어요."}
-                          </p>
-                        </article>
-                      ) : (
-                        <div className="mt-3 flex min-h-28 items-center justify-center rounded-3xl bg-white px-5 text-center text-sm font-bold text-[#aaa4b8]">
-                          확인할 일정을 선택해 주세요.
-                        </div>
-                      )}
+
+               {selectedSchedule ? (
+  <div
+    className="relative mt-3 min-h-[180px] overflow-hidden rounded-3xl"
+    onMouseDown={(event) => {
+      if (isScheduleSliding) {
+        return;
+      }
+
+      scheduleDragStartXRef.current =
+        event.clientX;
+
+      scheduleDragCurrentXRef.current =
+        event.clientX;
+    }}
+    onMouseMove={(event) => {
+      if (
+        scheduleDragStartXRef.current === null ||
+        isScheduleSliding
+      ) {
+        return;
+      }
+
+      scheduleDragCurrentXRef.current =
+        event.clientX;
+    }}
+    onMouseUp={() => {
+      if (
+        scheduleDragStartXRef.current === null ||
+        scheduleDragCurrentXRef.current === null ||
+        isScheduleSliding
+      ) {
+        scheduleDragStartXRef.current = null;
+        scheduleDragCurrentXRef.current = null;
+        return;
+      }
+
+      const dragDistance =
+        scheduleDragCurrentXRef.current -
+        scheduleDragStartXRef.current;
+
+      if (dragDistance >= 80) {
+        moveSelectedSchedule("previous");
+      }
+
+      if (dragDistance <= -80) {
+        moveSelectedSchedule("next");
+      }
+
+      scheduleDragStartXRef.current = null;
+      scheduleDragCurrentXRef.current = null;
+    }}
+    onMouseLeave={() => {
+      scheduleDragStartXRef.current = null;
+      scheduleDragCurrentXRef.current = null;
+    }}
+  >
+    {previousSchedule &&
+      scheduleSlideDirection && (
+        <article
+          className={`pointer-events-none absolute inset-0 z-10 cursor-grab select-none rounded-3xl border p-5 shadow-sm ${
+            scheduleSlideDirection === "left"
+              ? "hoo-schedule-previous-to-left"
+              : "hoo-schedule-previous-to-right"
+          } ${
+            getScheduleVisual(previousSchedule)
+              .className
+          }`}
+        >
+         <div className="flex items-start justify-between gap-3">
+  <div className="min-w-0">
+    <p className="text-xs font-black opacity-70">
+      {
+        getScheduleVisual(
+          selectedSchedule,
+        ).label
+      }
+    </p>
+
+    <h4 className="mt-3 break-words text-xl font-black">
+      {selectedSchedule.title}
+    </h4>
+  </div>
+
+  {selectedSchedules.length > 1 && (
+    <div className="flex shrink-0 items-center gap-2">
+      <button
+        type="button"
+        disabled={isScheduleSliding}
+        onMouseDown={(event) => {
+          event.stopPropagation();
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          moveSelectedSchedule("previous");
+        }}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-white/60 bg-white/70 text-sm font-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+        aria-label="이전 일정"
+      >
+        ◀
+      </button>
+
+      <span className="min-w-[52px] rounded-full bg-white/70 px-3 py-1 text-center text-xs font-black">
+        {selectedSchedules.findIndex(
+          (schedule) =>
+            schedule.id ===
+            selectedSchedule.id,
+        ) + 1}
+        {" / "}
+        {selectedSchedules.length}
+      </span>
+
+      <button
+        type="button"
+        disabled={isScheduleSliding}
+        onMouseDown={(event) => {
+          event.stopPropagation();
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          moveSelectedSchedule("next");
+        }}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-white/60 bg-white/70 text-sm font-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+        aria-label="다음 일정"
+      >
+        ▶
+      </button>
+    </div>
+  )}
+</div>
+
+          <p className="mt-3 whitespace-pre-wrap break-words text-sm font-bold leading-7 opacity-80">
+            {previousSchedule.content ||
+              "상세 내용이 작성되지 않았어요."}
+          </p>
+
+          {selectedSchedules.length > 1 && (
+            <p className="mt-4 text-center text-[11px] font-black opacity-60">
+              좌우로 드래그하여 다른 일정을
+              확인하세요.
+            </p>
+          )}
+        </article>
+      )}
+
+    <article
+      className={`relative z-20 min-h-[180px] cursor-grab select-none rounded-3xl border p-5 shadow-sm active:cursor-grabbing ${
+        scheduleSlideDirection === "left"
+          ? "hoo-schedule-current-from-right"
+          : scheduleSlideDirection === "right"
+            ? "hoo-schedule-current-from-left"
+            : ""
+      } ${
+        getScheduleVisual(selectedSchedule)
+          .className
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-black opacity-70">
+            {
+              getScheduleVisual(
+                selectedSchedule,
+              ).label
+            }
+          </p>
+
+          <h4 className="mt-3 break-words text-xl font-black">
+            {selectedSchedule.title}
+          </h4>
+        </div>
+
+      {selectedSchedules.length > 1 && (
+  <div className="flex shrink-0 items-center gap-2">
+    <button
+      type="button"
+      disabled={isScheduleSliding}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+        moveSelectedSchedule("previous");
+      }}
+      className="flex h-7 w-7 items-center justify-center rounded-full bg-white/70 text-[#5c4fb5] transition hover:bg-white disabled:opacity-50"
+      aria-label="이전 일정"
+    >
+      <ChevronLeft
+        size={15}
+        strokeWidth={3}
+      />
+    </button>
+
+    <span className="min-w-[46px] rounded-full bg-white/70 px-3 py-1 text-center text-xs font-black">
+      {selectedSchedules.findIndex(
+        (schedule) =>
+          schedule.id ===
+          selectedSchedule.id,
+      ) + 1}
+      {" / "}
+      {selectedSchedules.length}
+    </span>
+
+    <button
+      type="button"
+      disabled={isScheduleSliding}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+      }}
+      onClick={(event) => {
+        event.stopPropagation();
+        moveSelectedSchedule("next");
+      }}
+      className="flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-[#5c4fb5] transition hover:bg-white disabled:opacity-50"
+      aria-label="다음 일정"
+    >
+      <ChevronRight
+        size={15}
+        strokeWidth={3}
+      />
+    </button>
+  </div>
+)}
+      </div>
+
+      <p className="mt-3 whitespace-pre-wrap break-words text-sm font-bold leading-7 opacity-80">
+        {selectedSchedule.content ||
+          "상세 내용이 작성되지 않았어요."}
+      </p>
+
+      {selectedSchedules.length > 1 && (
+        <p className="mt-4 text-center text-[11px] font-black opacity-60">
+          좌우로 드래그하여 다른 일정을 확인하세요.
+        </p>
+      )}
+    </article>
+  </div>
+) : (
+  <div className="mt-3 flex min-h-28 items-center justify-center rounded-3xl bg-white px-5 text-center text-sm font-bold text-[#aaa4b8]">
+    확인할 일정을 선택해 주세요.
+  </div>
+)}
+
+
                     </section>
 
                     <form
@@ -2804,12 +3604,117 @@ useEffect(() => {
                         className="mt-2 w-full resize-none rounded-2xl border border-[#ded8ef] bg-white px-4 py-3 text-sm font-bold leading-6 outline-none focus:border-[#7467d8]"
                       />
 
-                      <button
-                        type="submit"
-                        className="mt-3 w-full rounded-2xl bg-[#7467d8] py-3 text-sm font-black text-white transition hover:scale-[1.01] hover:bg-[#6255c7]"
-                      >
-                        일정 저장
-                      </button>
+                      <div className="mt-5 space-y-4">
+
+  <div>
+
+    <p className="mb-2 text-sm font-bold">
+      반복
+    </p>
+
+   <div className="grid grid-cols-2 gap-3">
+  {[
+    {
+      value: "none",
+      icon: "•",
+      title: "하루만",
+      description: "선택한 날짜에만 등록",
+    },
+    {
+      value: "dailyRange",
+      icon: "━",
+      title: "일별 묶기",
+      description: "연속된 날짜를 한 묶음으로",
+    },
+    {
+      value: "weekly",
+      icon: "↻",
+      title: "주간 반복",
+      description: "매주 같은 요일에 반복",
+    },
+    {
+      value: "monthly",
+      icon: "▣",
+      title: "월간 반복",
+      description: "매달 같은 주차·요일에 반복",
+    },
+  ].map((option) => {
+    const isSelected =
+      scheduleRepeatType ===
+      option.value;
+
+    return (
+      <button
+        key={option.value}
+        type="button"
+      onClick={() => {
+  if (option.value === "none") {
+    setScheduleRepeatType("none");
+    return;
+  }
+
+  setRepeatScheduleModalType(
+    option.value as ScheduleRepeatType,
+  );
+
+  setIsRepeatScheduleModalOpen(true);
+}}
+        className={`rounded-2xl border p-4 text-left transition ${
+          isSelected
+            ? "border-[#7467d8] bg-[#eeeafd] shadow-[0_8px_20px_rgba(116,103,216,0.18)]"
+            : "border-[#ded8ef] bg-white hover:border-[#bdb4e8] hover:bg-[#faf9ff]"
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <span
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-lg font-black ${
+              isSelected
+                ? "bg-[#7467d8] text-white"
+                : "bg-[#f0edfa] text-[#7467d8]"
+            }`}
+          >
+            {option.icon}
+          </span>
+
+          <div className="min-w-0">
+            <p
+              className={`text-sm font-black ${
+                isSelected
+                  ? "text-[#4f43b4]"
+                  : "text-[#3f3952]"
+              }`}
+            >
+              {option.title}
+            </p>
+
+            <p className="mt-1 text-[11px] font-bold leading-4 text-[#928ba8]">
+              {option.description}
+            </p>
+          </div>
+        </div>
+      </button>
+    );
+  })}
+</div>
+  </div>
+
+
+</div>
+
+                     <button
+  type="submit"
+  disabled={scheduleRepeatType !== "none"}
+  className={`mt-3 w-full rounded-2xl py-3 text-sm font-black text-white transition ${
+    scheduleRepeatType === "none"
+      ? "bg-[#7467d8] hover:scale-[1.01] hover:bg-[#6255c7]"
+      : "cursor-not-allowed bg-[#c9c5dd]"
+  }`}
+>
+  {scheduleRepeatType === "none"
+    ? "일정 저장"
+    : "반복 일정은 팝업에서 생성됩니다."}
+</button>
+
                     </form>
 
                   </aside>
@@ -3772,7 +4677,18 @@ className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
     </section>
   )}
 </div>
- <FocusMode />
+<FocusMode
+  floatingButtonsDirection={
+    showStickyHeader
+      ? floatingButtonsDirection
+      : null
+  }
+  showFloatingButtons={
+    !showStickyHeader || showFloatingButtons
+  }
+  floatingButtonsTarget={floatingButtonsTarget}
+/>
+
     </main>
   );
 }
