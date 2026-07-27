@@ -79,12 +79,25 @@ const [selectedGame, setSelectedGame] =
     try {
       const response = await fetch(
         `/api/sudoku/ranking?period=${period}&limit=100`,
-        { cache: "no-store" },
+        {
+          cache: "no-store",
+        },
       );
+
+      if (!response.ok) {
+        setRankings([]);
+        return;
+      }
+
       const data = await response.json();
-      if (response.ok) setRankings(data.rankings ?? []);
-    } catch (error) {
-      console.error("랭킹 불러오기 오류:", error);
+
+      setRankings(data.rankings ?? []);
+    } catch {
+      setRankings([]);
+
+      console.warn(
+        "랭킹 API에 일시적으로 연결하지 못했습니다.",
+      );
     }
   }, [period]);
 
@@ -92,26 +105,53 @@ const [selectedGame, setSelectedGame] =
     try {
       const response = await fetch(
         `/api/timeattack/ranking?game=${selectedGame}&limit=100`,
-        { cache: "no-store" },
+        {
+          cache: "no-store",
+        },
       );
+
+      if (!response.ok) {
+        setTimeAttackRankings([]);
+        return;
+      }
 
       const data = await response.json();
 
-      if (response.ok) {
-        setTimeAttackRankings(data.rankings ?? []);
-      }
-    } catch (error) {
-      console.error("타임어택 랭킹 불러오기 오류:", error);
+      setTimeAttackRankings(
+        data.rankings ?? [],
+      );
+    } catch {
+      setTimeAttackRankings([]);
+
+      console.warn(
+        "타임어택 랭킹 API에 일시적으로 연결하지 못했습니다.",
+      );
     }
   }, [selectedGame]);
 
   const loadMe = useCallback(async () => {
     try {
-      const response = await fetch("/api/sudoku/me", { cache: "no-store" });
+      const response = await fetch(
+        "/api/sudoku/me",
+        {
+          cache: "no-store",
+        },
+      );
+
+      if (!response.ok) {
+        setStats(null);
+        return;
+      }
+
       const data = await response.json();
-      if (response.ok) setStats(data.stats ?? null);
-    } catch (error) {
-      console.error("내 기록 불러오기 오류:", error);
+
+      setStats(data.stats ?? null);
+    } catch {
+      setStats(null);
+
+      console.warn(
+        "내 기록 API에 일시적으로 연결하지 못했습니다.",
+      );
     }
   }, []);
 
