@@ -9,11 +9,16 @@ import {
 } from "react";
 import FocusMode from "@/components/FocusMode/FocusMode";
 import HooCommunityPanel from "@/components/HooCommunityPanel";
+
+import BackgroundSettings from "@/components/BackgroundSettings";
+
 import Hoo2048Game from "@/components/Hoo2048Game";
 import {
   createPuzzleId,
   submitSudokuCompletion,
 } from "@/lib/community";
+
+import { createClient } from "@/lib/supabase/client";
 
 import {
   createScheduleDates,
@@ -373,6 +378,8 @@ function getSudokuDifficultyLabel(difficulty: SudokuDifficulty) {
 
 export default function Home() {
   
+  const supabase = createClient();
+
   const today = useMemo(() => new Date(), []);
 
   /* 가로 스크롤 */
@@ -423,7 +430,10 @@ const [showFloatingButtons, setShowFloatingButtons] =
   const [showStickyHeader, setShowStickyHeader] =
     useState(false);
 
-    
+     const [backgroundUrl, setBackgroundUrl] =
+    useState<string | null>(null);
+
+
   /* 즐겨찾기 */
 
   const [favorites, setFavorites] = useState<Favorite[]>(
@@ -690,6 +700,131 @@ const [hoo2048BestScores, setHoo2048BestScores] =
       window.clearInterval(clockInterval);
     };
   }, []);
+
+  /* ─────────────────────────────
+   사용자 배경 불러오기
+───────────────────────────── */
+
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadBackground() {
+    const cachedBackgroundUrl =
+      window.localStorage.getItem(
+        "hoo-background-url",
+      );
+
+    if (cachedBackgroundUrl) {
+      setBackgroundUrl(
+        cachedBackgroundUrl,
+      );
+    }
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user || cancelled) {
+        return;
+      }
+
+      const { data, error } =
+        await supabase
+          .from("profiles")
+          .select("background_url")
+          .eq("id", user.id)
+          .single();
+
+      if (error) {
+        console.error(
+          "배경 정보 불러오기 실패:",
+          error,
+        );
+        return;
+      }
+
+      const savedPath =
+        data?.background_url;
+
+      if (!savedPath) {
+        window.localStorage.removeItem(
+          "hoo-background-url",
+        );
+
+        if (!cancelled) {
+          setBackgroundUrl(null);
+        }
+
+        return;
+      }
+
+      const {
+        data: signedUrlData,
+        error: signedUrlError,
+      } = await supabase.storage
+        .from("backgrounds")
+        .createSignedUrl(
+          savedPath,
+          60 * 60 * 24 * 365,
+        );
+
+      if (
+        signedUrlError ||
+        !signedUrlData?.signedUrl
+      ) {
+        console.error(
+          "배경 이미지 URL 생성 실패:",
+          signedUrlError,
+        );
+        return;
+      }
+
+      const latestBackgroundUrl =
+        signedUrlData.signedUrl;
+
+      const backgroundImage =
+        new Image();
+
+      backgroundImage.onload = () => {
+        if (cancelled) {
+          return;
+        }
+
+        window.localStorage.setItem(
+          "hoo-background-url",
+          latestBackgroundUrl,
+        );
+
+        setBackgroundUrl(
+          latestBackgroundUrl,
+        );
+      };
+
+      backgroundImage.onerror = () => {
+        console.error(
+          "배경 이미지 로딩에 실패했습니다.",
+        );
+      };
+
+      backgroundImage.src =
+        latestBackgroundUrl;
+    } catch (error) {
+      console.error(
+        "배경 불러오기 실패:",
+        error,
+      );
+    }
+  }
+
+  void loadBackground();
+
+  return () => {
+    cancelled = true;
+  };
+}, [supabase]);
+
+
 /* ─────────────────────────────
    전달사항 불러오기
 ───────────────────────────── */
@@ -938,6 +1073,8 @@ useEffect(() => {
     window.removeEventListener("wheel", handleWheel);
   };
 }, [horizontalPage]);
+
+
 
   /* ─────────────────────────────
      저장 데이터 불러오기
@@ -2359,6 +2496,7 @@ async function submitFeedback() {
     return;
   }
 
+
   if (content.length > 100) {
     window.alert("피드백은 100자 이하로 입력해주세요.");
     return;
@@ -2421,6 +2559,94 @@ async function submitFeedback() {
     window.alert(message);
   }
 }
+const handleBackgroundUpload = async (file: File) => {
+  try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      window.alert("로그인 후 배경을 변경할 수 있습니다.");
+      return;
+    }
+
+    const fileExt =
+      file.name.split(".").pop() || "jpg";
+
+    const filePath =
+      `${user.id}/background-${Date.now()}.${fileExt}`;
+
+    const {
+      data: uploadData,
+      error: uploadError,
+    } = await supabase.storage
+      .from("backgrounds")
+      .upload(filePath, file, {
+        upsert: true,
+      });
+
+    if (uploadError) {
+      throw uploadError;
+    }
+
+    const {
+      data: signedUrlData,
+      error: signedUrlError,
+    } = await supabase.storage
+      .from("backgrounds")
+      .createSignedUrl(
+        uploadData.path,
+        60 * 60 * 24 * 365,
+      );
+
+    if (signedUrlError) {
+      throw signedUrlError;
+    }
+
+ window.localStorage.setItem(
+  "hoo-background-url",
+  signedUrlData.signedUrl,
+);
+
+setBackgroundUrl(
+  signedUrlData.signedUrl,
+);
+
+
+    const { error: profileError } =
+      await supabase
+        .from("profiles")
+        .update({
+          background_url:
+            uploadData.path,
+        })
+        .eq("id", user.id);
+
+    if (profileError) {
+      throw profileError;
+    }
+  } catch (error) {
+    console.error(
+      "배경 업로드 실패:",
+      error,
+    );
+
+    window.alert(
+      "배경 업로드에 실패했습니다.",
+    );
+  }
+};
+
+const handleBackgroundReset = () => {
+  window.localStorage.removeItem(
+    "hoo-background-url",
+  );
+
+  setBackgroundUrl(null);
+};
+
+
+
   /* ─────────────────────────────
      화면
   ───────────────────────────── */
@@ -2498,14 +2724,27 @@ useEffect(() => {
   };
 }, [safeTodoProgressPercent]);
 
-  return (
-    <main
-      className="relative min-h-screen overflow-x-hidden bg-[#102f24] text-[#332f45]"
-      style={{
-        fontFamily:
-          '"Arial Rounded MT Bold", "Trebuchet MS", "Malgun Gothic", sans-serif',
-      }}
-    >
+return (
+  <main
+    className="relative min-h-screen overflow-x-hidden bg-[#102f24] text-[#332f45]"
+    style={{
+      fontFamily:
+        '"Arial Rounded MT Bold", "Trebuchet MS", "Malgun Gothic", sans-serif',
+
+      backgroundImage: backgroundUrl
+        ? `url("${backgroundUrl}")`
+        : 'url("/hoo-bg.png")',
+
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+      backgroundAttachment: "fixed",
+    }}
+  >
+    <BackgroundSettings
+      onUpload={handleBackgroundUpload}
+      onReset={handleBackgroundReset}
+    />
 
 {isSecretPinModalOpen && (
   <div className="fixed inset-0 z-[11000] flex items-center justify-center bg-black/50 px-5 backdrop-blur-sm">
@@ -2935,20 +3174,22 @@ setSecretPinInput("");
 )}
 
 
-      {/* 고정 배경 */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-0 overflow-hidden bg-[#102f24]"
-      >
-        <div
-          className="absolute inset-0 bg-cover bg-center bg-no-repeat"
-          style={{
-            backgroundImage: 'url("/hoo-bg.png")',
-          }}
-        />
+   {/* 고정 배경 */}
+<div
+  aria-hidden="true"
+  className="pointer-events-none fixed inset-0 z-0 overflow-hidden bg-[#102f24]"
+>
+  <div
+    className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+    style={{
+      backgroundImage: backgroundUrl
+        ? `url("${backgroundUrl}")`
+        : 'url("/hoo-bg.png")',
+    }}
+  />
 
-        <div className="absolute inset-0 bg-gradient-to-b from-[#020714]/35 via-transparent to-[#102f24]/35" />
-      </div>
+  <div className="absolute inset-0 bg-gradient-to-b from-[#020714]/35 via-transparent to-[#102f24]/35" />
+</div>
 
       {/* 스크롤 시 나타나는 헤더 */}
       <header
@@ -5143,6 +5384,7 @@ className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
   floatingButtonsTarget={floatingButtonsTarget}
 />
 
-    </main>
-  );
+  
+  </main>
+);
 }

@@ -140,13 +140,19 @@ export default function FocusMode({
   ] = useState(25 * 60);
 
   const [
-    focusStartedAt,
-    setFocusStartedAt,
-  ] =
-    useState<string | null>(null);
+  focusStartedAt,
+  setFocusStartedAt,
+] =
+  useState<string | null>(null);
 
-  const [isRunning, setIsRunning] =
-    useState(false);
+const [
+  focusEndsAt,
+  setFocusEndsAt,
+] =
+  useState<number | null>(null);
+
+const [isRunning, setIsRunning] =
+  useState(false);
 
   const [
     quickMemoInput,
@@ -279,12 +285,13 @@ export default function FocusMode({
     setView("setup");
   }
 
-  function closeFocusMode() {
-    setIsOpen(false);
-    setIsRunning(false);
-    setFocusStartedAt(null);
-    setIsExitConfirmOpen(false);
-  }
+ function closeFocusMode() {
+  setIsOpen(false);
+  setIsRunning(false);
+  setFocusEndsAt(null);
+  setFocusStartedAt(null);
+  setIsExitConfirmOpen(false);
+}
 
   function selectCustomDuration() {
     setSelectedDuration("custom");
@@ -355,24 +362,30 @@ export default function FocusMode({
     setSelectedDuration("custom");
   }
 
-  function startFocusMode() {
-    if (!canStart) {
-      return;
-    }
-
-    setRemainingSeconds(
-      initialSeconds,
-    );
-
-    setFocusStartedAt(
-      new Date().toISOString(),
-    );
-
-    setQuickMemoInput("");
-    setFocusQuickMemos([]);
-    setView("timer");
-    setIsRunning(true);
+ function startFocusMode() {
+  if (!canStart) {
+    return;
   }
+
+  const now = Date.now();
+
+  setRemainingSeconds(
+    initialSeconds,
+  );
+
+  setFocusStartedAt(
+    new Date(now).toISOString(),
+  );
+
+  setFocusEndsAt(
+    now + initialSeconds * 1000,
+  );
+
+  setQuickMemoInput("");
+  setFocusQuickMemos([]);
+  setView("timer");
+  setIsRunning(true);
+}
 
   function saveQuickMemo() {
     const content =
@@ -478,17 +491,61 @@ export default function FocusMode({
     }
   }
 
-  function toggleTimer() {
-    setIsRunning(
-      (previous) => !previous,
+ function toggleTimer() {
+  if (isRunning) {
+    const nextRemainingSeconds =
+      focusEndsAt === null
+        ? remainingSeconds
+        : Math.max(
+            0,
+            Math.ceil(
+              (focusEndsAt - Date.now()) /
+                1000,
+            ),
+          );
+
+    setRemainingSeconds(
+      nextRemainingSeconds,
     );
+
+    setFocusEndsAt(null);
+    setIsRunning(false);
+    return;
   }
 
+  if (remainingSeconds <= 0) {
+    return;
+  }
+
+  setFocusEndsAt(
+    Date.now() +
+      remainingSeconds * 1000,
+  );
+
+  setIsRunning(true);
+}
+
   function requestFinishFocusMode() {
+    const nextRemainingSeconds =
+      focusEndsAt === null
+        ? remainingSeconds
+        : Math.max(
+            0,
+            Math.ceil(
+              (focusEndsAt - Date.now()) /
+                1000,
+            ),
+          );
+
     setWasRunningBeforeExitConfirm(
       isRunning,
     );
 
+    setRemainingSeconds(
+      nextRemainingSeconds,
+    );
+
+    setFocusEndsAt(null);
     setIsRunning(false);
     setIsExitConfirmOpen(true);
   }
@@ -497,40 +554,63 @@ export default function FocusMode({
     setIsExitConfirmOpen(false);
 
     if (
-      wasRunningBeforeExitConfirm
+      wasRunningBeforeExitConfirm &&
+      remainingSeconds > 0
     ) {
+      setFocusEndsAt(
+        Date.now() +
+          remainingSeconds * 1000,
+      );
+
       setIsRunning(true);
     }
   }
+function confirmFinishFocusMode() {
+  const currentRemainingSeconds =
+    focusEndsAt === null
+      ? remainingSeconds
+      : Math.max(
+          0,
+          Math.ceil(
+            (focusEndsAt - Date.now()) /
+              1000,
+          ),
+        );
 
-  function confirmFinishFocusMode() {
-    const actualSeconds =
-      initialSeconds -
-      remainingSeconds;
+  const actualSeconds =
+    initialSeconds -
+    currentRemainingSeconds;
 
-    const didSave =
-      saveFocusHistory(
-        actualSeconds,
-      );
-
-    if (didSave) {
-      refreshProfileData();
-    }
-
-    setIsExitConfirmOpen(false);
-    setIsRunning(false);
-    setView("completed");
-  }
-
-  function restartFocusMode() {
-    setIsRunning(false);
-    setFocusStartedAt(null);
-    setIsExitConfirmOpen(false);
-    setRemainingSeconds(
-      initialSeconds,
+  const didSave =
+    saveFocusHistory(
+      actualSeconds,
     );
-    setView("setup");
+
+  if (didSave) {
+    refreshProfileData();
   }
+
+  setRemainingSeconds(
+    currentRemainingSeconds,
+  );
+
+  setFocusEndsAt(null);
+  setIsExitConfirmOpen(false);
+  setIsRunning(false);
+  setView("completed");
+}
+function restartFocusMode() {
+  setIsRunning(false);
+  setFocusEndsAt(null);
+  setFocusStartedAt(null);
+  setIsExitConfirmOpen(false);
+
+  setRemainingSeconds(
+    initialSeconds,
+  );
+
+  setView("setup");
+}
 
   useEffect(() => {
     if (isProfileOpen) {
@@ -607,49 +687,106 @@ export default function FocusMode({
   ]);
 
   useEffect(() => {
+  if (
+    !isOpen ||
+    view !== "timer" ||
+    !isRunning ||
+    focusEndsAt === null
+  ) {
+    return;
+  }
+
+  let isCompleted = false;
+
+  function syncFocusTimer() {
     if (
-      !isOpen ||
-      view !== "timer" ||
-      !isRunning
+      isCompleted ||
+      focusEndsAt === null
     ) {
       return;
     }
 
-    const interval =
-      window.setInterval(() => {
-        setRemainingSeconds(
-          (previous) => {
-            if (previous <= 1) {
-              window.clearInterval(
-                interval,
-              );
-
-              setIsRunning(false);
-              playTimerAlarm();
-              saveFocusHistory(
-                initialSeconds,
-              );
-              refreshProfileData();
-              setView("completed");
-
-              return 0;
-            }
-
-            return previous - 1;
-          },
-        );
-      }, 1000);
-
-    return () => {
-      window.clearInterval(
-        interval,
+    const nextRemainingSeconds =
+      Math.max(
+        0,
+        Math.ceil(
+          (focusEndsAt - Date.now()) /
+            1000,
+        ),
       );
-    };
-  }, [
-    isOpen,
-    isRunning,
-    view,
-  ]);
+
+    setRemainingSeconds(
+      nextRemainingSeconds,
+    );
+
+    if (nextRemainingSeconds > 0) {
+      return;
+    }
+
+    isCompleted = true;
+
+    setIsRunning(false);
+    setFocusEndsAt(null);
+
+    playTimerAlarm();
+
+    saveFocusHistory(
+      initialSeconds,
+    );
+
+    refreshProfileData();
+    setView("completed");
+  }
+
+  syncFocusTimer();
+
+  const interval =
+    window.setInterval(
+      syncFocusTimer,
+      500,
+    );
+
+  function handleVisibilityChange() {
+    if (
+      document.visibilityState ===
+      "visible"
+    ) {
+      syncFocusTimer();
+    }
+  }
+
+  window.addEventListener(
+    "focus",
+    syncFocusTimer,
+  );
+
+  document.addEventListener(
+    "visibilitychange",
+    handleVisibilityChange,
+  );
+
+  return () => {
+    window.clearInterval(interval);
+
+    window.removeEventListener(
+      "focus",
+      syncFocusTimer,
+    );
+
+    document.removeEventListener(
+      "visibilitychange",
+      handleVisibilityChange,
+    );
+  };
+}, [
+  isOpen,
+  isRunning,
+  view,
+  focusEndsAt,
+  initialSeconds,
+]);
+
+
 
   useEffect(() => {
     if (view === "setup") {
