@@ -25,7 +25,12 @@ import {
   type ScheduleRepeatType,
 } from "./utils/scheduleRepeat";
 
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Settings,
+  X,
+} from "lucide-react";
 
 /* ─────────────────────────────
    타입
@@ -113,6 +118,9 @@ const WEEK_DAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
 const SCHEDULE_STORAGE_KEY = "hoo-calendar-schedules";
 const MEMO_STORAGE_KEY = "hoo-memos";
+
+const UI_OPACITY_STORAGE_KEY =
+  "hoo-ui-opacity";
 
 const SECRET_PIN_STORAGE_KEY =
   "hoo-secret-pin";
@@ -437,6 +445,20 @@ const [showFloatingButtons, setShowFloatingButtons] =
      const [backgroundUrl, setBackgroundUrl] =
     useState<string | null>(null);
 
+  /* UI 불투명도 */
+
+  const [isUiOpacityOpen, setIsUiOpacityOpen] =
+    useState(false);
+
+  const [uiOpacity, setUiOpacity] =
+    useState(100);
+
+  const uiOpacityPanelRef =
+    useRef<HTMLDivElement | null>(null);
+
+  const uiOpacityButtonRef =
+    useRef<HTMLButtonElement | null>(null);
+
 
   /* 즐겨찾기 */
 
@@ -612,6 +634,57 @@ const [feedbackContent, setFeedbackContent] =
     document.removeEventListener(
       "mousedown",
       handleFeedbackClickOutside,
+    );
+  };
+}, []);
+
+/* ─────────────────────────────
+   UI 불투명도 패널 닫기
+───────────────────────────── */
+
+useEffect(() => {
+  function handleUiOpacityClickOutside(
+    event: MouseEvent,
+  ) {
+    const target = event.target as Node;
+
+    if (
+      uiOpacityPanelRef.current &&
+      !uiOpacityPanelRef.current.contains(target) &&
+      uiOpacityButtonRef.current &&
+      !uiOpacityButtonRef.current.contains(target)
+    ) {
+      setIsUiOpacityOpen(false);
+    }
+  }
+
+  function handleUiOpacityEscape(
+    event: KeyboardEvent,
+  ) {
+    if (event.key === "Escape") {
+      setIsUiOpacityOpen(false);
+    }
+  }
+
+  document.addEventListener(
+    "mousedown",
+    handleUiOpacityClickOutside,
+  );
+
+  document.addEventListener(
+    "keydown",
+    handleUiOpacityEscape,
+  );
+
+  return () => {
+    document.removeEventListener(
+      "mousedown",
+      handleUiOpacityClickOutside,
+    );
+
+    document.removeEventListener(
+      "keydown",
+      handleUiOpacityEscape,
     );
   };
 }, []);
@@ -1096,6 +1169,11 @@ useEffect(() => {
         MEMO_STORAGE_KEY,
       );
 
+      const savedUiOpacity =
+        window.localStorage.getItem(
+          UI_OPACITY_STORAGE_KEY,
+        );
+
       const savedSecretPin =
   window.localStorage.getItem(
     SECRET_PIN_STORAGE_KEY,
@@ -1190,6 +1268,20 @@ const savedRecommendedTodo =
         setMemos(JSON.parse(savedMemos));
       }
 
+      if (savedUiOpacity !== null) {
+        const parsedUiOpacity =
+          Number(savedUiOpacity);
+
+        if (Number.isFinite(parsedUiOpacity)) {
+          setUiOpacity(
+            Math.max(
+              0,
+              Math.min(100, parsedUiOpacity),
+            ),
+          );
+        }
+      }
+
       if (
   savedSecretPin &&
   /^\d{4}$/.test(savedSecretPin)
@@ -1279,6 +1371,21 @@ if (savedMinigameCompletionDate === todayStorageDate) {
       JSON.stringify(memos),
     );
   }, [memos, isLoaded]);
+
+/* ─────────────────────────────
+   UI 불투명도 자동 저장
+───────────────────────────── */
+
+useEffect(() => {
+  if (!isLoaded) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    UI_OPACITY_STORAGE_KEY,
+    String(uiOpacity),
+  );
+}, [uiOpacity, isLoaded]);
 
 
 /* ─────────────────────────────
@@ -3273,6 +3380,30 @@ setSecretPinInput("");
     </button>
   </form>
 
+<div className="relative shrink-0">
+  <button
+    ref={uiOpacityButtonRef}
+    type="button"
+    onClick={() =>
+      setIsUiOpacityOpen(
+        (previous) => !previous,
+      )
+    }
+    className={`flex h-9 w-9 items-center justify-center rounded-full border text-white shadow-lg transition ${
+      isUiOpacityOpen
+        ? "border-[#8f7cff] bg-[#7467d8] shadow-[0_0_22px_rgba(116,103,216,0.65)]"
+        : "border-white/20 bg-slate-800 hover:border-[#8f7cff] hover:bg-slate-700"
+    }`}
+    aria-label="UI 불투명도 설정"
+    aria-expanded={isUiOpacityOpen}
+  >
+    <Settings
+      size={18}
+      strokeWidth={2.4}
+    />
+  </button>
+</div>
+
 <button
   ref={searchToggleButtonRef}
   type="button"
@@ -3292,6 +3423,98 @@ setSecretPinInput("");
 
         </div>
       </header>
+
+      {isUiOpacityOpen && (
+        <div
+          ref={uiOpacityPanelRef}
+          className="fixed right-[5.2%] top-[74px] z-[10020] w-[190px] rounded-[26px] border border-[#8f7cff]/80 bg-[#111522]/95 px-5 pb-6 pt-5 text-white shadow-[0_24px_70px_rgba(0,0,0,0.5),0_0_28px_rgba(116,103,216,0.25)] backdrop-blur-2xl"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-black tracking-[0.18em] text-white/45">
+                UI APPEARANCE
+              </p>
+
+              <h2 className="mt-1 text-base font-black">
+                UI 불투명도
+              </h2>
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                setIsUiOpacityOpen(false)
+              }
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/75 transition hover:bg-white/15 hover:text-white"
+              aria-label="UI 불투명도 패널 닫기"
+            >
+              <X
+                size={17}
+                strokeWidth={2.5}
+              />
+            </button>
+          </div>
+
+          <div className="mt-5 flex justify-center">
+            <div className="rounded-xl bg-[#7467d8] px-3 py-2 text-sm font-black shadow-[0_8px_22px_rgba(116,103,216,0.38)]">
+              {uiOpacity}%
+            </div>
+          </div>
+
+          <div className="mt-5 flex h-[290px] items-center justify-center">
+            <div className="relative flex h-full w-[72px] flex-col items-center justify-between py-1">
+              <span className="text-xs font-black text-white/80">
+                100%
+              </span>
+
+              <div className="relative flex h-[225px] w-full items-center justify-center">
+                <div className="absolute h-[225px] w-2 rounded-full bg-white/10" />
+
+                <div
+                  className="absolute bottom-0 w-2 rounded-full bg-gradient-to-t from-[#1677ff] via-[#6559e8] to-[#8f7cff]"
+                  style={{
+                    height: `${uiOpacity}%`,
+                  }}
+                />
+
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={uiOpacity}
+                  onChange={(event) =>
+                    setUiOpacity(
+                      Number(event.target.value),
+                    )
+                  }
+                  aria-label="전체 UI 불투명도"
+                  aria-valuetext={`${uiOpacity}%`}
+                  className="absolute h-8 w-[225px] -rotate-90 cursor-pointer opacity-0"
+                />
+
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute left-1/2 h-6 w-6 -translate-x-1/2 rounded-full border-4 border-white bg-[#eeeaff] shadow-[0_4px_14px_rgba(0,0,0,0.45)] transition-[bottom] duration-75"
+                  style={{
+                    bottom: `calc(${uiOpacity}% - 12px)`,
+                  }}
+                />
+              </div>
+
+              <span className="text-xs font-black text-white/55">
+                0%
+              </span>
+            </div>
+          </div>
+
+          <p className="mt-3 text-center text-[11px] font-bold leading-5 text-white/45">
+            어두운 패널 배경만 조절되며
+            <br />
+            글자와 버튼은 선명하게 유지됩니다.
+          </p>
+        </div>
+      )}
 
       {/* 첫 화면 */}
       <section className="relative z-10 flex min-h-screen items-start justify-center px-5 pt-20 text-white">
@@ -3440,12 +3663,21 @@ setSecretPinInput("");
       >
         <div className="sticky top-0 h-screen overflow-hidden">
           <div
-         className="flex h-full w-[400vw] transition-transform duration-700 ease-in-out will-change-transform"
+            className="hoo-dark-opacity-scope flex h-full w-[400vw] transition-transform duration-700 ease-in-out will-change-transform"
             style={{
-           transform: `translate3d(-${
-  (horizontalProgress + 1) * 100
-}vw, 0, 0)`,
-            }}
+              transform: `translate3d(-${
+                (horizontalProgress + 1) * 100
+              }vw, 0, 0)`,
+              "--hoo-dark-panel-alpha": String(
+                0.08 + (uiOpacity / 100) * 0.72,
+              ),
+              "--hoo-dark-card-alpha": String(
+                0.12 + (uiOpacity / 100) * 0.55,
+              ),
+              "--hoo-dark-soft-alpha": String(
+                0.10 + (uiOpacity / 100) * 0.42,
+              ),
+            } as React.CSSProperties}
           >
 
           {/* 왼쪽 패널: 투두리스트 */}
@@ -4389,15 +4621,41 @@ setSecretPinInput("");
            <section className="flex h-screen w-screen shrink-0 items-center overflow-hidden px-4 py-16 md:px-7">
              <div className="mx-auto grid w-full max-w-[1380px] items-stretch gap-7 xl:grid-cols-[1.35fr_0.65fr]">
                 <article className="overflow-hidden rounded-[30px] border border-white/55 bg-white/88 shadow-[0_25px_80px_rgba(5,35,26,0.3)] backdrop-blur-xl">
-                  <header className="border-b border-[#e5e1ef] px-6 py-5">
-                    <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
-                      HOO MEMO
-                    </p>
+                 
+                 <header className="flex items-center justify-between gap-4 border-b border-[#e5e1ef] px-6 py-5">
+  <div>
+    <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
+      HOO MEMO
+    </p>
 
-                    <h2 className="mt-1 text-2xl font-black">
-                      메모장
-                    </h2>
-                  </header>
+    <h2 className="mt-1 text-2xl font-black">
+      메모장
+    </h2>
+  </div>
+
+  <button
+    type="button"
+    onClick={() => {
+      if (!isSecretLayerOn) {
+        setIsSecretLayerOn(true);
+        return;
+      }
+
+      setSecretPinInput("");
+      setIsSecretPinModalOpen(true);
+    }}
+    className={`rounded-full border px-4 py-2.5 text-xs font-black transition hover:scale-105 ${
+      isSecretLayerOn
+        ? "border-[#5145b5] bg-[#5145b5] text-white"
+        : "border-[#d8d2ec] bg-[#f3f0ff] text-[#6255b5]"
+    }`}
+    aria-pressed={isSecretLayerOn}
+  >
+    {isSecretLayerOn
+      ? "시크릿 ON"
+      : "시크릿 OFF"}
+  </button>
+</header>
 
                   <div className="grid min-h-[560px] md:grid-cols-[0.9fr_1.1fr]">
                     <form
@@ -4885,10 +5143,10 @@ setSecretPinInput("");
           className={`rounded-xl py-2 text-xs font-black transition ${
             isSelected
               ? difficulty === "buddha"
-                ? "bg-white text-black shadow-[0_8px_20px_rgba(255,255,255,0.12)]"
+                ? "border border-white/20 bg-[#2b2b30] text-white shadow-[0_8px_20px_rgba(255,255,255,0.08)]"
                 : "bg-[#7467d8] text-white"
               : isBuddhaCard
-                ? "border border-white/10 bg-white/[0.04] text-white/40 hover:bg-white/10 hover:text-white"
+                ? "border border-white/20 bg-white/[0.04] text-white hover:bg-white/10"
                 : difficulty === "buddha"
                   ? "border border-black bg-white text-black hover:bg-black hover:text-white"
                   : "bg-white text-[#827b95] hover:bg-[#eeeafd]"
@@ -4973,11 +5231,11 @@ setSecretPinInput("");
 
     setMinigameScreen("2048");
   }}
-  className={`mt-6 w-full rounded-2xl py-3.5 text-sm font-black transition hover:scale-[1.02] ${
-    hoo2048Difficulty === "buddha"
-      ? "bg-white text-black hover:bg-neutral-200"
-      : "bg-[#f0a33a] text-white hover:bg-[#df9027]"
-  }`}
+className={`mt-6 w-full rounded-2xl py-3.5 text-sm font-black transition hover:scale-[1.02] ${
+  hoo2048Difficulty === "buddha"
+    ? "bg-[#2b2b30] text-white hover:bg-[#36363d]"
+    : "bg-[#f0a33a] text-white hover:bg-[#df9027]"
+}`}
 >
   {hoo2048Difficulty === "buddha"
     ? "깰 게임이면 안 왔다. 도전!"
@@ -4990,9 +5248,11 @@ setSecretPinInput("");
 
       <div className="h-full">
         
-  <HooCommunityPanel
+  <div className="hoo-community-readable">
+<HooCommunityPanel
     refreshKey={communityRefreshKey}
   />
+</div>
 </div>
 
               <p className="mt-1 text-2xl font-black text-[#332f45]">
@@ -5510,6 +5770,256 @@ className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
 />
 
   
+
+
+
+
+    <style jsx global>{`
+      /*
+       * HOO Dark Translucent UI
+       * 패널 배경만 어둡게 투명해지고 글자·버튼·윤곽선은 항상 선명합니다.
+       */
+      .hoo-dark-opacity-scope {
+        opacity: 1;
+        color: rgba(255, 255, 255, 0.98);
+      }
+
+      /* 전체 패널 배경 */
+      .hoo-dark-opacity-scope [class~="bg-white/95"],
+      .hoo-dark-opacity-scope [class~="bg-white/90"],
+      .hoo-dark-opacity-scope [class~="bg-white/88"],
+      .hoo-dark-opacity-scope [class~="bg-white/85"],
+      .hoo-dark-opacity-scope [class~="bg-white/80"],
+      .hoo-dark-opacity-scope [class~="bg-white/75"] {
+        background-color: rgba(
+          20,
+          20,
+          22,
+          var(--hoo-dark-panel-alpha)
+        ) !important;
+      }
+
+      /* 카드와 입력 영역 */
+      .hoo-dark-opacity-scope [class~="bg-white"],
+      .hoo-dark-opacity-scope [class~="bg-white/70"],
+      .hoo-dark-opacity-scope [class~="bg-white/60"],
+      .hoo-dark-opacity-scope [class~="bg-white/50"],
+      .hoo-dark-opacity-scope [class~="bg-[#faf9ff]"],
+      .hoo-dark-opacity-scope [class~="bg-[#faf9fd]/60"],
+      .hoo-dark-opacity-scope [class~="bg-[#fbfaff]"],
+      .hoo-dark-opacity-scope [class~="bg-[#fffefa]"],
+      .hoo-dark-opacity-scope [class~="bg-[#f8f6ff]"],
+      .hoo-dark-opacity-scope [class~="bg-[#f7f5ff]"],
+      .hoo-dark-opacity-scope [class~="bg-[#f5f2ff]"],
+      .hoo-dark-opacity-scope [class~="bg-[#f3f0ff]"],
+      .hoo-dark-opacity-scope [class~="bg-[#f1eff7]"],
+      .hoo-dark-opacity-scope [class~="bg-[#f0edfa]"],
+      .hoo-dark-opacity-scope [class~="bg-[#effdf5]"],
+      .hoo-dark-opacity-scope [class~="bg-[#f0f7ff]"],
+      .hoo-dark-opacity-scope [class~="bg-[#faf9fc]"],
+      .hoo-dark-opacity-scope [class~="bg-[#fff8d9]"] {
+        background-color: rgba(
+          54,
+          54,
+          58,
+          var(--hoo-dark-card-alpha)
+        ) !important;
+      }
+
+      /* 더 옅은 내부 배경 */
+      .hoo-dark-opacity-scope [class*="bg-[#eee"],
+      .hoo-dark-opacity-scope [class*="bg-[#eaf"],
+      .hoo-dark-opacity-scope [class*="bg-[#f3e"],
+      .hoo-dark-opacity-scope [class*="bg-[#fff4"] {
+        background-color: rgba(
+          74,
+          74,
+          80,
+          var(--hoo-dark-soft-alpha)
+        ) !important;
+      }
+
+      /* 유리 효과 제거 */
+      .hoo-dark-opacity-scope [class*="backdrop-blur"] {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+
+      /* 윤곽선 고정 */
+      .hoo-dark-opacity-scope [class*="border-white/"],
+      .hoo-dark-opacity-scope [class*="border-[#ded"],
+      .hoo-dark-opacity-scope [class*="border-[#d8"],
+      .hoo-dark-opacity-scope [class*="border-[#e3"],
+      .hoo-dark-opacity-scope [class*="border-[#e5"],
+      .hoo-dark-opacity-scope [class*="border-[#ee"],
+      .hoo-dark-opacity-scope [class*="border-[#f0"] {
+        border-color: rgba(255, 255, 255, 0.34) !important;
+      }
+
+      .hoo-dark-opacity-scope [class*="grid-cols-7"] > * {
+        border-color: rgba(255, 255, 255, 0.24) !important;
+      }
+
+      /* 글자와 숫자는 항상 선명 */
+      .hoo-dark-opacity-scope h1,
+      .hoo-dark-opacity-scope h2,
+      .hoo-dark-opacity-scope h3,
+      .hoo-dark-opacity-scope h4,
+      .hoo-dark-opacity-scope h5,
+      .hoo-dark-opacity-scope h6,
+      .hoo-dark-opacity-scope p,
+      .hoo-dark-opacity-scope span,
+      .hoo-dark-opacity-scope label,
+      .hoo-dark-opacity-scope strong,
+      .hoo-dark-opacity-scope small,
+      .hoo-dark-opacity-scope li,
+      .hoo-dark-opacity-scope td,
+      .hoo-dark-opacity-scope th,
+      .hoo-dark-opacity-scope button,
+      .hoo-dark-opacity-scope svg {
+        opacity: 1 !important;
+      }
+
+      .hoo-dark-opacity-scope [class*="text-[#332f45]"],
+      .hoo-dark-opacity-scope [class*="text-[#423c55]"],
+      .hoo-dark-opacity-scope [class*="text-[#5145b5]"],
+      .hoo-dark-opacity-scope [class*="text-[#6255b5]"],
+      .hoo-dark-opacity-scope [class*="text-[#625a68]"],
+      .hoo-dark-opacity-scope [class*="text-[#716a82]"],
+      .hoo-dark-opacity-scope [class*="text-[#777083]"],
+      .hoo-dark-opacity-scope [class*="text-[#8b849d]"],
+      .hoo-dark-opacity-scope [class*="text-[#8c849d]"],
+      .hoo-dark-opacity-scope [class*="text-[#aaa4b8]"] {
+        color: rgba(255, 255, 255, 0.97) !important;
+      }
+
+      .hoo-dark-opacity-scope [class*="text-[#8b849d]"],
+      .hoo-dark-opacity-scope [class*="text-[#8c849d]"],
+      .hoo-dark-opacity-scope [class*="text-[#aaa4b8]"] {
+        color: rgba(255, 255, 255, 0.76) !important;
+      }
+
+      .hoo-dark-opacity-scope h1,
+      .hoo-dark-opacity-scope h2,
+      .hoo-dark-opacity-scope h3,
+      .hoo-dark-opacity-scope [class*="font-black"],
+      .hoo-dark-opacity-scope [class*="font-bold"] {
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+      }
+
+      /* 입력창 */
+      .hoo-dark-opacity-scope input,
+      .hoo-dark-opacity-scope textarea,
+      .hoo-dark-opacity-scope select {
+        color: rgba(255, 255, 255, 0.98) !important;
+        -webkit-text-fill-color: rgba(255, 255, 255, 0.98);
+        border-color: rgba(255, 255, 255, 0.34) !important;
+        opacity: 1 !important;
+        caret-color: #ffffff;
+      }
+
+      .hoo-dark-opacity-scope input::placeholder,
+      .hoo-dark-opacity-scope textarea::placeholder {
+        color: rgba(255, 255, 255, 0.62) !important;
+        -webkit-text-fill-color: rgba(255, 255, 255, 0.62);
+        opacity: 1 !important;
+      }
+
+      /* 포인트 버튼 유지 */
+      .hoo-dark-opacity-scope [class*="bg-[#7467d8]"],
+      .hoo-dark-opacity-scope [class*="bg-[#6255c7]"],
+      .hoo-dark-opacity-scope [class*="bg-[#5145b5]"],
+      .hoo-dark-opacity-scope [class*="bg-[#5967a9]"],
+      .hoo-dark-opacity-scope [class*="bg-[#f5a623]"],
+      .hoo-dark-opacity-scope [class*="bg-[#f6a62e]"] {
+        opacity: 1 !important;
+        color: #ffffff !important;
+        -webkit-text-fill-color: #ffffff;
+      }
+
+      .hoo-dark-opacity-scope button:disabled {
+        opacity: 0.55 !important;
+      }
+
+      .hoo-dark-opacity-scope :focus-visible {
+        outline: 2px solid rgba(116, 103, 216, 0.95);
+        outline-offset: 2px;
+      }
+
+      /*
+       * 미니게임 랭킹 커뮤니티 전용 가독성 강화
+       * 패널 투명도는 유지하고 글자·숫자·아이콘만 선명하게 표시합니다.
+       */
+      .hoo-community-readable,
+      .hoo-community-readable * {
+        opacity: 1 !important;
+      }
+
+      .hoo-community-readable h1,
+      .hoo-community-readable h2,
+      .hoo-community-readable h3,
+      .hoo-community-readable h4,
+      .hoo-community-readable p,
+      .hoo-community-readable span,
+      .hoo-community-readable strong,
+      .hoo-community-readable small,
+      .hoo-community-readable label,
+      .hoo-community-readable li,
+      .hoo-community-readable button {
+        color: rgba(255, 255, 255, 0.98) !important;
+        -webkit-text-fill-color: rgba(255, 255, 255, 0.98);
+        text-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.88),
+          0 0 5px rgba(0, 0, 0, 0.32);
+      }
+
+      /* 보라색 닉네임, 점수, 레벨과 강조 텍스트는 색 유지 */
+      .hoo-community-readable [class*="text-[#7467d8]"],
+      .hoo-community-readable [class*="text-[#6255c7]"],
+      .hoo-community-readable [class*="text-[#6659bf]"],
+      .hoo-community-readable [class*="text-[#5145b5]"],
+      .hoo-community-readable [class*="text-purple"],
+      .hoo-community-readable [class*="text-violet"] {
+        color: #9b8cff !important;
+        -webkit-text-fill-color: #9b8cff;
+        text-shadow:
+          0 1px 2px rgba(0, 0, 0, 0.9),
+          0 0 7px rgba(116, 103, 216, 0.28);
+      }
+
+      /* 설명과 보조 정보도 너무 흐려지지 않도록 유지 */
+      .hoo-community-readable [class*="text-[#8b849d]"],
+      .hoo-community-readable [class*="text-[#8c849d]"],
+      .hoo-community-readable [class*="text-[#aaa4b8]"],
+      .hoo-community-readable [class*="text-white/40"],
+      .hoo-community-readable [class*="text-white/50"],
+      .hoo-community-readable [class*="text-white/60"],
+      .hoo-community-readable [class*="text-white/70"] {
+        color: rgba(255, 255, 255, 0.82) !important;
+        -webkit-text-fill-color: rgba(255, 255, 255, 0.82);
+      }
+
+      /* 랭킹 행 안의 핵심 숫자와 닉네임 */
+      .hoo-community-readable [class*="font-black"],
+      .hoo-community-readable [class*="font-extrabold"],
+      .hoo-community-readable [class*="font-bold"] {
+        opacity: 1 !important;
+        filter: none !important;
+      }
+
+      /* 커뮤니티 내부 SVG와 이모지 */
+      .hoo-community-readable svg,
+      .hoo-community-readable img {
+        opacity: 1 !important;
+        filter: none !important;
+      }
+
+      /* 비활성 탭만 최소한으로 구분 */
+      .hoo-community-readable button:disabled {
+        opacity: 0.72 !important;
+      }
+    `}</style>
+
   </main>
 );
 }
