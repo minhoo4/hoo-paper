@@ -5060,6 +5060,9 @@ setSecretPinInput("");
       (previous) => previous + 1,
     );
   }}
+  onBackToMenu={() => {
+    setMinigameScreen("menu");
+  }}
 />
 
           </div>

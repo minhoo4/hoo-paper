@@ -1612,6 +1612,7 @@ type Hoo2048GameProps = {
   autoStartBuddha?: boolean;
   onScoreChange?: (score: number) => void;
   onRecordSaved?: () => void;
+  onBackToMenu?: () => void;
 };
 
 export default function Hoo2048Game({
@@ -1620,6 +1621,7 @@ export default function Hoo2048Game({
   autoStartBuddha = false,
   onScoreChange,
   onRecordSaved,
+  onBackToMenu,
 }: Hoo2048GameProps) {
   const boardSize =
     getBoardSize(difficulty);
@@ -2145,6 +2147,44 @@ export default function Hoo2048Game({
     setBuddhaExplosions([]);
   }
 
+  function returnToGameSelection() {
+    clearMovementAnimation();
+
+    setIsEnteringBuddhaMode(false);
+    setIsBuddhaFocusMode(false);
+
+    if (
+      document.fullscreenElement &&
+      document.exitFullscreen
+    ) {
+      void document
+        .exitFullscreen()
+        .catch((error) => {
+          console.warn(
+            "전체화면 종료에 실패했습니다:",
+            error,
+          );
+        })
+        .finally(() => {
+          if (onBackToMenu) {
+            onBackToMenu();
+            return;
+          }
+
+          restartGame();
+        });
+
+      return;
+    }
+
+    if (onBackToMenu) {
+      onBackToMenu();
+      return;
+    }
+
+    restartGame();
+  }
+
   function continueGame() {
     recordSubmittedRef.current = false;
     setIsWon(false);
@@ -2224,6 +2264,7 @@ export default function Hoo2048Game({
 
       const usesBlackHole =
         difficulty === "normal" ||
+        difficulty === "hard" ||
         difficulty === "buddha";
 
       const blackHoleCells =
@@ -2235,7 +2276,7 @@ export default function Hoo2048Game({
           : [];
 
       const wormHoleCells =
-        difficulty === "normal" ||
+        difficulty === "hard" ||
         difficulty === "buddha"
           ? getSpecialCells(
               board,
@@ -2297,7 +2338,7 @@ export default function Hoo2048Game({
 
             const crossedWormHole =
               !crossedBlackHole &&
-              difficulty === "normal"
+              difficulty === "hard"
                 ? findCrossedSpecialCell(
                     tile,
                     wormHoleCells,
@@ -2458,7 +2499,7 @@ export default function Hoo2048Game({
 
           let wormHoleScore = 0;
 
-          if (difficulty === "normal") {
+          if (difficulty === "hard") {
             nextBoard =
               restoreSpecialCells(
                 nextBoard,
@@ -2628,7 +2669,10 @@ if (
           }
 
           if (
-            difficulty === "normal" &&
+            (
+              difficulty === "normal" ||
+              difficulty === "hard"
+            ) &&
             nextMoveCount %
               NORMAL_BLACK_HOLE_INTERVAL ===
               0
@@ -2640,7 +2684,7 @@ if (
           }
 
           if (
-            difficulty === "normal" &&
+            difficulty === "hard" &&
             nextMoveCount %
               NORMAL_WORM_HOLE_INTERVAL ===
               0
@@ -4053,7 +4097,7 @@ if (
 
                       <button
                         type="button"
-                        onClick={restartGame}
+                        onClick={returnToGameSelection}
                         className="rounded-xl border border-white/30 bg-black px-5 py-3 font-black text-white sm:px-6"
                       >
                         다시 시작
@@ -4077,7 +4121,7 @@ if (
 
                     <button
                       type="button"
-                      onClick={restartGame}
+                      onClick={returnToGameSelection}
                       className="mt-7 rounded-xl bg-white px-7 py-3 font-black text-black"
                     >
                       다시 시작
@@ -4464,11 +4508,7 @@ if (
 
         {difficulty === "normal" && (
           <p className="mt-1 text-xs font-semibold text-[#9b6b52]">
-            특수 모드: 5×5 · 블랙홀은 24회,
-            웜홀은 40회 이동마다 생성 · 웜홀은
-            숫자 3~6개를 사방으로 발사 · 같은
-            숫자는 연쇄 합체 · 블랙홀과 충돌하면
-            둘 다 소멸 · 모든 점수 즉시 반영
+          
           </p>
         )}
 
@@ -4528,7 +4568,7 @@ if (
 
         <button
           type="button"
-          onClick={restartGame}
+          onClick={returnToGameSelection}
           className="mt-3 rounded-xl bg-[#5f4b8b] px-4 py-2 text-sm font-bold text-white transition hover:scale-105"
         >
           다시 시작
@@ -4897,7 +4937,7 @@ if (
 
               <button
                 type="button"
-                onClick={restartGame}
+                onClick={returnToGameSelection}
                 className="rounded-xl bg-[#332f45] px-5 py-3 font-bold text-white transition hover:scale-105"
               >
                 다시 시작
@@ -4937,7 +4977,7 @@ if (
 
             <button
               type="button"
-              onClick={restartGame}
+              onClick={returnToGameSelection}
               className="mt-5 rounded-xl bg-white px-6 py-3 font-bold text-[#332f45] transition hover:scale-105"
             >
               다시 시작
