@@ -3601,8 +3601,8 @@ if (
           </header>
 
           <main className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
-            <div className="grid min-h-full w-full grid-cols-1 items-center justify-items-center gap-4 lg:h-full lg:grid-cols-[250px_minmax(0,1fr)_250px] lg:gap-[clamp(20px,2.4vw,40px)]">
-              <aside className="hidden h-[min(calc(100dvh-116px),780px)] w-[250px] shrink-0 lg:block">
+            <div className="grid min-h-full w-full grid-cols-1 items-center justify-items-center gap-4 lg:h-full lg:grid-cols-[280px_minmax(0,1fr)_250px] lg:gap-[clamp(20px,2.4vw,40px)]">
+              <aside className="hidden h-[min(calc(100dvh-116px),780px)] w-[280px] shrink-0 lg:block">
                 <div className="flex h-full flex-col overflow-hidden rounded-[24px] border border-white/20 bg-[#080808]">
                   <div className="border-b border-white/10 px-5 py-5">
                     <div className="flex items-center justify-between gap-3">
@@ -3624,7 +3624,7 @@ if (
                         disabled={
                           isBuddhaRankingLoading
                         }
-                        className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-black text-white/70 transition hover:border-violet-400 hover:text-white disabled:cursor-wait disabled:opacity-40"
+                       className="min-w-[88px] whitespace-nowrap rounded-full border border-white/15 px-4 py-1.5 text-xs font-black text-white/70 transition hover:border-violet-400 hover:text-white disabled:cursor-wait disabled:opacity-40"
                       >
                         새로고침
                       </button>
