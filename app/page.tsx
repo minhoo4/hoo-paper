@@ -94,7 +94,11 @@ type SudokuBestTimes = Record<
 
 type MinigameScreen = "menu" | "sudoku" | "2048";
 
-type Hoo2048Difficulty = "easy" | "normal" | "hard";
+type Hoo2048Difficulty =
+  | "easy"
+  | "normal"
+  | "hard"
+  | "buddha";
 
 type Hoo2048BestScores = Record<
   Hoo2048Difficulty,
@@ -646,7 +650,9 @@ const [hoo2048BestScores, setHoo2048BestScores] =
     easy: 0,
     normal: 0,
     hard: 0,
+    buddha: 0,
   });
+
   /* 스도쿠 */
 
   const [sudokuBestTimes, setSudokuBestTimes] =
@@ -1140,13 +1146,20 @@ if (savedHoo2048BestScores) {
       typeof parsedBestScores.easy === "number"
         ? parsedBestScores.easy
         : 0,
+
     normal:
       typeof parsedBestScores.normal === "number"
         ? parsedBestScores.normal
         : 0,
+
     hard:
       typeof parsedBestScores.hard === "number"
         ? parsedBestScores.hard
+        : 0,
+
+    buddha:
+      typeof parsedBestScores.buddha === "number"
+        ? parsedBestScores.buddha
         : 0,
   });
 }
@@ -4790,82 +4803,188 @@ setSecretPinInput("");
               </button>
             </article>
 
-            {/* 2048 카드 */}
-            <article className="rounded-[28px] border border-[#ded8ef] bg-[#faf9ff] p-6 shadow-sm">
-              <div className="flex items-center gap-4">
-                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#fff0d9] text-3xl">
-                  🔢
-                </span>
+           {/* 2048 카드 */}
 
-                <div>
-                  <p className="text-[11px] font-black tracking-[0.16em] text-[#928ba8]">
-                    NUMBER MERGE
-                  </p>
+<article
+  className={`rounded-[28px] p-6 shadow-sm transition-all duration-300 ${
+    hoo2048Difficulty === "buddha"
+      ? "border border-white/10 bg-black text-white shadow-[0_24px_70px_rgba(0,0,0,0.35)]"
+      : "border border-[#ded8ef] bg-[#faf9ff]"
+  }`}
+>
+  {hoo2048Difficulty === "buddha" && (
+    <div className="mb-6 rounded-[20px] border border-red-700/70 bg-red-950/30 px-5 py-4 text-center shadow-[0_0_26px_rgba(220,38,38,0.12)]">
+      <p className="text-sm font-black leading-7 text-red-50">
+        이 모드는 절대 못 깹니다.
+        <br />
+        도전하시겠습니까?
+      </p>
+    </div>
+  )}
 
-                  <h3 className="text-2xl font-black text-[#332f45]">
-                    HOO 2048
-                  </h3>
-                </div>
-              </div>
-
-             <div className="mt-6 grid grid-cols-3 gap-2">
-  {(
-    [
-      ["easy", "쉬움"],
-      ["normal", "보통"],
-      ["hard", "어려움"],
-    ] as const
-  ).map(([difficulty, label]) => (
-    <button
-      key={difficulty}
-      type="button"
-      onClick={() =>
-        setHoo2048Difficulty(difficulty)
-      }
-      className={`rounded-xl py-2 text-xs font-black transition ${
-        hoo2048Difficulty === difficulty
-          ? "bg-[#7467d8] text-white"
-          : "bg-white text-[#827b95] hover:bg-[#eeeafd]"
+  <div className="flex items-center gap-4">
+    <span
+      className={`flex h-14 w-14 items-center justify-center rounded-2xl text-3xl transition-all ${
+        hoo2048Difficulty === "buddha"
+          ? "bg-white text-black"
+          : "bg-[#fff0d9]"
       }`}
     >
-      {label}
-    </button>
-  ))}
-</div>
+      {hoo2048Difficulty === "buddha"
+        ? "☯"
+        : "🔢"}
+    </span>
 
-              <div className="mt-6 space-y-3 rounded-2xl bg-white p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#928ba8]">
-                    최고점수
-                  </span>
+    <div>
+      <p
+        className={`text-[11px] font-black tracking-[0.16em] ${
+          hoo2048Difficulty === "buddha"
+            ? "text-white/40"
+            : "text-[#928ba8]"
+        }`}
+      >
+        NUMBER MERGE
+      </p>
 
-                 <strong className="text-lg font-black text-[#332f45]">
-  {hoo2048BestScores[
-    hoo2048Difficulty
-  ].toLocaleString("ko-KR")}
-</strong>
+      <h3
+        className={`text-2xl font-black ${
+          hoo2048Difficulty === "buddha"
+            ? "text-white"
+            : "text-[#332f45]"
+        }`}
+      >
+        HOO 2048
+      </h3>
+    </div>
+  </div>
 
-                </div>
+  <div className="mt-6 grid grid-cols-4 gap-2">
+    {(
+      [
+        ["easy", "쉬움"],
+        ["normal", "보통"],
+        ["hard", "어려움"],
+        ["buddha", "부처"],
+      ] as const
+    ).map(([difficulty, label]) => {
+      const isSelected =
+        hoo2048Difficulty === difficulty;
 
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#928ba8]">
-                    타임어택
-                  </span>
+      const isBuddhaCard =
+        hoo2048Difficulty === "buddha";
 
-                  <strong className="text-sm font-black text-[#7467d8]">
-                    제한 없음
-                  </strong>
-                </div>
-              </div>
+      return (
+        <button
+          key={difficulty}
+          type="button"
+          onClick={() =>
+            setHoo2048Difficulty(
+              difficulty,
+            )
+          }
+          className={`rounded-xl py-2 text-xs font-black transition ${
+            isSelected
+              ? difficulty === "buddha"
+                ? "bg-white text-black shadow-[0_8px_20px_rgba(255,255,255,0.12)]"
+                : "bg-[#7467d8] text-white"
+              : isBuddhaCard
+                ? "border border-white/10 bg-white/[0.04] text-white/40 hover:bg-white/10 hover:text-white"
+                : difficulty === "buddha"
+                  ? "border border-black bg-white text-black hover:bg-black hover:text-white"
+                  : "bg-white text-[#827b95] hover:bg-[#eeeafd]"
+          }`}
+        >
+          {label}
+        </button>
+      );
+    })}
+  </div>
 
-                          <button
-                type="button"
-                onClick={() => setMinigameScreen("2048")}
-                className="mt-6 w-full rounded-2xl bg-[#f0a33a] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#df9027]"
-              >
-                HOO 2048 플레이
-              </button>
-            </article>
+  <div
+    className={`mt-6 space-y-3 rounded-2xl p-4 ${
+      hoo2048Difficulty === "buddha"
+        ? "border border-white/10 bg-white/[0.055]"
+        : "bg-white"
+    }`}
+  >
+    <div className="flex items-center justify-between">
+      <span
+        className={`text-xs font-bold ${
+          hoo2048Difficulty === "buddha"
+            ? "text-white/45"
+            : "text-[#928ba8]"
+        }`}
+      >
+        최고점수
+      </span>
+
+      <strong
+        className={`text-lg font-black ${
+          hoo2048Difficulty === "buddha"
+            ? "text-white"
+            : "text-[#332f45]"
+        }`}
+      >
+        {hoo2048BestScores[
+          hoo2048Difficulty
+        ].toLocaleString("ko-KR")}
+      </strong>
+    </div>
+
+    <div className="flex items-center justify-between">
+      <span
+        className={`text-xs font-bold ${
+          hoo2048Difficulty === "buddha"
+            ? "text-white/45"
+            : "text-[#928ba8]"
+        }`}
+      >
+        타임어택
+      </span>
+
+      <strong
+        className={`text-sm font-black ${
+          hoo2048Difficulty === "buddha"
+            ? "text-red-400"
+            : "text-[#7467d8]"
+        }`}
+      >
+        제한 없음
+      </strong>
+    </div>
+  </div>
+
+  <button
+  type="button"
+  onClick={() => {
+    if (
+      hoo2048Difficulty === "buddha" &&
+      !document.fullscreenElement
+    ) {
+      void document.documentElement
+        .requestFullscreen()
+        .catch((error) => {
+          console.warn(
+            "전체화면 진입에 실패했습니다:",
+            error,
+          );
+        });
+    }
+
+    setMinigameScreen("2048");
+  }}
+  className={`mt-6 w-full rounded-2xl py-3.5 text-sm font-black transition hover:scale-[1.02] ${
+    hoo2048Difficulty === "buddha"
+      ? "bg-white text-black hover:bg-neutral-200"
+      : "bg-[#f0a33a] text-white hover:bg-[#df9027]"
+  }`}
+>
+  {hoo2048Difficulty === "buddha"
+    ? "깰 게임이면 안 왔다. 도전!"
+    : "HOO 2048 플레이"}
+</button>
+
+</article>
           </div>
         </article>
 
@@ -4907,8 +5026,11 @@ setSecretPinInput("");
 
           <div className="mt-6">
          
-  <Hoo2048Game
+ <Hoo2048Game
   difficulty={hoo2048Difficulty}
+  autoStartBuddha={
+    hoo2048Difficulty === "buddha"
+  }
   bestScore={
     hoo2048BestScores[
       hoo2048Difficulty

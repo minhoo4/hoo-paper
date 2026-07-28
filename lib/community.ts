@@ -164,7 +164,7 @@ export async function submitSudokuCompletion(input: {
 }
 
 export async function submit2048Completion(input: {
-  difficulty: "easy" | "normal" | "hard";
+  difficulty: "easy" | "normal" | "hard" | "buddha";
   score: number;
   elapsedSeconds: number;
   maxTile: number;
