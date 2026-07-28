@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { submit2048Completion } from "@/lib/community";
+import { createClient } from "@/lib/supabase/client";
 
 import {
   moveDownWithScore,
@@ -20,6 +21,16 @@ import {
 
 type Difficulty = "easy" | "normal" | "hard" | "buddha";
 type Board = number[][];
+
+type BuddhaRankingEntry = {
+  rank: number;
+  userId: string;
+  nickname: string;
+  avatarEmoji: string;
+  bestScore: number;
+  completedGames: number;
+  achievedAt: string | null;
+};
 
 type AnimatedTile = {
   id: string;
@@ -300,7 +311,7 @@ function getAwardedScore(
   }
 
   if (difficulty === "buddha") {
-    return 250000;
+    return 0;
   }
 
   return 30;
@@ -1643,6 +1654,31 @@ export default function Hoo2048Game({
   const [moveCount, setMoveCount] =
     useState(0);
 
+  const [
+    buddhaRanking,
+    setBuddhaRanking,
+  ] = useState<BuddhaRankingEntry[]>([]);
+
+  const [
+    isBuddhaRankingLoading,
+    setIsBuddhaRankingLoading,
+  ] = useState(false);
+
+  const [
+    buddhaRankingError,
+    setBuddhaRankingError,
+  ] = useState("");
+
+  const [
+    currentBuddhaUserId,
+    setCurrentBuddhaUserId,
+  ] = useState<string | null>(null);
+
+  const [
+    buddhaPersonalBest,
+    setBuddhaPersonalBest,
+  ] = useState(0);
+
   const startedAtRef =
     useRef(Date.now());
 
@@ -1744,6 +1780,126 @@ export default function Hoo2048Game({
   useEffect(() => {
     onScoreChange?.(score);
   }, [score, onScoreChange]);
+
+  const loadBuddhaRanking = useCallback(
+    async () => {
+      if (difficulty !== "buddha") {
+        return;
+      }
+
+      setIsBuddhaRankingLoading(true);
+      setBuddhaRankingError("");
+
+      try {
+        const supabase = createClient();
+
+        const [
+          rankingResult,
+          userResult,
+        ] = await Promise.all([
+          supabase.rpc(
+            "get_2048_buddha_ranking",
+            {
+              p_limit: 10,
+            },
+          ),
+          supabase.auth.getUser(),
+        ]);
+
+        if (rankingResult.error) {
+          throw rankingResult.error;
+        }
+
+        const nextRanking =
+          (
+            rankingResult.data ?? []
+          ).map(
+            (
+              item: Record<
+                string,
+                unknown
+              >,
+            ): BuddhaRankingEntry => ({
+              rank: Number(
+                item.rank ?? 0,
+              ),
+              userId: String(
+                item.userId ?? "",
+              ),
+              nickname: String(
+                item.nickname ??
+                  "알 수 없는 사용자",
+              ),
+              avatarEmoji: String(
+                item.avatarEmoji ?? "🙂",
+              ),
+              bestScore: Number(
+                item.bestScore ?? 0,
+              ),
+              completedGames: Number(
+                item.completedGames ?? 0,
+              ),
+              achievedAt:
+                typeof item.achievedAt ===
+                "string"
+                  ? item.achievedAt
+                  : null,
+            }),
+          );
+
+        const nextUserId =
+          userResult.data.user?.id ??
+          null;
+
+        setBuddhaRanking(nextRanking);
+        setCurrentBuddhaUserId(
+          nextUserId,
+        );
+
+        if (nextUserId) {
+         const myEntry =
+  nextRanking.find(
+    (
+      entry: BuddhaRankingEntry,
+    ) =>
+      entry.userId ===
+      nextUserId,
+  );
+
+          if (myEntry) {
+            setBuddhaPersonalBest(
+              myEntry.bestScore,
+            );
+          }
+        }
+      } catch (error) {
+        console.error(
+          "부처모드 랭킹 조회 실패:",
+          error,
+        );
+
+        setBuddhaRankingError(
+          "랭킹을 불러오지 못했습니다.",
+        );
+      } finally {
+        setIsBuddhaRankingLoading(false);
+      }
+    },
+    [difficulty],
+  );
+
+  useEffect(() => {
+    if (
+      difficulty === "buddha" &&
+      isBuddhaFocusMode
+    ) {
+      void loadBuddhaRanking();
+    }
+  }, [
+    difficulty,
+    isBuddhaFocusMode,
+    loadBuddhaRanking,
+  ]);
 
   function clearMovementAnimation() {
     if (
@@ -2027,6 +2183,18 @@ export default function Hoo2048Game({
           maxTile,
         });
 
+        if (difficulty === "buddha") {
+          setBuddhaPersonalBest(
+            (previousBest) =>
+              Math.max(
+                previousBest,
+                finalScore,
+              ),
+          );
+
+          await loadBuddhaRanking();
+        }
+
         onRecordSaved?.();
       } catch (error) {
         recordSubmittedRef.current = false;
@@ -2037,7 +2205,11 @@ export default function Hoo2048Game({
         );
       }
     },
-    [difficulty, onRecordSaved],
+    [
+      difficulty,
+      loadBuddhaRanking,
+      onRecordSaved,
+    ],
   );
 
   const performMove = useCallback(
@@ -2533,6 +2705,7 @@ if (
             );
 
             if (
+              difficulty !== "buddha" &&
               !hasContinued &&
               hasWon(
                 nextBoard,
@@ -2788,6 +2961,10 @@ if (
     setPendingBuddhaWormHoles([]);
     setBuddhaBombs([]);
     setBuddhaExplosions([]);
+    setBuddhaRanking([]);
+    setBuddhaRankingError("");
+    setCurrentBuddhaUserId(null);
+    setBuddhaPersonalBest(0);
     setIsBuddhaFocusMode(false);
     setIsEnteringBuddhaMode(
       shouldAutoStartBuddha,
@@ -2908,6 +3085,13 @@ if (
 
   function renderBuddhaGameLayout() {
     const buddhaBoardSize = 5;
+
+    const displayedBuddhaBest =
+      Math.max(
+        score,
+        bestScore,
+        buddhaPersonalBest,
+      );
 
     const hasCriticalBuddhaBomb =
       buddhaBombs.some(
@@ -3416,9 +3600,158 @@ if (
             </button>
           </header>
 
-          <main className="min-h-0 flex-1 overflow-hidden">
-            <div className="grid h-full w-full grid-cols-1 items-center justify-items-center gap-4 lg:grid-cols-[minmax(0,1fr)_250px] lg:gap-[clamp(20px,3vw,44px)]">
-              <div className="relative mx-auto aspect-square h-[min(calc(100dvh-140px),calc(100dvw-32px),760px)] max-h-full max-w-full lg:h-[min(calc(100dvh-116px),calc(100dvw-330px),780px)]">
+          <main className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
+            <div className="grid min-h-full w-full grid-cols-1 items-center justify-items-center gap-4 lg:h-full lg:grid-cols-[250px_minmax(0,1fr)_250px] lg:gap-[clamp(20px,2.4vw,40px)]">
+              <aside className="hidden h-[min(calc(100dvh-116px),780px)] w-[250px] shrink-0 lg:block">
+                <div className="flex h-full flex-col overflow-hidden rounded-[24px] border border-white/20 bg-[#080808]">
+                  <div className="border-b border-white/10 px-5 py-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black uppercase tracking-[0.18em] text-violet-400">
+                          Buddha Ranking
+                        </p>
+
+                        <h2 className="mt-1 text-xl font-black text-white">
+                          🧘 부처 랭킹
+                        </h2>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void loadBuddhaRanking();
+                        }}
+                        disabled={
+                          isBuddhaRankingLoading
+                        }
+                        className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-black text-white/70 transition hover:border-violet-400 hover:text-white disabled:cursor-wait disabled:opacity-40"
+                      >
+                        새로고침
+                      </button>
+                    </div>
+
+                    <p className="mt-3 text-xs font-semibold leading-relaxed text-white/45">
+                      클리어가 아닌 개인 최고점으로
+                      순위가 결정됩니다.
+                    </p>
+                  </div>
+
+                  <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+                    {isBuddhaRankingLoading &&
+                    buddhaRanking.length === 0 ? (
+                      <div className="flex h-full items-center justify-center text-sm font-bold text-white/45">
+                        랭킹 불러오는 중...
+                      </div>
+                    ) : buddhaRankingError ? (
+                      <div className="flex h-full flex-col items-center justify-center px-4 text-center">
+                        <p className="text-sm font-bold text-red-300">
+                          {buddhaRankingError}
+                        </p>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void loadBuddhaRanking();
+                          }}
+                          className="mt-3 rounded-lg border border-white/20 px-3 py-2 text-xs font-black text-white"
+                        >
+                          다시 시도
+                        </button>
+                      </div>
+                    ) : buddhaRanking.length ===
+                      0 ? (
+                      <div className="flex h-full flex-col items-center justify-center px-5 text-center">
+                        <span className="text-4xl">
+                          🪷
+                        </span>
+
+                        <p className="mt-3 text-sm font-black text-white/70">
+                          아직 기록이 없습니다.
+                        </p>
+
+                        <p className="mt-1 text-xs font-semibold leading-relaxed text-white/35">
+                          첫 번째 부처모드 기록의
+                          주인공이 되어보세요.
+                        </p>
+                      </div>
+                    ) : (
+                      <ol className="space-y-2">
+                        {buddhaRanking.map(
+                          (entry) => {
+                            const isMe =
+                              entry.userId ===
+                              currentBuddhaUserId;
+
+                            const rankBadge =
+                              entry.rank === 1
+                                ? "🥇"
+                                : entry.rank === 2
+                                  ? "🥈"
+                                  : entry.rank === 3
+                                    ? "🥉"
+                                    : entry.rank;
+
+                            return (
+                              <li
+                                key={entry.userId}
+                                className={`rounded-2xl border px-3 py-3 transition ${
+                                  isMe
+                                    ? "border-violet-400/80 bg-violet-500/15 shadow-[0_0_20px_rgba(139,92,246,0.18)]"
+                                    : "border-white/10 bg-white/[0.025]"
+                                }`}
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/5 text-sm font-black">
+                                    {rankBadge}
+                                  </div>
+
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-lg">
+                                        {entry.avatarEmoji}
+                                      </span>
+
+                                      <p className="truncate text-sm font-black text-white">
+                                        {entry.nickname}
+                                      </p>
+
+                                      {isMe && (
+                                        <span className="rounded-full bg-violet-500 px-1.5 py-0.5 text-[9px] font-black text-white">
+                                          ME
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <p className="mt-1 text-right text-base font-black tabular-nums text-violet-300">
+                                      {entry.bestScore.toLocaleString(
+                                        "ko-KR",
+                                      )}
+                                    </p>
+                                  </div>
+                                </div>
+                              </li>
+                            );
+                          },
+                        )}
+                      </ol>
+                    )}
+                  </div>
+
+                  <div className="border-t border-white/10 px-5 py-4">
+                    <p className="text-xs font-black text-white/40">
+                      내 최고점
+                    </p>
+
+                    <p className="mt-1 text-right text-2xl font-black tabular-nums text-white">
+                      {displayedBuddhaBest.toLocaleString(
+                        "ko-KR",
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </aside>
+
+              <div className="relative mx-auto aspect-square h-[min(calc(100dvh-140px),calc(100dvw-32px),760px)] max-h-full max-w-full lg:h-[min(calc(100dvh-116px),calc(100dvw-590px),780px)]">
                 <div
                   className="relative h-full w-full touch-none overflow-hidden rounded-[12px] border border-white/20 bg-[#080808] p-[clamp(5px,0.55vw,9px)] shadow-[0_0_55px_rgba(255,255,255,0.04)]"
                   onTouchStart={handleTouchStart}
@@ -3803,10 +4136,9 @@ if (
                     </p>
 
                     <p className="mt-3 text-center text-3xl font-black tabular-nums">
-                      {Math.max(
-                        score,
-                        bestScore,
-                      ).toLocaleString("ko-KR")}
+                      {displayedBuddhaBest.toLocaleString(
+                        "ko-KR",
+                      )}
                     </p>
                   </div>
                 </div>
@@ -3858,6 +4190,67 @@ if (
                       bestScore,
                     ).toLocaleString("ko-KR")}
                   </p>
+                </div>
+              </aside>
+
+              <aside className="w-full max-w-[760px] rounded-2xl border border-white/15 bg-[#080808] p-3 lg:hidden">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-black text-white">
+                    🧘 부처 랭킹 TOP 10
+                  </h2>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void loadBuddhaRanking();
+                    }}
+                    className="text-xs font-black text-violet-300"
+                  >
+                    새로고침
+                  </button>
+                </div>
+
+                <div className="mt-3 max-h-40 overflow-y-auto">
+                  {buddhaRanking.length ===
+                  0 ? (
+                    <p className="py-5 text-center text-xs font-bold text-white/40">
+                      아직 등록된 기록이 없습니다.
+                    </p>
+                  ) : (
+                    <ol className="space-y-1.5">
+                      {buddhaRanking.map(
+                        (entry) => (
+                          <li
+                            key={`mobile-${entry.userId}`}
+                            className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs ${
+                              entry.userId ===
+                              currentBuddhaUserId
+                                ? "bg-violet-500/20"
+                                : "bg-white/[0.035]"
+                            }`}
+                          >
+                            <span className="w-6 font-black text-violet-300">
+                              {entry.rank}
+                            </span>
+
+                            <span>
+                              {entry.avatarEmoji}
+                            </span>
+
+                            <span className="min-w-0 flex-1 truncate font-black">
+                              {entry.nickname}
+                            </span>
+
+                            <span className="font-black tabular-nums">
+                              {entry.bestScore.toLocaleString(
+                                "ko-KR",
+                              )}
+                            </span>
+                          </li>
+                        ),
+                      )}
+                    </ol>
+                  )}
                 </div>
               </aside>
             </div>
@@ -4044,21 +4437,28 @@ if (
           HOO 2048
         </h2>
 
-        <p className="mt-1 text-sm text-[#8b849d]">
-          {targetTile.toLocaleString(
-            "ko-KR",
-          )}
-          을 완성하면 종합 점수{" "}
-          {awardedScore.toLocaleString(
-            "ko-KR",
-          )}
-          점을 획득합니다.
-        </p>
+        {difficulty === "buddha" ? (
+          <p className="mt-1 text-sm text-[#8b849d]">
+            클리어 대신 최고점수로 경쟁하는
+            생존 랭킹 모드입니다.
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-[#8b849d]">
+            {targetTile.toLocaleString(
+              "ko-KR",
+            )}
+            을 완성하면 종합 점수{" "}
+            {awardedScore.toLocaleString(
+              "ko-KR",
+            )}
+            점을 획득합니다.
+          </p>
+        )}
 
         {difficulty === "buddha" && (
           <p className="mt-1 text-xs font-semibold text-[#8f86a8]">
-            부처모드 기반 완성 · 5×5 · 전체화면 ·
-            GOOD LUCK 연출 · ESC 종료
+            5×5 생존 랭킹 · 최고점수 기록 ·
+            종합점수 미지급 · ESC 종료
           </p>
         )}
 

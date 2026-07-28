@@ -5,6 +5,7 @@ const DIFFICULTIES = new Set([
   "easy",
   "normal",
   "hard",
+  "buddha",
 ]);
 
 export async function POST(request: Request) {
@@ -73,7 +74,8 @@ export async function POST(request: Request) {
     ) {
       return NextResponse.json(
         {
-          error: "올바르지 않은 플레이 시간입니다.",
+          error:
+            "올바르지 않은 플레이 시간입니다.",
         },
         {
           status: 400,
@@ -87,7 +89,8 @@ export async function POST(request: Request) {
     ) {
       return NextResponse.json(
         {
-          error: "올바르지 않은 최고 타일입니다.",
+          error:
+            "올바르지 않은 최고 타일입니다.",
         },
         {
           status: 400,
@@ -95,11 +98,125 @@ export async function POST(request: Request) {
       );
     }
 
+    /*
+     * 부처모드
+     *
+     * 종합점수를 지급하지 않고
+     * 플레이 기록만 저장한다.
+     *
+     * 랭킹에서는 사용자별 MAX(score)를 사용한다.
+     */
+    if (difficulty === "buddha") {
+      const {
+        error: insertError,
+      } = await supabase
+        .from("hoo2048_scores")
+        .insert({
+          user_id: user.id,
+          difficulty: "buddha",
+          score,
+          elapsed_seconds:
+            elapsedSeconds,
+          awarded_score: 0,
+        });
+
+      if (insertError) {
+        console.error(
+          "부처모드 기록 저장 오류:",
+          {
+            code: insertError.code,
+            message:
+              insertError.message,
+            details:
+              insertError.details,
+            hint: insertError.hint,
+          },
+        );
+
+        return NextResponse.json(
+          {
+            error:
+              insertError.message,
+            code: insertError.code,
+            details:
+              insertError.details,
+            hint: insertError.hint,
+          },
+          {
+            status: 500,
+          },
+        );
+      }
+
+      const {
+        data: bestScoreData,
+        error: bestScoreError,
+      } = await supabase
+        .from("hoo2048_scores")
+        .select("score")
+        .eq("user_id", user.id)
+        .eq("difficulty", "buddha")
+        .order("score", {
+          ascending: false,
+        })
+        .limit(1)
+        .maybeSingle();
+
+      if (bestScoreError) {
+        console.error(
+          "부처모드 최고점수 조회 오류:",
+          {
+            code: bestScoreError.code,
+            message:
+              bestScoreError.message,
+            details:
+              bestScoreError.details,
+            hint: bestScoreError.hint,
+          },
+        );
+
+        return NextResponse.json(
+          {
+            error:
+              bestScoreError.message,
+            code:
+              bestScoreError.code,
+            details:
+              bestScoreError.details,
+            hint:
+              bestScoreError.hint,
+          },
+          {
+            status: 500,
+          },
+        );
+      }
+
+      return NextResponse.json({
+        score,
+        difficulty,
+        elapsedSeconds,
+        maxTile,
+        awardedScore: 0,
+        totalScore: 0,
+        bestScore:
+          bestScoreData?.score ??
+          score,
+      });
+    }
+
+    /*
+     * 일반 2048
+     *
+     * 기존 complete_hoo2048 RPC와
+     * 종합점수 지급 방식을 그대로 유지한다.
+     */
     const { data, error: rpcError } =
       await supabase.rpc(
         "complete_hoo2048",
         {
-          p_difficulty: difficulty,
+          p_difficulty:
+            difficulty,
           p_score: score,
           p_elapsed_seconds:
             elapsedSeconds,
@@ -113,7 +230,8 @@ export async function POST(request: Request) {
         {
           code: rpcError.code,
           message: rpcError.message,
-          details: rpcError.details,
+          details:
+            rpcError.details,
           hint: rpcError.hint,
         },
       );
@@ -122,7 +240,8 @@ export async function POST(request: Request) {
         {
           error: rpcError.message,
           code: rpcError.code,
-          details: rpcError.details,
+          details:
+            rpcError.details,
           hint: rpcError.hint,
         },
         {
