@@ -101,6 +101,103 @@ function formatTimelineTime(
   );
 }
 
+
+function getMinuteOfDay(
+  dateString: string,
+) {
+  const date = new Date(dateString);
+
+  if (Number.isNaN(date.getTime())) {
+    return 0;
+  }
+
+  return (
+    date.getHours() * 60 +
+    date.getMinutes() +
+    date.getSeconds() / 60
+  );
+}
+
+function polarToCartesian(
+  centerX: number,
+  centerY: number,
+  radius: number,
+  angleInDegrees: number,
+) {
+  const angleInRadians =
+    ((angleInDegrees - 90) *
+      Math.PI) /
+    180;
+
+  return {
+    x:
+      centerX +
+      radius *
+        Math.cos(angleInRadians),
+    y:
+      centerY +
+      radius *
+        Math.sin(angleInRadians),
+  };
+}
+
+function createScheduleArcPath(
+  startMinute: number,
+  endMinute: number,
+  radius: number,
+) {
+  const safeStart = Math.max(
+    0,
+    Math.min(1440, startMinute),
+  );
+
+  const safeEnd = Math.max(
+    safeStart,
+    Math.min(1440, endMinute),
+  );
+
+  const startAngle =
+    (safeStart / 1440) * 360;
+
+  const endAngle =
+    (safeEnd / 1440) * 360;
+
+  const start =
+    polarToCartesian(
+      120,
+      120,
+      radius,
+      endAngle,
+    );
+
+  const end =
+    polarToCartesian(
+      120,
+      120,
+      radius,
+      startAngle,
+    );
+
+  const largeArcFlag =
+    endAngle - startAngle > 180
+      ? 1
+      : 0;
+
+  return [
+    "M",
+    start.x,
+    start.y,
+    "A",
+    radius,
+    radius,
+    0,
+    largeArcFlag,
+    0,
+    end.x,
+    end.y,
+  ].join(" ");
+}
+
 type ProfileCalendarProps = {
   history: FocusHistory[];
 };
@@ -502,6 +599,389 @@ function CalendarDayButton({
   );
 }
 
+type CircularDayScheduleProps = {
+  selectedDay: FocusCalendarDay;
+};
+
+function CircularDaySchedule({
+  selectedDay,
+}: CircularDayScheduleProps) {
+  const scheduleSessions =
+    useMemo(() => {
+      return [
+        ...selectedDay.sessions,
+      ]
+        .sort(
+          (a, b) =>
+            new Date(
+              a.startedAt,
+            ).getTime() -
+            new Date(
+              b.startedAt,
+            ).getTime(),
+        )
+        .map((session) => {
+          const startMinute =
+            getMinuteOfDay(
+              session.startedAt,
+            );
+
+          const completedMinute =
+            getMinuteOfDay(
+              session.completedAt,
+            );
+
+          const durationMinutes =
+            Math.max(
+              1,
+              session.actualSeconds / 60,
+            );
+
+          let endMinute =
+            completedMinute;
+
+          if (
+            endMinute <= startMinute
+          ) {
+            endMinute =
+              startMinute +
+              durationMinutes;
+          }
+
+          return {
+            ...session,
+            startMinute,
+            endMinute: Math.min(
+              1440,
+              Math.max(
+                startMinute + 1,
+                endMinute,
+              ),
+            ),
+          };
+        });
+    }, [selectedDay]);
+
+  const totalRecordedMinutes =
+    scheduleSessions.reduce(
+      (total, session) =>
+        total +
+        Math.max(
+          0,
+          session.endMinute -
+            session.startMinute,
+        ),
+      0,
+    );
+
+  return (
+    <section className="mt-6 border-t border-white/[0.08] pt-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-black tracking-[0.1em] text-white/55">
+            DAILY SCHEDULE
+          </p>
+
+          <p className="mt-1 text-xs font-bold text-white/32">
+            00시부터 24시까지의 집중
+            흐름이에요.
+          </p>
+        </div>
+
+        <span className="rounded-full bg-[#7869e8]/14 px-3 py-1.5 text-xs font-black text-[#c2bbff]">
+          {Math.round(
+            totalRecordedMinutes,
+          )}
+          분
+        </span>
+      </div>
+
+      <div className="mt-5 rounded-[24px] border border-white/[0.08] bg-black/15 p-4">
+        <div className="mx-auto max-w-[280px]">
+          <svg
+            viewBox="0 0 240 240"
+            className="h-auto w-full"
+            role="img"
+            aria-label={`${formatCalendarDate(
+              selectedDay.date,
+            )} 24시간 원형 집중 스케줄`}
+          >
+            <defs>
+              <linearGradient
+                id={`schedule-gradient-${selectedDay.dateKey}`}
+                x1="0%"
+                y1="0%"
+                x2="100%"
+                y2="100%"
+              >
+                <stop
+                  offset="0%"
+                  stopColor="#6656d9"
+                />
+                <stop
+                  offset="100%"
+                  stopColor="#b0a4ff"
+                />
+              </linearGradient>
+
+              <filter
+                id={`schedule-glow-${selectedDay.dateKey}`}
+                x="-40%"
+                y="-40%"
+                width="180%"
+                height="180%"
+              >
+                <feGaussianBlur
+                  stdDeviation="3"
+                  result="blur"
+                />
+
+                <feMerge>
+                  <feMergeNode
+                    in="blur"
+                  />
+                  <feMergeNode
+                    in="SourceGraphic"
+                  />
+                </feMerge>
+              </filter>
+            </defs>
+
+            <circle
+              cx="120"
+              cy="120"
+              r="86"
+              fill="none"
+              stroke="rgba(255,255,255,0.065)"
+              strokeWidth="18"
+            />
+
+            {Array.from({
+              length: 24,
+            }).map((_, hour) => {
+              const angle =
+                (hour / 24) *
+                  Math.PI *
+                  2 -
+                Math.PI / 2;
+
+              const isMajor =
+                hour % 6 === 0;
+
+              const innerRadius =
+                isMajor ? 72 : 76;
+
+              const outerRadius = 98;
+
+              return (
+                <line
+                  key={hour}
+                  x1={
+                    120 +
+                    Math.cos(angle) *
+                      innerRadius
+                  }
+                  y1={
+                    120 +
+                    Math.sin(angle) *
+                      innerRadius
+                  }
+                  x2={
+                    120 +
+                    Math.cos(angle) *
+                      outerRadius
+                  }
+                  y2={
+                    120 +
+                    Math.sin(angle) *
+                      outerRadius
+                  }
+                  stroke={
+                    isMajor
+                      ? "rgba(255,255,255,0.42)"
+                      : "rgba(255,255,255,0.13)"
+                  }
+                  strokeWidth={
+                    isMajor ? 2 : 1
+                  }
+                  strokeLinecap="round"
+                />
+              );
+            })}
+
+            {scheduleSessions.map(
+              (session, index) => (
+                <path
+                  key={session.id}
+                  d={createScheduleArcPath(
+                    session.startMinute,
+                    session.endMinute,
+                    86,
+                  )}
+                  fill="none"
+                  stroke={`url(#schedule-gradient-${selectedDay.dateKey})`}
+                  strokeWidth="18"
+                  strokeLinecap="round"
+                  filter={`url(#schedule-glow-${selectedDay.dateKey})`}
+                  opacity={Math.max(
+                    0.58,
+                    1 - index * 0.06,
+                  )}
+                >
+                  <title>
+                    {`${session.goal}: ${formatTimelineTime(
+                      session.startedAt,
+                    )} - ${formatTimelineTime(
+                      session.completedAt,
+                    )}`}
+                  </title>
+                </path>
+              ),
+            )}
+
+            <circle
+              cx="120"
+              cy="120"
+              r="61"
+              fill="rgba(12,15,28,0.94)"
+              stroke="rgba(255,255,255,0.07)"
+            />
+
+            <text
+              x="120"
+              y="104"
+              textAnchor="middle"
+              fill="rgba(255,255,255,0.42)"
+              fontSize="10"
+              fontWeight="800"
+              letterSpacing="1.6"
+            >
+              TOTAL FOCUS
+            </text>
+
+            <text
+              x="120"
+              y="129"
+              textAnchor="middle"
+              fill="rgba(255,255,255,0.96)"
+              fontSize="20"
+              fontWeight="900"
+            >
+              {formatProfileDuration(
+                selectedDay.totalSeconds,
+              )}
+            </text>
+
+            <text
+              x="120"
+              y="149"
+              textAnchor="middle"
+              fill="rgba(190,182,255,0.8)"
+              fontSize="10"
+              fontWeight="800"
+            >
+              {selectedDay.sessionCount}
+              회 집중
+            </text>
+
+            <text
+              x="120"
+              y="15"
+              textAnchor="middle"
+              fill="rgba(255,255,255,0.42)"
+              fontSize="10"
+              fontWeight="800"
+            >
+              00
+            </text>
+
+            <text
+              x="226"
+              y="124"
+              textAnchor="middle"
+              fill="rgba(255,255,255,0.42)"
+              fontSize="10"
+              fontWeight="800"
+            >
+              06
+            </text>
+
+            <text
+              x="120"
+              y="236"
+              textAnchor="middle"
+              fill="rgba(255,255,255,0.42)"
+              fontSize="10"
+              fontWeight="800"
+            >
+              12
+            </text>
+
+            <text
+              x="14"
+              y="124"
+              textAnchor="middle"
+              fill="rgba(255,255,255,0.42)"
+              fontSize="10"
+              fontWeight="800"
+            >
+              18
+            </text>
+          </svg>
+        </div>
+
+        {scheduleSessions.length === 0 ? (
+          <div className="mt-1 rounded-2xl border border-dashed border-white/10 px-4 py-5 text-center">
+            <p className="text-sm font-black text-white/45">
+              표시할 집중 구간이 없어요.
+            </p>
+
+            <p className="mt-1 text-xs font-bold text-white/28">
+              집중 세션을 완료하면 원형
+              스케줄에 자동으로 표시됩니다.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-3 space-y-2">
+            {scheduleSessions.map(
+              (session) => (
+                <article
+                  key={session.id}
+                  className="flex items-center gap-3 rounded-2xl border border-white/[0.07] bg-white/[0.025] px-3 py-3"
+                >
+                  <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[#9c8fff] shadow-[0_0_12px_rgba(156,143,255,0.7)]" />
+
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-black text-white/82">
+                      {session.goal}
+                    </p>
+
+                    <p className="mt-1 text-[11px] font-bold text-white/34">
+                      {formatTimelineTime(
+                        session.startedAt,
+                      )}
+                      {" — "}
+                      {formatTimelineTime(
+                        session.completedAt,
+                      )}
+                    </p>
+                  </div>
+
+                  <span className="shrink-0 text-xs font-black text-[#bdb5ff]">
+                    {formatProfileDuration(
+                      session.actualSeconds,
+                    )}
+                  </span>
+                </article>
+              ),
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 type SelectedDayTimelineProps = {
   selectedDay:
     FocusCalendarDay | null;
@@ -568,6 +1048,10 @@ function SelectedDayTimeline({
           </p>
         </article>
       </div>
+
+      <CircularDaySchedule
+        selectedDay={selectedDay}
+      />
 
       <div className="mt-6 border-t border-white/[0.08] pt-5">
         <div className="flex items-center justify-between">

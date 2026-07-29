@@ -5143,10 +5143,10 @@ setSecretPinInput("");
           className={`rounded-xl py-2 text-xs font-black transition ${
             isSelected
               ? difficulty === "buddha"
-                ? "border border-white/20 bg-[#2b2b30] text-white shadow-[0_8px_20px_rgba(255,255,255,0.08)]"
+                ? "bg-white text-black shadow-[0_8px_20px_rgba(255,255,255,0.12)]"
                 : "bg-[#7467d8] text-white"
               : isBuddhaCard
-                ? "border border-white/20 bg-white/[0.04] text-white hover:bg-white/10"
+                ? "border border-white/10 bg-white/[0.04] text-white/40 hover:bg-white/10 hover:text-white"
                 : difficulty === "buddha"
                   ? "border border-black bg-white text-black hover:bg-black hover:text-white"
                   : "bg-white text-[#827b95] hover:bg-[#eeeafd]"
@@ -5231,11 +5231,11 @@ setSecretPinInput("");
 
     setMinigameScreen("2048");
   }}
-className={`mt-6 w-full rounded-2xl py-3.5 text-sm font-black transition hover:scale-[1.02] ${
-  hoo2048Difficulty === "buddha"
-    ? "bg-[#2b2b30] text-white hover:bg-[#36363d]"
-    : "bg-[#f0a33a] text-white hover:bg-[#df9027]"
-}`}
+  className={`mt-6 w-full rounded-2xl py-3.5 text-sm font-black transition hover:scale-[1.02] ${
+    hoo2048Difficulty === "buddha"
+      ? "bg-white text-black hover:bg-neutral-200"
+      : "bg-[#f0a33a] text-white hover:bg-[#df9027]"
+  }`}
 >
   {hoo2048Difficulty === "buddha"
     ? "깰 게임이면 안 왔다. 도전!"
