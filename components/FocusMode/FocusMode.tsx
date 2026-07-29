@@ -37,23 +37,27 @@ import {
 import {
   formatDurationLabel,
 } from "./utils/format";
+
 import {
   loadFocusHistory,
   saveFocusHistoryRecord,
+  syncFocusHistoryWithCloud,
 } from "./utils/focusHistory";
+
 import {
   getFocusStatistics,
 } from "./utils/focusStatistics";
 import {
   getFocusStreak,
 } from "./utils/focusStreak";
+
 import {
   createFocusMemoId,
 } from "./utils/id";
+
 import {
-  deleteHooMemo,
-  saveHooMemo,
-} from "./utils/memoStorage";
+  createClient,
+} from "@/lib/supabase/client";
 
 type FocusModeProps = {
   floatingButtonsDirection:
@@ -74,6 +78,10 @@ export default function FocusMode({
   showFloatingButtons,
   floatingButtonsTarget,
 }: FocusModeProps) {
+  const supabase = useMemo(
+    () => createClient(),
+    [],
+  );
 
   const [isOpen, setIsOpen] =
     useState(false);
@@ -254,27 +262,49 @@ const [isRunning, setIsRunning] =
     initialSeconds,
     remainingSeconds,
   ]);
+function applyProfileHistory(
+  history: FocusHistory[],
+) {
+  setProfileHistory(history);
 
-  function refreshProfileData() {
-    const history =
-      loadFocusHistory();
+  setProfileStatistics(
+    getFocusStatistics(history),
+  );
 
-    setProfileHistory(history);
+  setProfileStreak(
+    getFocusStreak(history),
+  );
+}
 
-    setProfileStatistics(
-      getFocusStatistics(history),
-    );
+function refreshProfileData() {
+  applyProfileHistory(
+    loadFocusHistory(),
+  );
+}
 
-    setProfileStreak(
-      getFocusStreak(history),
-    );
-  }
+async function syncProfileDataWithCloud() {
+  const history =
+    await syncFocusHistoryWithCloud();
 
-  function openProfile() {
-    refreshProfileData();
-    setProfileTab("overview");
-    setIsProfileOpen(true);
-  }
+  applyProfileHistory(history);
+}
+
+ function openProfile() {
+  /*
+   * 로컬 기록을 먼저 보여줘서
+   * 프로필이 즉시 열린다.
+   */
+  refreshProfileData();
+
+  setProfileTab("overview");
+  setIsProfileOpen(true);
+
+  /*
+   * 이후 서버 기록을 불러와
+   * 프로필 통계와 그래프를 갱신한다.
+   */
+  void syncProfileDataWithCloud();
+}
 
   function closeProfile() {
     setIsProfileOpen(false);
@@ -387,7 +417,7 @@ const [isRunning, setIsRunning] =
   setIsRunning(true);
 }
 
-  function saveQuickMemo() {
+  async function saveQuickMemo() {
     const content =
       quickMemoInput.trim();
 
@@ -413,6 +443,9 @@ const [isRunning, setIsRunning] =
       updatedAt: now,
     };
 
+    /*
+     * 화면에 먼저 즉시 반영한다.
+     */
     setFocusQuickMemos(
       (previous) => [
         newQuickMemo,
@@ -423,18 +456,134 @@ const [isRunning, setIsRunning] =
     setQuickMemoInput("");
 
     try {
-      saveHooMemo(newHooMemo);
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      /*
+       * 비로그인 상태에서는
+       * 기존 브라우저 저장 방식을 유지한다.
+       */
+      if (!user) {
+        const savedValue =
+          window.localStorage.getItem(
+            "hoo-memos",
+          );
+
+        const parsedValue: unknown =
+          savedValue
+            ? JSON.parse(savedValue)
+            : [];
+
+        const previousMemos =
+          Array.isArray(parsedValue)
+            ? parsedValue
+            : [];
+
+        const nextMemos = [
+          {
+            ...newHooMemo,
+            isSecret: false,
+          },
+          ...previousMemos,
+        ];
+
+        window.localStorage.setItem(
+          "hoo-memos",
+          JSON.stringify(nextMemos),
+        );
+
+        window.dispatchEvent(
+          new CustomEvent(
+            "hoo-memos-updated",
+            {
+              detail: nextMemos,
+            },
+          ),
+        );
+
+        return;
+      }
+
+      const { error: insertError } =
+        await supabase
+          .from("memos")
+          .insert({
+            id: newHooMemo.id,
+            user_id: user.id,
+            title: newHooMemo.title,
+            content: newHooMemo.content,
+            is_secret: false,
+            created_at:
+              newHooMemo.updatedAt,
+            updated_at:
+              newHooMemo.updatedAt,
+          });
+
+      if (insertError) {
+        throw insertError;
+      }
+
+      /*
+       * page.tsx에 Supabase 재조회를 요청한다.
+       */
+      window.dispatchEvent(
+        new CustomEvent(
+          "hoo-memos-updated",
+        ),
+      );
     } catch (error) {
       console.error(
         "집중 메모를 저장하지 못했습니다.",
         error,
       );
+
+      /*
+       * 서버 저장 실패 시
+       * Focus Mode 목록에서 되돌린다.
+       */
+      setFocusQuickMemos(
+        (previous) =>
+          previous.filter(
+            (memo) =>
+              memo.id !==
+              newQuickMemo.id,
+          ),
+      );
+
+      window.alert(
+        "집중 메모를 서버에 저장하지 못했습니다.",
+      );
     }
   }
 
-  function deleteQuickMemo(
+  async function deleteQuickMemo(
     memoId: string,
   ) {
+    const targetMemo =
+      focusQuickMemos.find(
+        (memo) =>
+          memo.id === memoId,
+      );
+
+    if (!targetMemo) {
+      return;
+    }
+
+    const targetIndex =
+      focusQuickMemos.findIndex(
+        (memo) =>
+          memo.id === memoId,
+      );
+
+    /*
+     * Focus Mode 화면에서 먼저 삭제한다.
+     */
     setFocusQuickMemos(
       (previous) =>
         previous.filter(
@@ -444,11 +593,119 @@ const [isRunning, setIsRunning] =
     );
 
     try {
-      deleteHooMemo(memoId);
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      /*
+       * 비로그인 상태에서는
+       * localStorage에서 삭제한다.
+       */
+      if (!user) {
+        const savedValue =
+          window.localStorage.getItem(
+            "hoo-memos",
+          );
+
+        const parsedValue: unknown =
+          savedValue
+            ? JSON.parse(savedValue)
+            : [];
+
+        const previousMemos =
+          Array.isArray(parsedValue)
+            ? parsedValue
+            : [];
+
+        const nextMemos =
+          previousMemos.filter(
+            (memo) => {
+              if (
+                !memo ||
+                typeof memo !== "object"
+              ) {
+                return false;
+              }
+
+              return (
+                (memo as { id?: unknown }).id !==
+                memoId
+              );
+            },
+          );
+
+        window.localStorage.setItem(
+          "hoo-memos",
+          JSON.stringify(nextMemos),
+        );
+
+        window.dispatchEvent(
+          new CustomEvent(
+            "hoo-memos-updated",
+            {
+              detail: nextMemos,
+            },
+          ),
+        );
+
+        return;
+      }
+
+      const { error: deleteError } =
+        await supabase
+          .from("memos")
+          .delete()
+          .eq("id", memoId)
+          .eq("user_id", user.id);
+
+      if (deleteError) {
+        throw deleteError;
+      }
+
+      /*
+       * page.tsx에 Supabase 재조회를 요청한다.
+       */
+      window.dispatchEvent(
+        new CustomEvent(
+          "hoo-memos-updated",
+        ),
+      );
     } catch (error) {
       console.error(
         "집중 메모를 삭제하지 못했습니다.",
         error,
+      );
+
+      /*
+       * 서버 삭제 실패 시
+       * 기존 위치에 복원한다.
+       */
+      setFocusQuickMemos(
+        (previous) => {
+          const nextMemos = [
+            ...previous,
+          ];
+
+          nextMemos.splice(
+            Math.max(
+              0,
+              targetIndex,
+            ),
+            0,
+            targetMemo,
+          );
+
+          return nextMemos;
+        },
+      );
+
+      window.alert(
+        "집중 메모를 서버에서 삭제하지 못했습니다.",
       );
     }
   }
@@ -611,6 +868,55 @@ function restartFocusMode() {
 
   setView("setup");
 }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function initializeFocusHistory() {
+      const history =
+        await syncFocusHistoryWithCloud();
+
+      if (cancelled) {
+        return;
+      }
+
+      applyProfileHistory(history);
+    }
+
+    void initializeFocusHistory();
+
+    function handleFocusHistoryUpdated(
+      event: Event,
+    ) {
+      const customEvent =
+        event as CustomEvent<
+          FocusHistory[]
+        >;
+
+      const history =
+        Array.isArray(
+          customEvent.detail,
+        )
+          ? customEvent.detail
+          : loadFocusHistory();
+
+      applyProfileHistory(history);
+    }
+
+    window.addEventListener(
+      "hoo-focus-history-updated",
+      handleFocusHistoryUpdated,
+    );
+
+    return () => {
+      cancelled = true;
+
+      window.removeEventListener(
+        "hoo-focus-history-updated",
+        handleFocusHistoryUpdated,
+      );
+    };
+  }, []);
 
   useEffect(() => {
     if (isProfileOpen) {

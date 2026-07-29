@@ -389,8 +389,10 @@ function getSudokuDifficultyLabel(difficulty: SudokuDifficulty) {
 
 
 export default function Home() {
-  
-  const supabase = createClient();
+  const supabase = useMemo(
+    () => createClient(),
+    [],
+  );
 
   const today = useMemo(() => new Date(), []);
 
@@ -468,8 +470,29 @@ const [showFloatingButtons, setShowFloatingButtons] =
 
   /* 투두리스트 */
 
-const [todos, setTodos] = useState<TodoItem[]>([]);
-const [todoContent, setTodoContent] = useState("");
+const [todos, setTodos] =
+  useState<TodoItem[]>([]);
+
+const [todoContent, setTodoContent] =
+  useState("");
+
+const [
+  isTodoCloudReady,
+  setIsTodoCloudReady,
+] = useState(false);
+
+const [
+  draggingTodoId,
+  setDraggingTodoId,
+] = useState<string | null>(null);
+
+const [
+  dragOverTodoId,
+  setDragOverTodoId,
+] = useState<string | null>(null);
+
+const todoOrderDuringDragRef =
+  useRef<TodoItem[] | null>(null);
 
 const [isRecommendedTodoCompleted, setIsRecommendedTodoCompleted] =
   useState(false);
@@ -500,11 +523,21 @@ const [isRecommendedTodoCompleted, setIsRecommendedTodoCompleted] =
     ),
   );
 
-  const [schedules, setSchedules] =
-    useState<ScheduleMap>({});
+ const [schedules, setSchedules] =
+  useState<ScheduleMap>({});
 
-  const [selectedScheduleId, setSelectedScheduleId] =
+const [
+  isScheduleCloudReady,
+  setIsScheduleCloudReady,
+] = useState(false);
+
+const [selectedScheduleId, setSelectedScheduleId] =
   useState<string | null>(null);
+
+  const [
+  editingScheduleId,
+  setEditingScheduleId,
+] = useState<string | null>(null);
 
 const scheduleDragStartXRef =
   useRef<number | null>(null);
@@ -586,10 +619,18 @@ const [
 
   /* 메모 */
 
-  const [memos, setMemos] = useState<Memo[]>([]);
-  const [memoTitle, setMemoTitle] = useState("");
+const [memos, setMemos] =
+  useState<Memo[]>([]);
 
-  const [isMemoSecret, setIsMemoSecret] =
+const [memoTitle, setMemoTitle] =
+  useState("");
+
+const [
+  isMemoCloudReady,
+  setIsMemoCloudReady,
+] = useState(false);
+
+const [isMemoSecret, setIsMemoSecret] =
   useState(false);
 
  /* 전달사항 */
@@ -1341,36 +1382,657 @@ if (savedMinigameCompletionDate === todayStorageDate) {
       setIsLoaded(true);
     }
   }, []);
+/* ─────────────────────────────
+   일정 클라우드 불러오기
+   기존 localStorage 기록 자동 이전
+───────────────────────────── */
 
-  /* ─────────────────────────────
-     일정 자동 저장
-  ───────────────────────────── */
+useEffect(() => {
+  let cancelled = false;
 
-  useEffect(() => {
-    if (!isLoaded) {
-      return;
+  async function loadCloudSchedules() {
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      /*
+       * 비로그인 상태에서는
+       * 기존 localStorage 일정을 그대로 사용한다.
+       */
+      if (!user) {
+        return;
+      }
+
+      const {
+        data: cloudSchedules,
+        error: cloudScheduleError,
+      } = await supabase
+        .from("schedules")
+        .select(
+          `
+            id,
+            group_id,
+            title,
+            content,
+            schedule_date,
+            repeat_type,
+            is_secret,
+            created_at
+          `,
+        )
+        .eq("user_id", user.id)
+        .order("schedule_date", {
+          ascending: true,
+        })
+        .order("created_at", {
+          ascending: true,
+        });
+
+      if (cloudScheduleError) {
+        throw cloudScheduleError;
+      }
+
+      /*
+       * 서버에 일정이 있으면
+       * 서버 데이터를 최우선으로 사용한다.
+       */
+      if (
+        Array.isArray(cloudSchedules) &&
+        cloudSchedules.length > 0
+      ) {
+        const normalizedSchedules =
+          cloudSchedules.reduce<ScheduleMap>(
+            (result, schedule) => {
+              const date =
+                typeof schedule.schedule_date ===
+                "string"
+                  ? schedule.schedule_date
+                  : "";
+
+              if (!date) {
+                return result;
+              }
+
+              const normalizedSchedule: Schedule = {
+                id: schedule.id,
+
+                groupId:
+                  typeof schedule.group_id ===
+                    "string"
+                    ? schedule.group_id
+                    : schedule.id,
+
+                title:
+                  typeof schedule.title ===
+                    "string"
+                    ? schedule.title
+                    : "제목 없는 일정",
+
+                content:
+                  typeof schedule.content ===
+                    "string"
+                    ? schedule.content
+                    : "",
+
+                date,
+
+                repeatType:
+                  schedule.repeat_type ===
+                    "dailyRange" ||
+                  schedule.repeat_type ===
+                    "weekly" ||
+                  schedule.repeat_type ===
+                    "monthly"
+                    ? schedule.repeat_type
+                    : "none",
+
+                createdAt:
+                  schedule.created_at ??
+                  new Date().toISOString(),
+
+                isSecret:
+                  schedule.is_secret === true,
+              };
+
+              result[date] = [
+                ...(result[date] ?? []),
+                normalizedSchedule,
+              ];
+
+              return result;
+            },
+            {},
+          );
+
+        if (cancelled) {
+          return;
+        }
+
+        setSchedules(
+          normalizedSchedules,
+        );
+
+        window.localStorage.setItem(
+          SCHEDULE_STORAGE_KEY,
+          JSON.stringify(
+            normalizedSchedules,
+          ),
+        );
+
+        return;
+      }
+
+      /*
+       * 서버에 일정이 없으면
+       * 브라우저의 기존 일정을 서버로 이전한다.
+       */
+      const savedSchedules =
+        window.localStorage.getItem(
+          SCHEDULE_STORAGE_KEY,
+        );
+
+      if (!savedSchedules) {
+        if (!cancelled) {
+          setSchedules({});
+        }
+
+        return;
+      }
+
+      const parsedValue: unknown =
+        JSON.parse(savedSchedules);
+
+      if (
+        !parsedValue ||
+        typeof parsedValue !== "object" ||
+        Array.isArray(parsedValue)
+      ) {
+        if (!cancelled) {
+          setSchedules({});
+        }
+
+        return;
+      }
+
+      const localScheduleMap =
+        parsedValue as Record<
+          string,
+          unknown
+        >;
+
+      const normalizedSchedules: ScheduleMap =
+        {};
+
+      Object.entries(
+        localScheduleMap,
+      ).forEach(
+        ([dateKey, value]) => {
+          if (!Array.isArray(value)) {
+            return;
+          }
+
+          const dateSchedules =
+            value.reduce<Schedule[]>(
+              (
+                result,
+                scheduleValue,
+              ) => {
+                if (
+                  !scheduleValue ||
+                  typeof scheduleValue !==
+                    "object"
+                ) {
+                  return result;
+                }
+
+                const schedule =
+                  scheduleValue as Partial<Schedule>;
+
+                const title =
+                  typeof schedule.title ===
+                    "string"
+                    ? schedule.title.trim()
+                    : "";
+
+                if (!title) {
+                  return result;
+                }
+
+                const normalizedSchedule: Schedule = {
+                  id:
+                    typeof schedule.id ===
+                      "string"
+                      ? schedule.id
+                      : createId(),
+
+                  groupId:
+                    typeof schedule.groupId ===
+                      "string"
+                      ? schedule.groupId
+                      : createId(),
+
+                  title,
+
+                  content:
+                    typeof schedule.content ===
+                      "string"
+                      ? schedule.content
+                      : "",
+
+                  date:
+                    typeof schedule.date ===
+                      "string"
+                      ? schedule.date
+                      : dateKey,
+
+                  repeatType:
+                    schedule.repeatType ===
+                      "dailyRange" ||
+                    schedule.repeatType ===
+                      "weekly" ||
+                    schedule.repeatType ===
+                      "monthly"
+                      ? schedule.repeatType
+                      : "none",
+
+                  createdAt:
+                    typeof schedule.createdAt ===
+                      "string"
+                      ? schedule.createdAt
+                      : new Date().toISOString(),
+
+                  isSecret:
+                    schedule.isSecret === true,
+                };
+
+                result.push(
+                  normalizedSchedule,
+                );
+
+                return result;
+              },
+              [],
+            );
+
+          if (
+            dateSchedules.length > 0
+          ) {
+            normalizedSchedules[
+              dateKey
+            ] = dateSchedules;
+          }
+        },
+      );
+
+      const localSchedules =
+        Object.values(
+          normalizedSchedules,
+        ).flat();
+
+      if (localSchedules.length === 0) {
+        if (!cancelled) {
+          setSchedules({});
+        }
+
+        return;
+      }
+
+      const migrationRows =
+        localSchedules.map(
+          (schedule) => ({
+            id: schedule.id,
+            user_id: user.id,
+            group_id:
+              schedule.groupId,
+            title:
+              schedule.title,
+            content:
+              schedule.content,
+            schedule_date:
+              schedule.date,
+            repeat_type:
+              schedule.repeatType,
+            is_secret:
+              schedule.isSecret,
+            created_at:
+              schedule.createdAt,
+            updated_at:
+              schedule.createdAt,
+          }),
+        );
+
+      const { error: migrationError } =
+        await supabase
+          .from("schedules")
+          .insert(
+            migrationRows,
+          );
+
+      if (migrationError) {
+        throw migrationError;
+      }
+
+      if (!cancelled) {
+        setSchedules(
+          normalizedSchedules,
+        );
+
+        console.log(
+          `${localSchedules.length}개의 기존 일정을 서버로 이전했습니다.`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        "일정 클라우드 불러오기 실패:",
+        error,
+      );
+    } finally {
+      if (!cancelled) {
+        setIsScheduleCloudReady(true);
+      }
     }
+  }
 
-    window.localStorage.setItem(
-      SCHEDULE_STORAGE_KEY,
-      JSON.stringify(schedules),
-    );
-  }, [schedules, isLoaded]);
+  void loadCloudSchedules();
 
-  /* ─────────────────────────────
-     메모 자동 저장
-  ───────────────────────────── */
+  return () => {
+    cancelled = true;
+  };
+}, [supabase]);
 
-  useEffect(() => {
-    if (!isLoaded) {
-      return;
+/* ─────────────────────────────
+   일정 로컬 캐시 저장
+───────────────────────────── */
+
+useEffect(() => {
+  if (
+    !isLoaded ||
+    !isScheduleCloudReady
+  ) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    SCHEDULE_STORAGE_KEY,
+    JSON.stringify(schedules),
+  );
+}, [
+  schedules,
+  isLoaded,
+  isScheduleCloudReady,
+]);
+
+
+/* ─────────────────────────────
+   메모 클라우드 불러오기
+   기존 localStorage 기록 자동 이전
+───────────────────────────── */
+
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadCloudMemos() {
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      /*
+       * 비로그인 상태에서는
+       * 기존 localStorage 메모를 그대로 사용한다.
+       */
+      if (!user) {
+        if (!cancelled) {
+          setIsMemoCloudReady(true);
+        }
+
+        return;
+      }
+
+      const {
+        data: cloudMemos,
+        error: cloudMemoError,
+      } = await supabase
+        .from("memos")
+        .select(
+          `
+            id,
+            title,
+            content,
+            is_secret,
+            updated_at
+          `,
+        )
+        .eq("user_id", user.id)
+        .order("updated_at", {
+          ascending: false,
+        });
+
+      if (cloudMemoError) {
+        throw cloudMemoError;
+      }
+
+      /*
+       * 서버에 메모가 있으면
+       * 서버 데이터를 우선 사용한다.
+       */
+      if (
+        Array.isArray(cloudMemos) &&
+        cloudMemos.length > 0
+      ) {
+        const normalizedMemos: Memo[] =
+          cloudMemos.map((memo) => ({
+            id: memo.id,
+
+            title:
+              typeof memo.title === "string"
+                ? memo.title
+                : "제목 없는 메모",
+
+            content:
+              typeof memo.content === "string"
+                ? memo.content
+                : "",
+
+            updatedAt:
+              memo.updated_at ??
+              new Date().toISOString(),
+
+            isSecret:
+              memo.is_secret === true,
+          }));
+
+        if (cancelled) {
+          return;
+        }
+
+        setMemos(normalizedMemos);
+
+        window.localStorage.setItem(
+          MEMO_STORAGE_KEY,
+          JSON.stringify(normalizedMemos),
+        );
+
+        return;
+      }
+
+      /*
+       * 서버에 메모가 없으면
+       * 브라우저의 기존 메모를 서버로 이전한다.
+       */
+      const savedMemos =
+        window.localStorage.getItem(
+          MEMO_STORAGE_KEY,
+        );
+
+      if (!savedMemos) {
+        if (!cancelled) {
+          setMemos([]);
+        }
+
+        return;
+      }
+
+      const parsedValue: unknown =
+        JSON.parse(savedMemos);
+
+      if (!Array.isArray(parsedValue)) {
+        if (!cancelled) {
+          setMemos([]);
+        }
+
+        return;
+      }
+
+      const localMemos =
+        parsedValue.reduce<Memo[]>(
+          (result, value, index) => {
+            if (
+              !value ||
+              typeof value !== "object"
+            ) {
+              return result;
+            }
+
+            const memo =
+              value as Partial<Memo>;
+
+            const title =
+              typeof memo.title === "string"
+                ? memo.title.trim()
+                : "";
+
+            const content =
+              typeof memo.content === "string"
+                ? memo.content
+                : "";
+
+            if (
+              !title &&
+              !content.trim()
+            ) {
+              return result;
+            }
+
+            const normalizedMemo: Memo = {
+              id:
+                typeof memo.id === "string"
+                  ? memo.id
+                  : createId(),
+
+              title:
+                title ||
+                "제목 없는 메모",
+
+              content,
+
+              updatedAt:
+                typeof memo.updatedAt ===
+                "string"
+                  ? memo.updatedAt
+                  : new Date(
+                      Date.now() + index,
+                    ).toISOString(),
+
+              isSecret:
+                memo.isSecret === true,
+            };
+
+            result.push(
+              normalizedMemo,
+            );
+
+            return result;
+          },
+          [],
+        );
+
+      if (localMemos.length === 0) {
+        if (!cancelled) {
+          setMemos([]);
+        }
+
+        return;
+      }
+
+      const migrationRows =
+        localMemos.map((memo) => ({
+          id: memo.id,
+          user_id: user.id,
+          title: memo.title,
+          content: memo.content,
+          is_secret: memo.isSecret,
+          created_at: memo.updatedAt,
+          updated_at: memo.updatedAt,
+        }));
+
+      const { error: migrationError } =
+        await supabase
+          .from("memos")
+          .insert(migrationRows);
+
+      if (migrationError) {
+        throw migrationError;
+      }
+
+      if (!cancelled) {
+        setMemos(localMemos);
+
+        console.log(
+          `${localMemos.length}개의 기존 메모를 서버로 이전했습니다.`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        "메모 클라우드 불러오기 실패:",
+        error,
+      );
+    } finally {
+      if (!cancelled) {
+        setIsMemoCloudReady(true);
+      }
     }
+  }
 
-    window.localStorage.setItem(
-      MEMO_STORAGE_KEY,
-      JSON.stringify(memos),
-    );
-  }, [memos, isLoaded]);
+  void loadCloudMemos();
+
+  return () => {
+    cancelled = true;
+  };
+}, [supabase]);
+
+/* ─────────────────────────────
+   메모 로컬 캐시 저장
+───────────────────────────── */
+
+useEffect(() => {
+  if (
+    !isLoaded ||
+    !isMemoCloudReady
+  ) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    MEMO_STORAGE_KEY,
+    JSON.stringify(memos),
+  );
+}, [
+  memos,
+  isLoaded,
+  isMemoCloudReady,
+]);
 
 /* ─────────────────────────────
    UI 불투명도 자동 저장
@@ -1403,29 +2065,117 @@ useEffect(() => {
   );
 }, [secretPin, isLoaded]);
 
-
 /* ─────────────────────────────
    Focus Mode 메모 실시간 동기화
 ───────────────────────────── */
 
 useEffect(() => {
-  function handleFocusMemoUpdate(event: Event) {
-    const customEvent = event as CustomEvent<Memo[]>;
+  let cancelled = false;
 
-    if (Array.isArray(customEvent.detail)) {
-      setMemos(customEvent.detail);
-      return;
-    }
-
+  async function reloadFocusMemos() {
     try {
-      const savedMemos = window.localStorage.getItem(
-        MEMO_STORAGE_KEY,
-      );
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      /*
+       * 비로그인 상태에서는
+       * 기존 localStorage 데이터를 사용한다.
+       */
+      if (!user) {
+        const savedMemos =
+          window.localStorage.getItem(
+            MEMO_STORAGE_KEY,
+          );
+
+        const parsedValue: unknown =
+          savedMemos
+            ? JSON.parse(savedMemos)
+            : [];
+
+        if (
+          !cancelled &&
+          Array.isArray(parsedValue)
+        ) {
+          setMemos(
+            parsedValue as Memo[],
+          );
+        }
+
+        return;
+      }
+
+      /*
+       * 로그인 상태에서는
+       * Supabase 메모를 다시 불러온다.
+       */
+      const {
+        data: cloudMemos,
+        error: cloudMemoError,
+      } = await supabase
+        .from("memos")
+        .select(
+          `
+            id,
+            title,
+            content,
+            is_secret,
+            updated_at
+          `,
+        )
+        .eq("user_id", user.id)
+        .order("updated_at", {
+          ascending: false,
+        });
+
+      if (cloudMemoError) {
+        throw cloudMemoError;
+      }
+
+      const normalizedMemos: Memo[] =
+        Array.isArray(cloudMemos)
+          ? cloudMemos.map((memo) => ({
+              id: memo.id,
+
+              title:
+                typeof memo.title ===
+                "string"
+                  ? memo.title
+                  : "제목 없는 메모",
+
+              content:
+                typeof memo.content ===
+                "string"
+                  ? memo.content
+                  : "",
+
+              updatedAt:
+                memo.updated_at ??
+                new Date().toISOString(),
+
+              isSecret:
+                memo.is_secret === true,
+            }))
+          : [];
+
+      if (cancelled) {
+        return;
+      }
 
       setMemos(
-        savedMemos
-          ? JSON.parse(savedMemos)
-          : [],
+        normalizedMemos,
+      );
+
+      window.localStorage.setItem(
+        MEMO_STORAGE_KEY,
+        JSON.stringify(
+          normalizedMemos,
+        ),
       );
     } catch (error) {
       console.error(
@@ -1435,26 +2185,282 @@ useEffect(() => {
     }
   }
 
+  function handleFocusMemoUpdate() {
+    void reloadFocusMemos();
+  }
+
   window.addEventListener(
     "hoo-memos-updated",
     handleFocusMemoUpdate,
   );
 
   return () => {
+    cancelled = true;
+
     window.removeEventListener(
       "hoo-memos-updated",
       handleFocusMemoUpdate,
     );
   };
-}, []);
+}, [supabase]);
+
 
 /* ─────────────────────────────
-   투두리스트 자동 저장
+   투두리스트 클라우드 불러오기
+   기존 localStorage 기록 자동 이전
 ───────────────────────────── */
 
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadCloudTodos() {
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      /*
+       * 로그인하지 않은 사용자는
+       * 기존 localStorage 투두를 그대로 사용한다.
+       */
+      if (!user) {
+        if (!cancelled) {
+          setIsTodoCloudReady(true);
+        }
+
+        return;
+      }
+
+      const {
+        data: cloudTodos,
+        error: cloudTodoError,
+      } = await supabase
+        .from("todos")
+        .select(
+          `
+            id,
+            content,
+            completed,
+            source,
+            game_id,
+            sort_order,
+            created_at
+          `,
+        )
+        .eq("user_id", user.id)
+        .order("sort_order", {
+          ascending: true,
+        })
+        .order("created_at", {
+          ascending: true,
+        });
+
+      if (cloudTodoError) {
+        throw cloudTodoError;
+      }
+
+      /*
+       * 서버에 투두가 있다면
+       * 서버 데이터를 최우선으로 사용한다.
+       */
+      if (
+        Array.isArray(cloudTodos) &&
+        cloudTodos.length > 0
+      ) {
+        const normalizedTodos: TodoItem[] =
+          cloudTodos.map((todo) => ({
+            id: todo.id,
+            content: todo.content,
+            completed: todo.completed,
+            source:
+              todo.source === "hoo"
+                ? "hoo"
+                : "user",
+            gameId:
+              typeof todo.game_id === "string"
+                ? todo.game_id
+                : undefined,
+            createdAt:
+              todo.created_at ??
+              new Date().toISOString(),
+          }));
+
+        if (cancelled) {
+          return;
+        }
+
+        setTodos(normalizedTodos);
+
+        window.localStorage.setItem(
+          TODO_STORAGE_KEY,
+          JSON.stringify(normalizedTodos),
+        );
+
+        return;
+      }
+
+      /*
+       * 서버에 기록이 없으면
+       * 현재 브라우저의 기존 투두를 서버로 이전한다.
+       */
+      const savedTodos =
+        window.localStorage.getItem(
+          TODO_STORAGE_KEY,
+        );
+
+      if (!savedTodos) {
+        if (!cancelled) {
+          setTodos([]);
+        }
+
+        return;
+      }
+
+      const parsedValue: unknown =
+        JSON.parse(savedTodos);
+
+      if (!Array.isArray(parsedValue)) {
+        if (!cancelled) {
+          setTodos([]);
+        }
+
+        return;
+      }
+
+     const localTodos =
+  parsedValue.reduce<TodoItem[]>(
+    (result, value, index) => {
+      if (
+        !value ||
+        typeof value !== "object"
+      ) {
+        return result;
+      }
+
+      const todo =
+        value as Partial<TodoItem>;
+
+      const content =
+        typeof todo.content === "string"
+          ? todo.content.trim()
+          : "";
+
+      if (!content) {
+        return result;
+      }
+
+      const normalizedTodo: TodoItem = {
+        id:
+          typeof todo.id === "string"
+            ? todo.id
+            : createId(),
+
+        content,
+
+        completed:
+          todo.completed === true,
+
+        source:
+          todo.source === "hoo"
+            ? "hoo"
+            : "user",
+
+        gameId:
+          typeof todo.gameId === "string"
+            ? todo.gameId
+            : undefined,
+
+        createdAt:
+          typeof todo.createdAt === "string"
+            ? todo.createdAt
+            : new Date(
+                Date.now() + index,
+              ).toISOString(),
+      };
+
+      result.push(normalizedTodo);
+
+      return result;
+    },
+    [],
+  );
+
+
+      if (localTodos.length === 0) {
+        if (!cancelled) {
+          setTodos([]);
+        }
+
+        return;
+      }
+
+      const migrationRows =
+        localTodos.map((todo, index) => ({
+          id: todo.id,
+          user_id: user.id,
+          content: todo.content,
+          completed: todo.completed,
+          source: todo.source,
+          game_id: todo.gameId ?? null,
+          sort_order: index,
+          created_at: todo.createdAt,
+          updated_at: new Date().toISOString(),
+        }));
+
+      const { error: migrationError } =
+        await supabase
+          .from("todos")
+          .insert(migrationRows);
+
+      if (migrationError) {
+        throw migrationError;
+      }
+
+      if (!cancelled) {
+        setTodos(localTodos);
+
+        console.log(
+          `${localTodos.length}개의 기존 투두를 서버로 이전했습니다.`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        "투두리스트 클라우드 불러오기 실패:",
+        error,
+      );
+
+      /*
+       * 서버 연결이 실패해도
+       * 기존 localStorage 투두는 유지한다.
+       */
+    } finally {
+      if (!cancelled) {
+        setIsTodoCloudReady(true);
+      }
+    }
+  }
+
+  void loadCloudTodos();
+
+  return () => {
+    cancelled = true;
+  };
+}, [supabase]);
+
+/* ─────────────────────────────
+   투두리스트 로컬 캐시 저장
+───────────────────────────── */
 
 useEffect(() => {
-  if (!isLoaded) {
+  if (
+    !isLoaded ||
+    !isTodoCloudReady
+  ) {
     return;
   }
 
@@ -1462,7 +2468,12 @@ useEffect(() => {
     TODO_STORAGE_KEY,
     JSON.stringify(todos),
   );
-}, [todos, isLoaded]);
+}, [
+  todos,
+  isLoaded,
+  isTodoCloudReady,
+]);
+
 
 /* ─────────────────────────────
    추천 투두 자동 저장
@@ -1846,6 +2857,48 @@ function moveSelectedSchedule(
   }, 320);
 }
 
+function startScheduleEditing(
+  schedule: Schedule,
+) {
+  setEditingScheduleId(
+    schedule.id,
+  );
+
+  setSelectedScheduleId(
+    schedule.id,
+  );
+
+  setScheduleTitle(
+    schedule.title,
+  );
+
+  setScheduleContent(
+    schedule.content,
+  );
+
+  setScheduleRepeatType(
+    schedule.repeatType,
+  );
+
+  setIsScheduleSecret(
+    schedule.isSecret,
+  );
+
+  setScheduleEndDate("");
+  setScheduleRepeatUntil("");
+  setIsRepeatScheduleModalOpen(false);
+}
+
+function cancelScheduleEditing() {
+  setEditingScheduleId(null);
+
+  setScheduleTitle("");
+  setScheduleContent("");
+  setScheduleRepeatType("none");
+  setScheduleEndDate("");
+  setScheduleRepeatUntil("");
+  setIsScheduleSecret(false);
+}
 
   /* ─────────────────────────────
      캘린더 이동
@@ -1898,78 +2951,256 @@ function moveSelectedSchedule(
      일정 저장·삭제
   ───────────────────────────── */
 
- function addSchedule(
+async function addSchedule(
   event?: FormEvent<HTMLFormElement>,
   requestedRepeatType?: ScheduleRepeatType,
 ) {
   event?.preventDefault();
 
-  const activeRepeatType =
-    requestedRepeatType ?? scheduleRepeatType;
-
   const title = scheduleTitle.trim();
-
   const content = scheduleContent.trim();
 
   if (!title) {
     return;
   }
 
+  /*
+   * 기존 일정 수정
+   */
+  if (editingScheduleId) {
+    const targetSchedule =
+      Object.values(schedules)
+        .flat()
+        .find(
+          (schedule) =>
+            schedule.id ===
+            editingScheduleId,
+        );
+
+    if (!targetSchedule) {
+      cancelScheduleEditing();
+      return;
+    }
+
+    const updatedSchedule: Schedule = {
+      ...targetSchedule,
+      title,
+      content,
+      isSecret:
+        isScheduleSecret,
+    };
+
+    /*
+     * 화면에 먼저 수정 내용을 반영한다.
+     */
+    setSchedules(
+      (previousSchedules) => {
+        const nextSchedules: ScheduleMap =
+          {};
+
+        Object.entries(
+          previousSchedules,
+        ).forEach(
+          ([
+            dateKey,
+            dateSchedules,
+          ]) => {
+            nextSchedules[dateKey] =
+              dateSchedules.map(
+                (schedule) =>
+                  schedule.id ===
+                  editingScheduleId
+                    ? updatedSchedule
+                    : schedule,
+              );
+          },
+        );
+
+        return nextSchedules;
+      },
+    );
+
+    cancelScheduleEditing();
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } =
+        await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      /*
+       * 비로그인 상태에서는
+       * localStorage에만 저장한다.
+       */
+      if (!user) {
+        return;
+      }
+
+      const { error: updateError } =
+        await supabase
+          .from("schedules")
+          .update({
+            title:
+              updatedSchedule.title,
+
+            content:
+              updatedSchedule.content,
+
+            is_secret:
+              updatedSchedule.isSecret,
+
+            updated_at:
+              new Date().toISOString(),
+          })
+          .eq(
+            "id",
+            editingScheduleId,
+          )
+          .eq(
+            "user_id",
+            user.id,
+          );
+
+      if (updateError) {
+        throw updateError;
+      }
+    } catch (error) {
+      console.error(
+        "일정 수정 서버 저장 실패:",
+        error,
+      );
+
+      /*
+       * 서버 수정 실패 시
+       * 원래 일정으로 되돌린다.
+       */
+      setSchedules(
+        (previousSchedules) => {
+          const nextSchedules: ScheduleMap =
+            {};
+
+          Object.entries(
+            previousSchedules,
+          ).forEach(
+            ([
+              dateKey,
+              dateSchedules,
+            ]) => {
+              nextSchedules[dateKey] =
+                dateSchedules.map(
+                  (schedule) =>
+                    schedule.id ===
+                    targetSchedule.id
+                      ? targetSchedule
+                      : schedule,
+                );
+            },
+          );
+
+          return nextSchedules;
+        },
+      );
+
+      window.alert(
+        "일정 수정 내용을 서버에 저장하지 못했습니다.",
+      );
+    }
+
+    return;
+  }
+
+  /*
+   * 여기부터 새 일정 추가
+   */
+  const activeRepeatType =
+    requestedRepeatType ??
+    scheduleRepeatType;
+
   if (
-    activeRepeatType === "dailyRange" &&
+    activeRepeatType ===
+      "dailyRange" &&
     !scheduleEndDate
   ) {
     window.alert(
       "일별 묶기의 마지막 날짜를 선택해주세요.",
     );
+
     return;
   }
 
-if (
-  (
-    activeRepeatType === "weekly" ||
-    activeRepeatType === "monthly"
-  ) &&
-  !scheduleRepeatUntil
-) {
-  window.alert(
-    "반복 종료 날짜를 선택해주세요.",
-  );
-  return;
-}
+  if (
+    (
+      activeRepeatType ===
+        "weekly" ||
+      activeRepeatType ===
+        "monthly"
+    ) &&
+    !scheduleRepeatUntil
+  ) {
+    window.alert(
+      "반복 종료 날짜를 선택해주세요.",
+    );
+
+    return;
+  }
 
   const scheduleDates =
     createScheduleDates({
-      startDate: selectedDate,
-      endDate: scheduleEndDate,
-      repeatUntil: scheduleRepeatUntil,
-      repeatType: activeRepeatType,
+      startDate:
+        selectedDate,
+
+      endDate:
+        scheduleEndDate,
+
+      repeatUntil:
+        scheduleRepeatUntil,
+
+      repeatType:
+        activeRepeatType,
     });
 
-    if (!event) {
-  setIsRepeatScheduleModalOpen(false);
-}
+  if (!event) {
+    setIsRepeatScheduleModalOpen(
+      false,
+    );
+  }
 
   const groupId = createId();
+
   const createdAt =
     new Date().toISOString();
 
-const newSchedules =
-  scheduleDates.map(
-    (date): Schedule => ({
-      id: createId(),
-      groupId,
-      title,
-      content,
-      date,
-      repeatType:
-        activeRepeatType,
-      createdAt,
-      isSecret: isScheduleSecret,
-    }),
-  );
+  const newSchedules =
+    scheduleDates.map(
+      (date): Schedule => ({
+        id: createId(),
 
+        groupId,
 
+        title,
+
+        content,
+
+        date,
+
+        repeatType:
+          activeRepeatType,
+
+        createdAt,
+
+        isSecret:
+          isScheduleSecret,
+      }),
+    );
+
+  /*
+   * 화면에 먼저 추가한다.
+   */
   setSchedules(
     (previousSchedules) => {
       const nextSchedules = {
@@ -2014,13 +3245,135 @@ const newSchedules =
   setScheduleRepeatType("none");
   setScheduleEndDate("");
   setScheduleRepeatUntil("");
-
   setIsScheduleSecret(false);
 
+  /*
+   * 서버에도 추가한다.
+   */
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } =
+      await supabase.auth.getUser();
 
+    if (userError) {
+      throw userError;
+    }
+
+    /*
+     * 비로그인 상태에서는
+     * localStorage에만 저장한다.
+     */
+    if (!user) {
+      return;
+    }
+
+    const rows =
+      newSchedules.map(
+        (schedule) => ({
+          id:
+            schedule.id,
+
+          user_id:
+            user.id,
+
+          group_id:
+            schedule.groupId,
+
+          title:
+            schedule.title,
+
+          content:
+            schedule.content,
+
+          schedule_date:
+            schedule.date,
+
+          repeat_type:
+            schedule.repeatType,
+
+          is_secret:
+            schedule.isSecret,
+
+          created_at:
+            schedule.createdAt,
+
+          updated_at:
+            schedule.createdAt,
+        }),
+      );
+
+    const { error: insertError } =
+      await supabase
+        .from("schedules")
+        .insert(rows);
+
+    if (insertError) {
+      throw insertError;
+    }
+  } catch (error) {
+    console.error(
+      "일정 서버 저장 실패:",
+      error,
+    );
+
+    /*
+     * 서버 추가 실패 시
+     * 방금 추가한 일정을 화면에서도 제거한다.
+     */
+    const newScheduleIds =
+      new Set(
+        newSchedules.map(
+          (schedule) =>
+            schedule.id,
+        ),
+      );
+
+    setSchedules(
+      (previousSchedules) => {
+        const nextSchedules: ScheduleMap =
+          {};
+
+        Object.entries(
+          previousSchedules,
+        ).forEach(
+          ([
+            dateKey,
+            dateSchedules,
+          ]) => {
+            const filteredSchedules =
+              dateSchedules.filter(
+                (schedule) =>
+                  !newScheduleIds.has(
+                    schedule.id,
+                  ),
+              );
+
+            if (
+              filteredSchedules.length >
+              0
+            ) {
+              nextSchedules[dateKey] =
+                filteredSchedules;
+            }
+          },
+        );
+
+        return nextSchedules;
+      },
+    );
+
+    setSelectedScheduleId(null);
+
+    window.alert(
+      "일정을 서버에 저장하지 못했습니다.",
+    );
+  }
 }
 
-function deleteSchedule(
+
+async function deleteSchedule(
   scheduleId: string,
 ) {
   
@@ -2087,79 +3440,423 @@ function deleteSchedule(
     },
   );
 
-  setSelectedScheduleId(null);
+ setSelectedScheduleId(null);
+
+/*
+ * 서버에서도 삭제한다.
+ */
+try {
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+
+  if (userError) {
+    throw userError;
+  }
+
+  /*
+   * 비로그인 상태에서는
+   * localStorage만 사용한다.
+   */
+  if (!user) {
+    return;
+  }
+
+  if (deleteWholeGroup) {
+    const { error: deleteError } =
+      await supabase
+        .from("schedules")
+        .delete()
+        .eq(
+          "group_id",
+          targetSchedule.groupId,
+        )
+        .eq(
+          "user_id",
+          user.id,
+        );
+
+    if (deleteError) {
+      throw deleteError;
+    }
+  } else {
+    const { error: deleteError } =
+      await supabase
+        .from("schedules")
+        .delete()
+        .eq(
+          "id",
+          scheduleId,
+        )
+        .eq(
+          "user_id",
+          user.id,
+        );
+
+    if (deleteError) {
+      throw deleteError;
+    }
+  }
+} catch (error) {
+  console.error(
+    "일정 서버 삭제 실패:",
+    error,
+  );
+
+  window.alert(
+    "일정을 서버에서 삭제하지 못했습니다.",
+  );
+}
+
 }
 
 
   /* ─────────────────────────────
      메모 저장·수정·삭제
   ───────────────────────────── */
+async function saveMemo(
+  event: FormEvent<HTMLFormElement>,
+) {
+  event.preventDefault();
 
-  function saveMemo(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const title = memoTitle.trim();
+  const content = memoContent.trim();
 
-    const title = memoTitle.trim();
-    const content = memoContent.trim();
+  if (!title && !content) {
+    return;
+  }
 
-    if (!title && !content) {
+  const updatedAt =
+    new Date().toISOString();
+
+  /*
+   * 기존 메모 수정
+   */
+  if (editingMemoId) {
+    const previousMemo =
+      memos.find(
+        (memo) =>
+          memo.id === editingMemoId,
+      );
+
+    if (!previousMemo) {
+      cancelMemoEditing();
       return;
     }
 
-    if (editingMemoId) {
-      setMemos((previousMemos) =>
-        previousMemos.map((memo) =>
-          memo.id === editingMemoId
-            ? {
-    ...memo,
-    title: title || "제목 없는 메모",
-    content,
-    updatedAt: new Date().toISOString(),
-    isSecret: isMemoSecret,
-  }
-            : memo,
-        ),
-      );
-    } else {
-      const newMemo: Memo = {
-  id: createId(),
-  title: title || "제목 없는 메모",
-  content,
-  updatedAt: new Date().toISOString(),
-  isSecret: isMemoSecret,
-};
+    const updatedMemo: Memo = {
+      ...previousMemo,
+      title:
+        title ||
+        "제목 없는 메모",
+      content,
+      updatedAt,
+      isSecret: isMemoSecret,
+    };
 
-      setMemos((previousMemos) => [
-        newMemo,
-        ...previousMemos,
-      ]);
-    }
+    /*
+     * 화면에 먼저 반영
+     */
+    setMemos((previousMemos) => [
+      updatedMemo,
+      ...previousMemos.filter(
+        (memo) =>
+          memo.id !== editingMemoId,
+      ),
+    ]);
 
     cancelMemoEditing();
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      /*
+       * 비로그인 사용자는
+       * localStorage만 사용
+       */
+      if (!user) {
+        return;
+      }
+
+      const { error: updateError } =
+        await supabase
+          .from("memos")
+          .update({
+            title:
+              updatedMemo.title,
+            content:
+              updatedMemo.content,
+            is_secret:
+              updatedMemo.isSecret,
+            updated_at:
+              updatedMemo.updatedAt,
+          })
+          .eq(
+            "id",
+            editingMemoId,
+          )
+          .eq(
+            "user_id",
+            user.id,
+          );
+
+      if (updateError) {
+        throw updateError;
+      }
+    } catch (error) {
+      console.error(
+        "메모 수정 서버 저장 실패:",
+        error,
+      );
+
+      /*
+       * 서버 저장 실패 시
+       * 이전 메모 상태 복원
+       */
+      setMemos((previousMemos) => {
+        const withoutUpdatedMemo =
+          previousMemos.filter(
+            (memo) =>
+              memo.id !==
+              previousMemo.id,
+          );
+
+        const restoredMemos = [
+          previousMemo,
+          ...withoutUpdatedMemo,
+        ];
+
+        return restoredMemos.sort(
+          (firstMemo, secondMemo) =>
+            new Date(
+              secondMemo.updatedAt,
+            ).getTime() -
+            new Date(
+              firstMemo.updatedAt,
+            ).getTime(),
+        );
+      });
+
+      window.alert(
+        "메모 수정 내용을 서버에 저장하지 못했습니다.",
+      );
+    }
+
+    return;
   }
 
-  function startMemoEditing(memo: Memo) {
-  setEditingMemoId(memo.id);
-  setMemoTitle(memo.title);
-  setMemoContent(memo.content);
-  setIsMemoSecret(memo.isSecret ?? false);
+  /*
+   * 새 메모 추가
+   */
+  const newMemo: Memo = {
+    id: createId(),
+    title:
+      title ||
+      "제목 없는 메모",
+    content,
+    updatedAt,
+    isSecret: isMemoSecret,
+  };
+
+  /*
+   * 화면에 먼저 반영
+   */
+  setMemos((previousMemos) => [
+    newMemo,
+    ...previousMemos,
+  ]);
+
+  cancelMemoEditing();
+
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    /*
+     * 비로그인 사용자는
+     * localStorage만 사용
+     */
+    if (!user) {
+      return;
+    }
+
+    const { error: insertError } =
+      await supabase
+        .from("memos")
+        .insert({
+          id: newMemo.id,
+          user_id: user.id,
+          title: newMemo.title,
+          content: newMemo.content,
+          is_secret:
+            newMemo.isSecret,
+          created_at:
+            newMemo.updatedAt,
+          updated_at:
+            newMemo.updatedAt,
+        });
+
+    if (insertError) {
+      throw insertError;
+    }
+  } catch (error) {
+    console.error(
+      "메모 추가 서버 저장 실패:",
+      error,
+    );
+
+    /*
+     * 서버 저장 실패 시
+     * 새 메모 제거
+     */
+    setMemos((previousMemos) =>
+      previousMemos.filter(
+        (memo) =>
+          memo.id !== newMemo.id,
+      ),
+    );
+
+    window.alert(
+      "메모를 서버에 저장하지 못했습니다.",
+    );
+  }
 }
 
- function cancelMemoEditing() {
+
+function startMemoEditing(
+  memo: Memo,
+) {
+  setEditingMemoId(
+    memo.id,
+  );
+
+  setMemoTitle(
+    memo.title,
+  );
+
+  setMemoContent(
+    memo.content,
+  );
+
+  setIsMemoSecret(
+    memo.isSecret ?? false,
+  );
+}
+
+function cancelMemoEditing() {
   setEditingMemoId(null);
   setMemoTitle("");
   setMemoContent("");
   setIsMemoSecret(false);
 }
 
-  function deleteMemo(memoId: string) {
-    setMemos((previousMemos) =>
-      previousMemos.filter((memo) => memo.id !== memoId),
+async function deleteMemo(
+  memoId: string,
+) {
+  const targetMemo =
+    memos.find(
+      (memo) =>
+        memo.id === memoId,
     );
 
-    if (editingMemoId === memoId) {
-      cancelMemoEditing();
-    }
+  if (!targetMemo) {
+    return;
   }
+
+  const targetIndex =
+    memos.findIndex(
+      (memo) =>
+        memo.id === memoId,
+    );
+
+  /*
+   * 화면에서는 즉시 삭제한다.
+   */
+  setMemos((previousMemos) =>
+    previousMemos.filter(
+      (memo) =>
+        memo.id !== memoId,
+    ),
+  );
+
+  if (editingMemoId === memoId) {
+    cancelMemoEditing();
+  }
+
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    /*
+     * 비로그인 사용자는
+     * localStorage만 사용한다.
+     */
+    if (!user) {
+      return;
+    }
+
+    const { error: deleteError } =
+      await supabase
+        .from("memos")
+        .delete()
+        .eq("id", memoId)
+        .eq("user_id", user.id);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+  } catch (error) {
+    console.error(
+      "메모 삭제 서버 반영 실패:",
+      error,
+    );
+
+    /*
+     * 서버 삭제 실패 시
+     * 기존 위치에 메모를 복원한다.
+     */
+    setMemos((previousMemos) => {
+      const nextMemos = [
+        ...previousMemos,
+      ];
+
+      nextMemos.splice(
+        Math.max(
+          0,
+          targetIndex,
+        ),
+        0,
+        targetMemo,
+      );
+
+      return nextMemos;
+    });
+
+    window.alert(
+      "메모를 서버에서 삭제하지 못했습니다.",
+    );
+  }
+}
 
   /* ─────────────────────────────
      즐겨찾기
@@ -2244,7 +3941,9 @@ function deleteSchedule(
     );
   }
 
-  function addTodo(event: FormEvent<HTMLFormElement>) {
+ async function addTodo(
+  event: FormEvent<HTMLFormElement>,
+) {
   event.preventDefault();
 
   const content = todoContent.trim();
@@ -2261,34 +3960,421 @@ function deleteSchedule(
     createdAt: new Date().toISOString(),
   };
 
+  /*
+   * 화면에는 즉시 추가한다.
+   */
   setTodos((previousTodos) => [
     ...previousTodos,
     newTodo,
   ]);
 
   setTodoContent("");
+
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    /*
+     * 비로그인 사용자는 localStorage만 사용한다.
+     */
+    if (!user) {
+      return;
+    }
+
+    const { error: insertError } =
+      await supabase
+        .from("todos")
+        .insert({
+          id: newTodo.id,
+          user_id: user.id,
+          content: newTodo.content,
+          completed: newTodo.completed,
+          source: newTodo.source,
+          game_id: newTodo.gameId ?? null,
+          sort_order: todos.length,
+          created_at: newTodo.createdAt,
+          updated_at: newTodo.createdAt,
+        });
+
+    if (insertError) {
+      throw insertError;
+    }
+  } catch (error) {
+    console.error(
+      "투두 추가 서버 저장 실패:",
+      error,
+    );
+
+    /*
+     * 서버 저장에 실패하면
+     * 화면에서도 추가 내용을 되돌린다.
+     */
+    setTodos((previousTodos) =>
+      previousTodos.filter(
+        (todo) => todo.id !== newTodo.id,
+      ),
+    );
+
+    window.alert(
+      "투두를 서버에 저장하지 못했습니다.",
+    );
+  }
 }
 
-function toggleTodo(todoId: string) {
+
+async function toggleTodo(
+  todoId: string,
+) {
+  const targetTodo =
+    todos.find(
+      (todo) => todo.id === todoId,
+    );
+
+  if (!targetTodo) {
+    return;
+  }
+
+  const nextCompleted =
+    !targetTodo.completed;
+
+  /*
+   * 화면에는 즉시 완료 상태를 반영한다.
+   */
   setTodos((previousTodos) =>
     previousTodos.map((todo) =>
       todo.id === todoId
         ? {
             ...todo,
-            completed: !todo.completed,
+            completed: nextCompleted,
           }
         : todo,
     ),
   );
+
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    if (!user) {
+      return;
+    }
+
+    const { error: updateError } =
+      await supabase
+        .from("todos")
+        .update({
+          completed: nextCompleted,
+        })
+        .eq("id", todoId)
+        .eq("user_id", user.id);
+
+    if (updateError) {
+      throw updateError;
+    }
+  } catch (error) {
+    console.error(
+      "투두 완료 상태 저장 실패:",
+      error,
+    );
+
+    /*
+     * 서버 저장 실패 시
+     * 이전 완료 상태로 되돌린다.
+     */
+    setTodos((previousTodos) =>
+      previousTodos.map((todo) =>
+        todo.id === todoId
+          ? {
+              ...todo,
+              completed:
+                targetTodo.completed,
+            }
+          : todo,
+      ),
+    );
+
+    window.alert(
+      "투두 완료 상태를 저장하지 못했습니다.",
+    );
+  }
 }
 
-function deleteTodo(todoId: string) {
+
+async function deleteTodo(
+  todoId: string,
+) {
+  const targetTodo =
+    todos.find(
+      (todo) => todo.id === todoId,
+    );
+
+  if (!targetTodo) {
+    return;
+  }
+
+  const targetIndex =
+    todos.findIndex(
+      (todo) => todo.id === todoId,
+    );
+
+  /*
+   * 화면에서는 즉시 삭제한다.
+   */
   setTodos((previousTodos) =>
     previousTodos.filter(
       (todo) => todo.id !== todoId,
     ),
   );
+
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    if (!user) {
+      return;
+    }
+
+    const { error: deleteError } =
+      await supabase
+        .from("todos")
+        .delete()
+        .eq("id", todoId)
+        .eq("user_id", user.id);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+  } catch (error) {
+    console.error(
+      "투두 삭제 서버 반영 실패:",
+      error,
+    );
+
+    /*
+     * 서버 삭제 실패 시
+     * 기존 위치에 투두를 복원한다.
+     */
+    setTodos((previousTodos) => {
+      const nextTodos = [
+        ...previousTodos,
+      ];
+
+      nextTodos.splice(
+        Math.max(0, targetIndex),
+        0,
+        targetTodo,
+      );
+
+      return nextTodos;
+    });
+
+    window.alert(
+      "투두를 서버에서 삭제하지 못했습니다.",
+    );
+  }
 }
+
+async function saveTodoOrder(
+  orderedTodos: TodoItem[],
+) {
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    /*
+     * 비로그인 상태에서는
+     * localStorage 저장만 사용한다.
+     */
+    if (!user) {
+      return;
+    }
+
+    const updateResults =
+      await Promise.all(
+        orderedTodos.map(
+          async (todo, index) => {
+            const { error } =
+              await supabase
+                .from("todos")
+                .update({
+                  sort_order: index,
+                  updated_at:
+                    new Date().toISOString(),
+                })
+                .eq("id", todo.id)
+                .eq("user_id", user.id);
+
+            return error;
+          },
+        ),
+      );
+
+    const firstError =
+      updateResults.find(
+        (error) => error !== null,
+      );
+
+    if (firstError) {
+      throw firstError;
+    }
+  } catch (error) {
+    console.error(
+      "투두 순서 서버 저장 실패:",
+      error,
+    );
+
+    window.alert(
+      "변경한 투두 순서를 서버에 저장하지 못했습니다.",
+    );
+  }
+}
+
+function handleTodoDragStart(
+  event: React.DragEvent<HTMLElement>,
+  todoId: string,
+) {
+  event.dataTransfer.effectAllowed =
+    "move";
+
+  event.dataTransfer.setData(
+    "text/plain",
+    todoId,
+  );
+
+  /*
+   * Firefox에서도 드래그가 시작되도록
+   * 반드시 전송 데이터를 함께 설정한다.
+   */
+  setDraggingTodoId(todoId);
+  setDragOverTodoId(todoId);
+
+  todoOrderDuringDragRef.current = [
+    ...todos,
+  ];
+}
+
+function handleTodoDragOver(
+  event: React.DragEvent<HTMLElement>,
+) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect =
+    "move";
+}
+
+function handleTodoDragEnter(
+  targetTodoId: string,
+) {
+  if (
+    !draggingTodoId ||
+    draggingTodoId === targetTodoId ||
+    dragOverTodoId === targetTodoId
+  ) {
+    return;
+  }
+
+  setDragOverTodoId(targetTodoId);
+
+  setTodos((previousTodos) => {
+    const draggedIndex =
+      previousTodos.findIndex(
+        (todo) =>
+          todo.id === draggingTodoId,
+      );
+
+    const targetIndex =
+      previousTodos.findIndex(
+        (todo) =>
+          todo.id === targetTodoId,
+      );
+
+    if (
+      draggedIndex < 0 ||
+      targetIndex < 0
+    ) {
+      return previousTodos;
+    }
+
+    const nextTodos = [
+      ...previousTodos,
+    ];
+
+    const [draggedTodo] =
+      nextTodos.splice(
+        draggedIndex,
+        1,
+      );
+
+    nextTodos.splice(
+      targetIndex,
+      0,
+      draggedTodo,
+    );
+
+    todoOrderDuringDragRef.current =
+      nextTodos;
+
+    return nextTodos;
+  });
+}
+
+function finishTodoDrag() {
+  const orderedTodos =
+    todoOrderDuringDragRef.current;
+
+  setDraggingTodoId(null);
+  setDragOverTodoId(null);
+  todoOrderDuringDragRef.current = null;
+
+  if (!orderedTodos) {
+    return;
+  }
+
+  /*
+   * 화면에는 이미 순서가 반영되어 있으므로
+   * 드래그 종료 시 서버 순서만 저장한다.
+   */
+  void saveTodoOrder(
+    orderedTodos,
+  );
+}
+
+function handleTodoDrop(
+  event: React.DragEvent<HTMLElement>,
+) {
+  event.preventDefault();
+  event.stopPropagation();
+
+  finishTodoDrag();
+}
+
+function handleTodoDragEnd() {
+  finishTodoDrag();
+}
+
 
 function moveHorizontalPage(
   direction: "prev" | "next",
@@ -3735,45 +5821,81 @@ setSecretPinInput("");
               오늘의 첫 번째 할 일을 추가해보세요.
             </div>
           ) : (
-            todos.map((todo, index) => (
-              <article
-                key={todo.id}
-                className="flex items-center gap-3 rounded-2xl bg-[#faf9ff] px-4 py-3"
-              >
-                <button
-                  type="button"
-                  onClick={() => toggleTodo(todo.id)}
-                  className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-sm font-black transition ${
-                    todo.completed
-                      ? "border-[#7467d8] bg-[#7467d8] text-white"
-                      : "border-[#cfc9df] bg-white text-transparent"
-                  }`}
-                  aria-label={`${todo.content} 완료 상태 변경`}
-                >
-                  ✓
-                </button>
 
-                <div className="min-w-0 flex-1">
-                  <p
-                    className={`break-words text-sm font-black ${
-                      todo.completed
-                        ? "text-[#aaa4b8] line-through"
-                        : "text-[#423c55]"
-                    }`}
-                  >
-                    {index + 1}. {todo.content}
-                  </p>
-                </div>
+          todos.map((todo, index) => (
+  <article
+    key={todo.id}
+    onDragOver={handleTodoDragOver}
+    onDragEnter={() =>
+      handleTodoDragEnter(todo.id)
+    }
+    onDrop={handleTodoDrop}
+    className={`flex items-center gap-3 rounded-2xl px-4 py-3 transition ${
+      draggingTodoId === todo.id
+        ? "scale-[0.98] border-2 border-dashed border-[#7467d8] bg-[#eeeaff] opacity-60"
+        : dragOverTodoId === todo.id
+          ? "border-2 border-[#a99df0] bg-[#f2efff]"
+          : "border-2 border-transparent bg-[#faf9ff] hover:border-[#d8d0ff] hover:bg-[#f7f5ff]"
+    }`}
+  >
+    <div
+      draggable
+      onDragStart={(event) =>
+        handleTodoDragStart(
+          event,
+          todo.id,
+        )
+      }
+      onDragEnd={handleTodoDragEnd}
+      className="flex w-7 shrink-0 cursor-grab select-none flex-col items-center justify-center gap-[3px] rounded-lg py-2 text-[#aaa4b8] transition hover:bg-[#eeeaff] hover:text-[#7467d8] active:cursor-grabbing"
+      aria-label={`${todo.content} 순서 변경`}
+      title="잡고 끌어서 순서 변경"
+    >
+      <span className="h-[2px] w-4 rounded-full bg-current" />
+      <span className="h-[2px] w-4 rounded-full bg-current" />
+      <span className="h-[2px] w-4 rounded-full bg-current" />
+    </div>
 
-                <button
-                  type="button"
-                  onClick={() => deleteTodo(todo.id)}
-                  className="shrink-0 rounded-full bg-[#ffe2e8] px-3 py-1.5 text-xs font-black text-[#d94f6b]"
-                >
-                  삭제
-                </button>
-              </article>
-            ))
+    <button
+      type="button"
+      onClick={() =>
+        toggleTodo(todo.id)
+      }
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-sm font-black transition ${
+        todo.completed
+          ? "border-[#7467d8] bg-[#7467d8] text-white"
+          : "border-[#cfc9df] bg-white text-transparent"
+      }`}
+      aria-label={`${todo.content} 완료 상태 변경`}
+    >
+      ✓
+    </button>
+
+    <div className="min-w-0 flex-1">
+      <p
+        className={`break-words text-sm font-black ${
+          todo.completed
+            ? "text-[#aaa4b8] line-through"
+            : "text-[#423c55]"
+        }`}
+      >
+        {index + 1}.{" "}
+        {todo.content}
+      </p>
+    </div>
+
+    <button
+      type="button"
+      onClick={() =>
+        deleteTodo(todo.id)
+      }
+      className="shrink-0 rounded-full bg-[#ffe2e8] px-3 py-1.5 text-xs font-black text-[#d94f6b]"
+    >
+      삭제
+    </button>
+  </article>
+))
+            
           )}
         </div>
 
@@ -4152,27 +6274,56 @@ setSecretPinInput("");
                       
                      <div className="flex items-center justify-between gap-3">
   <h3 className="text-xl font-black">
-    일정 내용
+    {editingScheduleId
+      ? "일정 수정 중"
+      : "일정 내용"}
   </h3>
 
   {selectedSchedule && (
-    <button
-      type="button"
-      onClick={() => {
-        if (!selectedSchedule) {
-          return;
-        }
+    <div className="flex items-center gap-2">
+      {editingScheduleId ===
+      selectedSchedule.id ? (
+        <button
+          type="button"
+          onClick={
+            cancelScheduleEditing
+          }
+          className="rounded-full bg-[#ece9f7] px-4 py-2 text-xs font-black text-[#69627b] transition hover:bg-[#ded8ef]"
+        >
+          수정 취소
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            startScheduleEditing(
+              selectedSchedule,
+            );
+          }}
+          className="rounded-full bg-[#e9e5ff] px-4 py-2 text-xs font-black text-[#6254bd] transition hover:bg-[#dcd5ff]"
+        >
+          일정 수정
+        </button>
+      )}
 
-        deleteSchedule(
-          selectedSchedule.id,
-        );
-      }}
-      className="rounded-full bg-[#ffe2e8] px-4 py-2 text-xs font-black text-[#d94f6b] transition hover:bg-[#ffcbd6]"
-    >
-      {selectedSchedule.repeatType === "none"
-        ? "일정 삭제"
-        : "반복 일정 삭제"}
-    </button>
+      <button
+        type="button"
+        onClick={() => {
+          deleteSchedule(
+            selectedSchedule.id,
+          );
+        }}
+        disabled={
+          editingScheduleId !== null
+        }
+        className="rounded-full bg-[#ffe2e8] px-4 py-2 text-xs font-black text-[#d94f6b] transition hover:bg-[#ffcbd6] disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {selectedSchedule.repeatType ===
+        "none"
+          ? "일정 삭제"
+          : "반복 일정 삭제"}
+      </button>
+    </div>
   )}
 </div>
 
@@ -4435,7 +6586,9 @@ setSecretPinInput("");
                       className="bg-[#f5f2ff] px-6 py-4"
                     >
                       <h3 className="text-lg font-black">
-                        새 일정 만들기
+                        {editingScheduleId
+                          ? "일정 수정하기"
+                          : "새 일정 만들기"}
                       </h3>
 
                       <input
@@ -4597,16 +6750,22 @@ setSecretPinInput("");
 
                      <button
   type="submit"
-  disabled={scheduleRepeatType !== "none"}
+  disabled={
+    !editingScheduleId &&
+    scheduleRepeatType !== "none"
+  }
   className={`mt-3 w-full rounded-2xl py-3 text-sm font-black text-white transition ${
+    editingScheduleId ||
     scheduleRepeatType === "none"
       ? "bg-[#7467d8] hover:scale-[1.01] hover:bg-[#6255c7]"
       : "cursor-not-allowed bg-[#c9c5dd]"
   }`}
 >
-  {scheduleRepeatType === "none"
-    ? "일정 저장"
-    : "반복 일정은 팝업에서 생성됩니다."}
+  {editingScheduleId
+    ? "수정 저장"
+    : scheduleRepeatType === "none"
+      ? "일정 저장"
+      : "반복 일정은 팝업에서 생성됩니다."}
 </button>
 
                     </form>
