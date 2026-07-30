@@ -1,10 +1,14 @@
 "use client";
 
 import {
+  ChangeEvent,
+  useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+
 import {
   MAX_CUSTOM_HOURS,
   MAX_CUSTOM_SECONDS,
@@ -73,6 +77,25 @@ type FocusModeProps = {
   };
 };
 
+function formatJournalDate(
+  date: Date,
+) {
+  const year =
+    date.getFullYear();
+
+  const month =
+    String(
+      date.getMonth() + 1,
+    ).padStart(2, "0");
+
+  const day =
+    String(
+      date.getDate(),
+    ).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
 export default function FocusMode({
   floatingButtonsDirection,
   showFloatingButtons,
@@ -114,6 +137,48 @@ export default function FocusMode({
     profileHistory,
     setProfileHistory,
   ] = useState<FocusHistory[]>([]);
+
+  const [
+  dailyJournal,
+  setDailyJournal,
+] = useState("");
+
+const [
+  journalLoading,
+  setJournalLoading,
+] = useState(false);
+
+const [
+  journalSaving,
+  setJournalSaving,
+] = useState(false);
+
+const [
+  journalSaved,
+  setJournalSaved,
+] = useState(false);
+
+const [
+  journalExists,
+  setJournalExists,
+] = useState(false);
+
+const journalSaveTimerRef =
+  useRef<
+    ReturnType<typeof setTimeout> | null
+  >(null);
+
+const pendingJournalSaveRef =
+  useRef<{
+    targetDate: Date;
+    content: string;
+  } | null>(null);
+
+const journalLoadRequestIdRef =
+  useRef(0);
+
+const activeJournalDateRef =
+  useRef<string | null>(null);
 
   const [view, setView] =
     useState<FocusView>("setup");
@@ -262,6 +327,398 @@ const [isRunning, setIsRunning] =
     initialSeconds,
     remainingSeconds,
   ]);
+
+
+  const saveDailyJournal =
+    useCallback(
+      async (
+        targetDate: Date,
+        content: string,
+      ) => {
+        const journalDate =
+          formatJournalDate(
+            targetDate,
+          );
+
+        const trimmedContent =
+          content.trim();
+
+        const isActiveDate = () =>
+          activeJournalDateRef.current ===
+          journalDate;
+
+        if (isActiveDate()) {
+          setJournalSaving(true);
+          setJournalSaved(false);
+        }
+
+        try {
+          const {
+            data: { user },
+            error: userError,
+          } =
+            await supabase.auth.getUser();
+
+          if (userError) {
+            throw userError;
+          }
+
+          /*
+           * 비로그인 상태에서는
+           * 날짜별 localStorage에 저장한다.
+           */
+          if (!user) {
+            const storageKey =
+              `hoo-daily-journal-${journalDate}`;
+
+            if (!trimmedContent) {
+              window.localStorage.removeItem(
+                storageKey,
+              );
+
+              if (isActiveDate()) {
+                setJournalExists(false);
+              }
+            } else {
+              window.localStorage.setItem(
+                storageKey,
+                content,
+              );
+
+              if (isActiveDate()) {
+                setJournalExists(true);
+              }
+            }
+
+            if (isActiveDate()) {
+              setJournalSaved(true);
+            }
+
+            return;
+          }
+
+          /*
+           * 내용이 비어 있으면
+           * 해당 날짜의 일지를 삭제한다.
+           */
+          if (!trimmedContent) {
+            const {
+              error: deleteError,
+            } =
+              await supabase
+                .from("daily_journals")
+                .delete()
+                .eq(
+                  "user_id",
+                  user.id,
+                )
+                .eq(
+                  "journal_date",
+                  journalDate,
+                );
+
+            if (deleteError) {
+              throw deleteError;
+            }
+
+            if (isActiveDate()) {
+              setJournalExists(false);
+              setJournalSaved(true);
+            }
+
+            return;
+          }
+
+          /*
+           * 같은 사용자·같은 날짜의 일지는
+           * 한 개만 유지한다.
+           */
+          const {
+            error: upsertError,
+          } =
+            await supabase
+              .from("daily_journals")
+              .upsert(
+                {
+                  user_id: user.id,
+                  journal_date:
+                    journalDate,
+                  content,
+                  updated_at:
+                    new Date().toISOString(),
+                },
+                {
+                  onConflict:
+                    "user_id,journal_date",
+                },
+              );
+
+          if (upsertError) {
+            throw upsertError;
+          }
+
+          if (isActiveDate()) {
+            setJournalExists(true);
+            setJournalSaved(true);
+          }
+        } catch (error) {
+          console.error(
+            "오늘의 일지를 저장하지 못했습니다.",
+            error,
+          );
+
+          if (isActiveDate()) {
+            setJournalSaved(false);
+          }
+        } finally {
+          if (isActiveDate()) {
+            setJournalSaving(false);
+          }
+        }
+      },
+      [supabase],
+    );
+
+  const flushPendingDailyJournal =
+    useCallback(async () => {
+      if (
+        journalSaveTimerRef.current
+      ) {
+        clearTimeout(
+          journalSaveTimerRef.current,
+        );
+
+        journalSaveTimerRef.current =
+          null;
+      }
+
+      const pendingSave =
+        pendingJournalSaveRef.current;
+
+      if (!pendingSave) {
+        return;
+      }
+
+      pendingJournalSaveRef.current =
+        null;
+
+      await saveDailyJournal(
+        pendingSave.targetDate,
+        pendingSave.content,
+      );
+    }, [saveDailyJournal]);
+
+  const loadDailyJournal =
+    useCallback(
+      async (
+        targetDate: Date,
+      ) => {
+        const requestId =
+          journalLoadRequestIdRef.current +
+          1;
+
+        journalLoadRequestIdRef.current =
+          requestId;
+
+        /*
+         * 다른 날짜로 이동하기 전에
+         * 아직 예약 중인 기존 날짜의 입력을
+         * 먼저 즉시 저장한다.
+         */
+        await flushPendingDailyJournal();
+
+        /*
+         * 저장을 기다리는 사이 더 새로운 날짜
+         * 요청이 들어왔다면 이 요청은 중단한다.
+         */
+        if (
+          requestId !==
+          journalLoadRequestIdRef.current
+        ) {
+          return;
+        }
+
+        const journalDate =
+          formatJournalDate(
+            targetDate,
+          );
+
+        activeJournalDateRef.current =
+          journalDate;
+
+        setJournalLoading(true);
+        setJournalSaved(false);
+
+        try {
+          const {
+            data: { user },
+            error: userError,
+          } =
+            await supabase.auth.getUser();
+
+          if (userError) {
+            throw userError;
+          }
+
+          if (
+            requestId !==
+            journalLoadRequestIdRef.current
+          ) {
+            return;
+          }
+
+          /*
+           * 비로그인 상태에서는
+           * 브라우저 저장소에서 불러온다.
+           */
+          if (!user) {
+            const storageKey =
+              `hoo-daily-journal-${journalDate}`;
+
+            const savedJournal =
+              window.localStorage.getItem(
+                storageKey,
+              );
+
+            if (
+              requestId !==
+              journalLoadRequestIdRef.current
+            ) {
+              return;
+            }
+
+            setDailyJournal(
+              savedJournal ?? "",
+            );
+
+            setJournalExists(
+              Boolean(savedJournal),
+            );
+
+            return;
+          }
+
+          const {
+            data,
+            error,
+          } =
+            await supabase
+              .from("daily_journals")
+              .select("content")
+              .eq(
+                "user_id",
+                user.id,
+              )
+              .eq(
+                "journal_date",
+                journalDate,
+              )
+              .maybeSingle();
+
+          if (error) {
+            throw error;
+          }
+
+          if (
+            requestId !==
+            journalLoadRequestIdRef.current
+          ) {
+            return;
+          }
+
+          const content =
+            typeof data?.content ===
+            "string"
+              ? data.content
+              : "";
+
+          setDailyJournal(content);
+          setJournalExists(
+            content.length > 0,
+          );
+        } catch (error) {
+          if (
+            requestId !==
+            journalLoadRequestIdRef.current
+          ) {
+            return;
+          }
+
+          console.error(
+            "오늘의 일지를 불러오지 못했습니다.",
+            error,
+          );
+
+          setDailyJournal("");
+          setJournalExists(false);
+        } finally {
+          if (
+            requestId ===
+            journalLoadRequestIdRef.current
+          ) {
+            setJournalLoading(false);
+          }
+        }
+      },
+      [
+        flushPendingDailyJournal,
+        supabase,
+      ],
+    );
+
+  function changeDailyJournal(
+    event:
+      ChangeEvent<HTMLTextAreaElement>,
+    targetDate: Date,
+  ) {
+    const nextValue =
+      event.target.value.slice(
+        0,
+        1000,
+      );
+
+    const pendingSave = {
+      targetDate:
+        new Date(targetDate),
+      content: nextValue,
+    };
+
+    setDailyJournal(nextValue);
+    setJournalSaved(false);
+
+    pendingJournalSaveRef.current =
+      pendingSave;
+
+    if (
+      journalSaveTimerRef.current
+    ) {
+      clearTimeout(
+        journalSaveTimerRef.current,
+      );
+    }
+
+    journalSaveTimerRef.current =
+      setTimeout(() => {
+        if (
+          pendingJournalSaveRef.current !==
+          pendingSave
+        ) {
+          return;
+        }
+
+        pendingJournalSaveRef.current =
+          null;
+
+        journalSaveTimerRef.current =
+          null;
+
+        void saveDailyJournal(
+          pendingSave.targetDate,
+          pendingSave.content,
+        );
+      }, 700);
+  }
+
 function applyProfileHistory(
   history: FocusHistory[],
 ) {
@@ -868,6 +1325,36 @@ function restartFocusMode() {
 
   setView("setup");
 }
+useEffect(() => {
+  return () => {
+    journalLoadRequestIdRef.current +=
+      1;
+
+    if (
+      journalSaveTimerRef.current
+    ) {
+      clearTimeout(
+        journalSaveTimerRef.current,
+      );
+
+      journalSaveTimerRef.current =
+        null;
+    }
+
+    const pendingSave =
+      pendingJournalSaveRef.current;
+
+    pendingJournalSaveRef.current =
+      null;
+
+    if (pendingSave) {
+      void saveDailyJournal(
+        pendingSave.targetDate,
+        pendingSave.content,
+      );
+    }
+  };
+}, [saveDailyJournal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1150,6 +1637,21 @@ function restartFocusMode() {
         }
         streak={profileStreak}
         history={profileHistory}
+        dailyJournal={
+          dailyJournal
+        }
+        journalLoading={
+          journalLoading
+        }
+        journalSaving={
+          journalSaving
+        }
+        journalSaved={
+          journalSaved
+        }
+        journalExists={
+          journalExists
+        }
         profileImageUrl={
           profileImageUrl
         }
@@ -1186,6 +1688,12 @@ function restartFocusMode() {
         }
         onRemoveImage={
           removeProfileImage
+        }
+        onLoadDailyJournal={
+          loadDailyJournal
+        }
+        onChangeDailyJournal={
+          changeDailyJournal
         }
       />
 

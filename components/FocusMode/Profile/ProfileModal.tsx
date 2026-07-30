@@ -1,9 +1,11 @@
 "use client";
 
 import type {
+  ChangeEvent,
   ChangeEventHandler,
   RefObject,
 } from "react";
+
 import type {
   FocusHistory,
   FocusStatistics,
@@ -15,36 +17,64 @@ import ProfileCalendar from "./ProfileCalendar";
 import ProfileHeader from "./ProfileHeader";
 import ProfileNavigation from "./ProfileNavigation";
 import ProfileOverview from "./ProfileOverview";
-
 type ProfileModalProps = {
   isOpen: boolean;
   activeTab: ProfileTab;
+
   nickname: string;
   nicknameDraft: string;
   isNicknameEditing: boolean;
   nicknameError: string | null;
   maxNicknameLength: number;
+
   statistics: FocusStatistics | null;
   streak: FocusStreak | null;
   history: FocusHistory[];
+
   profileImageUrl: string | null;
   isProfileImageLoading: boolean;
   profileImageError: string | null;
+
   profileImageInputRef:
     RefObject<HTMLInputElement | null>;
+
+  dailyJournal: string;
+  journalLoading: boolean;
+  journalSaving: boolean;
+  journalSaved: boolean;
+  journalExists: boolean;
+
   onClose: () => void;
+
   onStartNicknameEditing: () => void;
   onCancelNicknameEditing: () => void;
+
   onChangeNickname:
     ChangeEventHandler<HTMLInputElement>;
+
   onSaveNickname: () => void;
+
   onTabChange:
     (tab: ProfileTab) => void;
+
   onOpenImagePicker: () => void;
+
   onChangeImage:
     ChangeEventHandler<HTMLInputElement>;
+
   onRemoveImage: () => void;
+
+  onLoadDailyJournal:
+    (targetDate: Date) =>
+      void | Promise<void>;
+
+  onChangeDailyJournal: (
+    event:
+      ChangeEvent<HTMLTextAreaElement>,
+    targetDate: Date,
+  ) => void;
 };
+
 
 export default function ProfileModal({
   isOpen,
@@ -61,6 +91,11 @@ export default function ProfileModal({
   isProfileImageLoading,
   profileImageError,
   profileImageInputRef,
+  dailyJournal,
+  journalLoading,
+  journalSaving,
+  journalSaved,
+  journalExists,
   onClose,
   onStartNicknameEditing,
   onCancelNicknameEditing,
@@ -70,7 +105,11 @@ export default function ProfileModal({
   onOpenImagePicker,
   onChangeImage,
   onRemoveImage,
+  onLoadDailyJournal,
+  onChangeDailyJournal,
 }: ProfileModalProps) {
+
+
   if (!isOpen) {
     return null;
   }
@@ -172,11 +211,32 @@ export default function ProfileModal({
             />
           )}
 
-          {activeTab === "calendar" && (
-            <ProfileCalendar
-              history={history}
-            />
-          )}
+        {activeTab === "calendar" && (
+  <ProfileCalendar
+    history={history}
+    dailyJournal={
+      dailyJournal
+    }
+    journalLoading={
+      journalLoading
+    }
+    journalSaving={
+      journalSaving
+    }
+    journalSaved={
+      journalSaved
+    }
+    journalExists={
+      journalExists
+    }
+    onLoadDailyJournal={
+      onLoadDailyJournal
+    }
+    onChangeDailyJournal={
+      onChangeDailyJournal
+    }
+  />
+)}
 
           {activeTab ===
             "achievements" && (

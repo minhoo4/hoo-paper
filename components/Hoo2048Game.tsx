@@ -4462,7 +4462,7 @@ if (
             type="button"
             onClick={enterBuddhaFocusMode}
             disabled={isEnteringBuddhaMode}
-            className="mt-7 w-full rounded-[20px] bg-white px-5 py-5 text-base font-black text-black transition hover:scale-[1.015] hover:bg-neutral-200 disabled:cursor-wait disabled:opacity-60 sm:text-lg"
+            className="mt-7 w-full rounded-[20px] border border-orange-300/70 bg-[#ff7a1a] px-5 py-5 text-base font-black text-white shadow-[0_10px_30px_rgba(255,122,26,0.38)] transition-all duration-200 hover:scale-[1.015] hover:bg-[#ff8a33] hover:shadow-[0_14px_36px_rgba(255,122,26,0.5)] active:scale-[0.985] active:bg-[#ed6d0d] disabled:cursor-wait disabled:opacity-60 sm:text-lg"
           >
             깰 게임이면 안 왔다. 도전!
           </button>

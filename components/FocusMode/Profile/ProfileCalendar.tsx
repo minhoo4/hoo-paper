@@ -1,9 +1,12 @@
 "use client";
 
 import {
+  ChangeEvent,
+  useEffect,
   useMemo,
   useState,
 } from "react";
+
 import type {
   FocusCalendarDay,
   FocusHistory,
@@ -120,11 +123,35 @@ function getMinuteOfDay(
 
 type ProfileCalendarProps = {
   history: FocusHistory[];
+
+  dailyJournal: string;
+  journalLoading: boolean;
+  journalSaving: boolean;
+  journalSaved: boolean;
+  journalExists: boolean;
+
+  onLoadDailyJournal:
+    (targetDate: Date) =>
+      void | Promise<void>;
+
+  onChangeDailyJournal: (
+    event:
+      ChangeEvent<HTMLTextAreaElement>,
+    targetDate: Date,
+  ) => void;
 };
 
 export default function ProfileCalendar({
   history,
+  dailyJournal,
+  journalLoading,
+  journalSaving,
+  journalSaved,
+  journalExists,
+  onLoadDailyJournal,
+  onChangeDailyJournal,
 }: ProfileCalendarProps) {
+
   const [visibleMonth, setVisibleMonth] =
     useState(() =>
       createMonthAnchor(),
@@ -191,6 +218,19 @@ export default function ProfileCalendar({
     calendarDays,
     selectedDateKey,
   ]);
+
+  useEffect(() => {
+  if (!selectedDay) {
+    return;
+  }
+
+  void onLoadDailyJournal(
+    selectedDay.date,
+  );
+}, [
+  selectedDay,
+  onLoadDailyJournal,
+]);
 
   function changeMonth(offset: number) {
     const nextMonth =
@@ -383,7 +423,16 @@ export default function ProfileCalendar({
 
         <SelectedDayTimeline
           selectedDay={selectedDay}
+          dailyJournal={dailyJournal}
+          journalLoading={journalLoading}
+          journalSaving={journalSaving}
+          journalSaved={journalSaved}
+          journalExists={journalExists}
+          onChangeDailyJournal={
+            onChangeDailyJournal
+          }
         />
+
       </div>
     </div>
   );
@@ -649,14 +698,6 @@ function CircularDaySchedule({
         },
       );
     }, [scheduleSessions]);
-
-  const totalRecordedMinutes =
-    scheduleSessions.reduce(
-      (total, session) =>
-        total +
-        session.durationMinutes,
-      0,
-    );
 
   const hoveredSession =
     scheduleSessions.find(
@@ -1155,11 +1196,31 @@ function CircularDaySchedule({
 type SelectedDayTimelineProps = {
   selectedDay:
     FocusCalendarDay | null;
+
+  dailyJournal: string;
+  journalLoading: boolean;
+  journalSaving: boolean;
+  journalSaved: boolean;
+  journalExists: boolean;
+
+  onChangeDailyJournal: (
+    event:
+      ChangeEvent<HTMLTextAreaElement>,
+    targetDate: Date,
+  ) => void;
 };
 
 function SelectedDayTimeline({
   selectedDay,
+  dailyJournal,
+  journalLoading,
+  journalSaving,
+  journalSaved,
+  journalExists,
+  onChangeDailyJournal,
 }: SelectedDayTimelineProps) {
+
+
   const chronologicalSessions =
     useMemo(() => {
       if (!selectedDay) {
@@ -1220,10 +1281,92 @@ function SelectedDayTimeline({
       </div>
 
       <CircularDaySchedule
-        selectedDay={selectedDay}
-      />
+  selectedDay={selectedDay}
+/>
 
-      <div className="mt-6 border-t border-white/[0.08] pt-5">
+<section className="mt-6 border-t border-white/[0.08] pt-5">
+  <div className="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <p className="text-sm font-black tracking-[0.1em] text-white/55">
+        DAILY JOURNAL
+      </p>
+
+      <p className="mt-1 text-xs font-bold leading-5 text-white/32">
+        선택한 날짜의 생각과 기록을
+        자유롭게 남겨보세요.
+      </p>
+    </div>
+
+    <div className="flex items-center gap-2">
+      {journalLoading ? (
+        <span className="rounded-full bg-white/[0.06] px-3 py-1.5 text-[11px] font-black text-white/45">
+          불러오는 중
+        </span>
+      ) : journalSaving ? (
+        <span className="rounded-full bg-[#7869e8]/14 px-3 py-1.5 text-[11px] font-black text-[#c2bbff]">
+          저장 중
+        </span>
+      ) : journalSaved ? (
+        <span className="rounded-full bg-emerald-400/10 px-3 py-1.5 text-[11px] font-black text-emerald-200/85">
+          저장 완료
+        </span>
+      ) : journalExists ? (
+        <span className="rounded-full bg-white/[0.06] px-3 py-1.5 text-[11px] font-black text-white/45">
+          기록 있음
+        </span>
+      ) : (
+        <span className="rounded-full bg-white/[0.04] px-3 py-1.5 text-[11px] font-black text-white/30">
+          새 일지
+        </span>
+      )}
+
+      <span className="text-[11px] font-black text-white/30">
+        {dailyJournal.length}/1000
+      </span>
+    </div>
+  </div>
+
+  <div className="mt-4 rounded-[22px] border border-white/[0.08] bg-black/15 p-3">
+    {journalLoading ? (
+      <div className="flex min-h-[170px] items-center justify-center rounded-2xl border border-dashed border-white/[0.08]">
+        <p className="text-sm font-black text-white/35">
+          하루일지를 불러오고 있어요.
+        </p>
+      </div>
+    ) : (
+      <textarea
+        value={dailyJournal}
+        onChange={(event) =>
+          onChangeDailyJournal(
+            event,
+            selectedDay.date,
+          )
+        }
+        maxLength={1000}
+        rows={7}
+        placeholder="오늘의 집중, 감정, 생각을 기록해보세요."
+        className="min-h-[170px] w-full resize-none rounded-2xl border border-white/[0.07] bg-white/[0.025] px-4 py-4 text-sm font-bold leading-7 text-white/90 outline-none transition placeholder:text-white/22 focus:border-[#9b8cff]/50 focus:bg-white/[0.04] focus:ring-2 focus:ring-[#8d7cff]/10"
+      />
+    )}
+
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 px-1">
+      <p className="text-[11px] font-bold leading-5 text-white/27">
+        마지막 입력 후 0.7초가 지나면
+        자동으로 저장됩니다.
+      </p>
+
+      <p className="text-[11px] font-black text-[#aaa0ff]/60">
+        {formatCalendarDate(
+          selectedDay.date,
+        )}
+      </p>
+    </div>
+  </div>
+</section>
+
+<div className="mt-6 border-t border-white/[0.08] pt-5">
+
+
         <div className="flex items-center justify-between">
           <p className="text-sm font-black tracking-[0.1em] text-white/55">
             FOCUS TIMELINE

@@ -5309,7 +5309,7 @@ setSecretPinInput("");
       시크릿레이어에 저장
     </p>
 
-    <p className="mt-1 text-xs font-bold opacity-70">
+    <p className="mt-1 text-xs font-bold text-white/70">
       생성되는 반복 일정 전체가 시크릿으로 저장됩니다.
     </p>
   </div>
@@ -5333,7 +5333,7 @@ setSecretPinInput("");
     setIsRepeatScheduleModalOpen(false);
     setIsScheduleSecret(false);
   }}
-  className="rounded-2xl border border-[#ded8ef] bg-white px-5 py-3 text-sm font-black text-[#777083] transition hover:bg-[#f7f5ff]"
+  className="rounded-2xl border border-[#ded8ef] bg-white px-5 py-3 text-sm font-black text-[#ECECEC] transition hover:bg-[#f7f5ff]"
 >
   취소
 </button>
@@ -6466,13 +6466,13 @@ setSecretPinInput("");
   )}
 </div>
 
-          <p className="mt-3 whitespace-pre-wrap break-words text-sm font-bold leading-7 opacity-80">
+         <p className="mt-3 whitespace-pre-wrap break-words text-sm font-bold leading-7 text-[#ECECEC]">
             {previousSchedule.content ||
               "상세 내용이 작성되지 않았어요."}
           </p>
 
           {selectedSchedules.length > 1 && (
-            <p className="mt-4 text-center text-[11px] font-black opacity-60">
+           <p className="mt-4 text-center text-[11px] font-black text-white/70">
               좌우로 드래그하여 다른 일정을
               확인하세요.
             </p>
@@ -6560,7 +6560,7 @@ setSecretPinInput("");
 )}
       </div>
 
-      <p className="mt-3 whitespace-pre-wrap break-words text-sm font-bold leading-7 opacity-80">
+      <p className="mt-3 whitespace-pre-wrap break-words text-sm font-bold leading-7 text-[#ECECEC]">
         {selectedSchedule.content ||
           "상세 내용이 작성되지 않았어요."}
       </p>
@@ -6601,7 +6601,7 @@ setSecretPinInput("");
                           )
                         }
                         placeholder="일정 제목"
-                        className="mt-3 w-full rounded-2xl border border-[#ded8ef] bg-white px-4 py-2.5 text-sm font-bold outline-none focus:border-[#7467d8]"
+                      className="mt-3 w-full rounded-2xl border border-[#ded8ef] bg-white px-4 py-2.5 text-sm font-bold text-[#ECECEC] placeholder:text-white/55 outline-none focus:border-[#7467d8]"
                       />
 
                       <textarea
@@ -6614,7 +6614,7 @@ setSecretPinInput("");
                           )
                         }
                         placeholder="일정 내용을 적어주세요."
-                        className="mt-2 w-full resize-none rounded-2xl border border-[#ded8ef] bg-white px-4 py-3 text-sm font-bold leading-6 outline-none focus:border-[#7467d8]"
+                      className="mt-2 w-full resize-none rounded-2xl border border-[#ded8ef] bg-white px-4 py-3 text-sm font-bold leading-6 text-[#ECECEC] placeholder:text-white/55 outline-none focus:border-[#7467d8]"
                       />
 
                       <button
@@ -6635,7 +6635,7 @@ setSecretPinInput("");
       시크릿레이어에 저장
     </p>
 
-    <p className="mt-1 text-[11px] font-bold opacity-70">
+    <p className="mt-1 text-[11px] font-bold text-white/70">
       시크릿 ON 상태에서는 화면에 표시되지 않습니다.
     </p>
   </div>
@@ -6728,13 +6728,13 @@ setSecretPinInput("");
               className={`text-sm font-black ${
                 isSelected
                   ? "text-[#4f43b4]"
-                  : "text-[#3f3952]"
+                  : "text-[#ECECEC]"
               }`}
             >
               {option.title}
             </p>
 
-            <p className="mt-1 text-[11px] font-bold leading-4 text-[#928ba8]">
+            <p className="mt-1 text-[11px] font-bold leading-4 text-[text-white/70]">
               {option.description}
             </p>
           </div>
@@ -6866,7 +6866,7 @@ setSecretPinInput("");
       시크릿레이어에 저장
     </p>
 
-    <p className="mt-1 text-[11px] font-bold opacity-70">
+    <p className="mt-1 text-[11px] font-bold text-white/70">
       시크릿 ON 상태에서는 메모 목록에서 숨겨집니다.
     </p>
   </div>
@@ -6968,7 +6968,7 @@ setSecretPinInput("");
                                 </div>
                               </div>
 
-                              <p className="mt-3 whitespace-pre-wrap break-words text-sm font-bold leading-6 text-[#625a58]">
+                              <p className="mt-3 whitespace-pre-wrap break-words text-sm font-bold leading-7 text-[#ECECEC]">
                                 {memo.content ||
                                   "작성된 내용이 없어요."}
                               </p>
@@ -7390,10 +7390,10 @@ setSecretPinInput("");
 
     setMinigameScreen("2048");
   }}
-  className={`mt-6 w-full rounded-2xl py-3.5 text-sm font-black transition hover:scale-[1.02] ${
+  className={`mt-6 w-full rounded-2xl border py-3.5 text-sm font-black text-white transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] ${
     hoo2048Difficulty === "buddha"
-      ? "bg-white text-black hover:bg-neutral-200"
-      : "bg-[#f0a33a] text-white hover:bg-[#df9027]"
+      ? "border-orange-300/70 bg-[#ff7a1a] shadow-[0_10px_30px_rgba(255,122,26,0.42)] hover:bg-[#ff8a33] hover:shadow-[0_14px_38px_rgba(255,122,26,0.55)] active:bg-[#ed6d0d]"
+      : "border-[#f0a33a]/60 bg-[#f0a33a] hover:bg-[#df9027]"
   }`}
 >
   {hoo2048Difficulty === "buddha"
