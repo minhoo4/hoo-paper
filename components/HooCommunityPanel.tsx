@@ -7,12 +7,65 @@ import {
   useMemo,
   useState,
 } from "react";
+
 import { createPortal } from "react-dom";
 import { createClient } from "@/lib/supabase/client";
 import { getLevelProgress } from "@/lib/community";
 import type { RankingPeriod, RankingRow } from "@/lib/community-types";
 
 type SessionUser = { id: string; email?: string } | null;
+
+type AuthMessageTone = "info" | "success" | "error";
+
+const AUTH_EMAIL_LIMIT = 5;
+const AUTH_EMAIL_WINDOW_MS = 60 * 60 * 1000;
+const AUTH_RESEND_COOLDOWN_SECONDS = 60;
+
+function translateAuthError(message: string) {
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("email not confirmed") ||
+    normalized.includes("email_not_confirmed")
+  ) {
+    return "이메일 인증이 아직 완료되지 않았습니다. 아래에서 인증 메일을 다시 받을 수 있어요.";
+  }
+
+  if (
+    normalized.includes("invalid login credentials") ||
+    normalized.includes("invalid_credentials")
+  ) {
+    return "이메일 또는 비밀번호가 올바르지 않습니다.";
+  }
+
+  if (
+    normalized.includes("user already registered") ||
+    normalized.includes("already registered")
+  ) {
+    return "이미 가입된 이메일입니다. 로그인하거나 비밀번호를 확인해주세요.";
+  }
+
+  if (
+    normalized.includes("rate limit") ||
+    normalized.includes("too many requests") ||
+    normalized.includes("over_email_send_rate_limit")
+  ) {
+    return "인증 메일 요청 횟수를 초과했습니다. 한 시간 뒤 다시 시도해주세요.";
+  }
+
+  if (
+    normalized.includes("expired") ||
+    normalized.includes("otp_expired")
+  ) {
+    return "인증 링크가 만료되었습니다. 새 인증 메일을 받아주세요.";
+  }
+
+  if (normalized.includes("network")) {
+    return "서버에 연결하지 못했습니다. 인터넷 연결을 확인해주세요.";
+  }
+
+  return "요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.";
+}
 
 type MyStats = {
   nickname: string;
@@ -74,6 +127,12 @@ const [selectedGame, setSelectedGame] =
   const [password, setPassword] = useState("");
   const [nickname, setNickname] = useState("");
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] =
+    useState<AuthMessageTone>("info");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [hourlyEmailCount, setHourlyEmailCount] = useState(0);
 
   const loadRanking = useCallback(async () => {
     try {
@@ -155,6 +214,94 @@ const [selectedGame, setSelectedGame] =
     }
   }, []);
 
+
+  const getEmailRequestState = useCallback(() => {
+    if (typeof window === "undefined") {
+      return { count: 0, timestamps: [] as number[] };
+    }
+
+    const storageKey = `hoo-auth-email-requests:${email.trim().toLowerCase()}`;
+
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      const parsed = raw ? (JSON.parse(raw) as number[]) : [];
+      const now = Date.now();
+      const timestamps = parsed.filter(
+        (timestamp) => now - timestamp < AUTH_EMAIL_WINDOW_MS,
+      );
+
+      window.localStorage.setItem(storageKey, JSON.stringify(timestamps));
+
+      return {
+        count: timestamps.length,
+        timestamps,
+      };
+    } catch {
+      return { count: 0, timestamps: [] as number[] };
+    }
+  }, [email]);
+
+  const recordEmailRequest = useCallback(() => {
+    if (typeof window === "undefined") return 0;
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const storageKey = `hoo-auth-email-requests:${normalizedEmail}`;
+    const current = getEmailRequestState();
+    const timestamps = [...current.timestamps, Date.now()];
+
+    window.localStorage.setItem(storageKey, JSON.stringify(timestamps));
+    setHourlyEmailCount(timestamps.length);
+
+    return timestamps.length;
+  }, [email, getEmailRequestState]);
+
+  useEffect(() => {
+    const current = getEmailRequestState();
+    setHourlyEmailCount(current.count);
+  }, [email, getEmailRequestState]);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+
+    const timer = window.setInterval(() => {
+      setResendCooldown((current) => Math.max(0, current - 1));
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [resendCooldown]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const params = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(
+      window.location.hash.replace(/^#/, ""),
+    );
+
+    const authType = params.get("type") ?? hashParams.get("type");
+    const authError =
+      params.get("error_description") ??
+      hashParams.get("error_description");
+
+    if (authError) {
+      setAuthMode("login");
+      setAuthOpen(true);
+      setMessageTone("error");
+      setMessage(translateAuthError(decodeURIComponent(authError)));
+      return;
+    }
+
+    if (authType === "signup" || authType === "email") {
+      setAuthMode("login");
+      setAuthOpen(true);
+      setEmailSent(false);
+      setMessageTone("success");
+      setMessage(
+        "이메일 인증이 완료되었습니다. 이제 가입한 이메일과 비밀번호로 로그인해주세요.",
+      );
+    }
+  }, []);
+
   useEffect(() => {
     let mounted = true;
 
@@ -222,64 +369,154 @@ const [selectedGame, setSelectedGame] =
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setMessage("");
 
-    const cleanEmail = email.trim();
+    if (authSubmitting) return;
+
+    setMessage("");
+    setEmailSent(false);
+
+    const cleanEmail = email.trim().toLowerCase();
 
     if (!cleanEmail) {
+      setMessageTone("error");
       setMessage("이메일을 입력해주세요.");
       return;
     }
 
     if (password.length < 6) {
+      setMessageTone("error");
       setMessage("비밀번호는 6자 이상 입력해주세요.");
       return;
     }
 
-    if (authMode === "signup") {
-      const cleanNickname = nickname.trim();
+    setAuthSubmitting(true);
 
-      if (!cleanNickname) {
-        setMessage("닉네임을 입력해주세요.");
+    try {
+      if (authMode === "signup") {
+        const cleanNickname = nickname.trim();
+
+        if (!cleanNickname) {
+          setMessageTone("error");
+          setMessage("닉네임을 입력해주세요.");
+          return;
+        }
+
+        const currentRequests = getEmailRequestState();
+
+        if (currentRequests.count >= AUTH_EMAIL_LIMIT) {
+          setMessageTone("error");
+          setMessage(
+            "인증 메일은 한 시간에 최대 5회까지 받을 수 있습니다. 잠시 후 다시 시도해주세요.",
+          );
+          return;
+        }
+
+        const { data, error } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password,
+          options: {
+            data: { nickname: cleanNickname },
+            emailRedirectTo: `${window.location.origin}`,
+          },
+        });
+
+        if (error) {
+          setMessageTone("error");
+          setMessage(translateAuthError(error.message));
+          return;
+        }
+
+        if (!data.session) {
+          recordEmailRequest();
+          setEmailSent(true);
+          setResendCooldown(AUTH_RESEND_COOLDOWN_SECONDS);
+          setMessageTone("success");
+          setMessage(
+            "인증 메일을 보냈습니다. 이메일에서 ‘HOO 가입 완료하기’ 링크를 눌러주세요.",
+          );
+        } else {
+          setMessageTone("success");
+          setMessage("가입이 완료되었습니다!");
+          setAuthOpen(false);
+        }
+
         return;
       }
 
-      const { data, error } = await supabase.auth.signUp({
+      const { error } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password,
+      });
+
+      if (error) {
+        setMessageTone("error");
+        setMessage(translateAuthError(error.message));
+
+        if (
+          error.message.toLowerCase().includes("email not confirmed") ||
+          error.message.toLowerCase().includes("email_not_confirmed")
+        ) {
+          setEmailSent(true);
+        }
+
+        return;
+      }
+
+      setAuthOpen(false);
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function resendConfirmationEmail() {
+    if (authSubmitting || resendCooldown > 0) return;
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    if (!cleanEmail) {
+      setMessageTone("error");
+      setMessage("인증 메일을 받을 이메일을 입력해주세요.");
+      return;
+    }
+
+    const currentRequests = getEmailRequestState();
+
+    if (currentRequests.count >= AUTH_EMAIL_LIMIT) {
+      setMessageTone("error");
+      setMessage(
+        "인증 메일은 한 시간에 최대 5회까지 받을 수 있습니다. 한 시간 뒤 다시 시도해주세요.",
+      );
+      return;
+    }
+
+    setAuthSubmitting(true);
+    setMessage("");
+
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: cleanEmail,
         options: {
-          data: { nickname: cleanNickname },
           emailRedirectTo: `${window.location.origin}`,
         },
       });
 
       if (error) {
-        setMessage(error.message);
+        setMessageTone("error");
+        setMessage(translateAuthError(error.message));
         return;
       }
 
-      if (!data.session) {
-        setMessage(
-          "가입 확인 메일을 보냈습니다. 가장 최근 메일의 링크를 눌러주세요.",
-        );
-      } else {
-        setMessage("가입이 완료되었습니다!");
-        setAuthOpen(false);
-      }
-      return;
+      const count = recordEmailRequest();
+      setEmailSent(true);
+      setResendCooldown(AUTH_RESEND_COOLDOWN_SECONDS);
+      setMessageTone("success");
+      setMessage(
+        `인증 메일을 다시 보냈습니다. 최근에 도착한 메일을 확인해주세요. (${count}/${AUTH_EMAIL_LIMIT}회)`,
+      );
+    } finally {
+      setAuthSubmitting(false);
     }
-
-    const { error } = await supabase.auth.signInWithPassword({
-      email: cleanEmail,
-      password,
-    });
-
-    if (error) {
-      setMessage(error.message);
-      return;
-    }
-
-    setAuthOpen(false);
   }
 
   async function signOut() {
@@ -313,6 +550,8 @@ return (
             onClick={() => {
               setAuthMode("login");
               setMessage("");
+              setMessageTone("info");
+              setEmailSent(false);
               setAuthOpen(true);
             }}
             className="rounded-xl bg-[#7467d8] px-4 py-2 text-xs font-black text-white"
@@ -592,14 +831,22 @@ return (
               </h3>
 
               {authMode === "signup" && (
-                <input
-                  type="text"
-                  placeholder="닉네임"
-                  value={nickname}
-                  onChange={(event) => setNickname(event.target.value)}
-                  autoComplete="nickname"
-                  className="w-full rounded-xl border border-violet-200 bg-white px-4 py-3 text-gray-900 placeholder:text-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-400/30"
-                />
+                <>
+                  <div className="rounded-2xl bg-[#f4f1ff] px-4 py-3 text-xs font-bold leading-5 text-[#665c94]">
+                    가입 후 이메일 인증이 필요합니다.
+                    <br />
+                    인증 메일은 한 시간에 최대 5회까지 받을 수 있어요.
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="닉네임"
+                    value={nickname}
+                    onChange={(event) => setNickname(event.target.value)}
+                    autoComplete="nickname"
+                    className="w-full rounded-xl border border-violet-200 bg-white px-4 py-3 text-gray-900 placeholder:text-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-400/30"
+                  />
+                </>
               )}
 
               <input
@@ -621,14 +868,60 @@ return (
               />
 
               {message && (
-                <p className="text-sm font-bold text-[#d45b72]">{message}</p>
+                <div
+                  className={`rounded-2xl px-4 py-3 text-sm font-bold leading-5 ${
+                    messageTone === "success"
+                      ? "bg-[#ebfbf2] text-[#27764b]"
+                      : messageTone === "error"
+                        ? "bg-[#fff0f3] text-[#c04d67]"
+                        : "bg-[#f4f1ff] text-[#665c94]"
+                  }`}
+                >
+                  {message}
+                </div>
+              )}
+
+              {emailSent && (
+                <div className="space-y-2 rounded-2xl border border-[#e2dcf5] bg-[#faf9ff] p-4">
+                  <p className="text-xs font-black text-[#51479a]">
+                    인증 메일 확인 방법
+                  </p>
+                  <p className="text-xs font-bold leading-5 text-[#746d88]">
+                    받은편지함에서 가장 최근에 도착한 HOO 인증 메일을 열고,
+                    가입 완료 링크를 눌러주세요. 보이지 않으면 스팸함도 확인해주세요.
+                  </p>
+                  <p className="text-[11px] font-bold text-[#9a93aa]">
+                    최근 1시간 요청: {hourlyEmailCount}/{AUTH_EMAIL_LIMIT}회
+                  </p>
+                  <button
+                    type="button"
+                    onClick={resendConfirmationEmail}
+                    disabled={
+                      authSubmitting ||
+                      resendCooldown > 0 ||
+                      hourlyEmailCount >= AUTH_EMAIL_LIMIT
+                    }
+                    className="w-full rounded-xl bg-[#eeeafd] py-2.5 text-xs font-black text-[#6659bf] transition hover:bg-[#e2dcf8] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {resendCooldown > 0
+                      ? `인증 메일 다시 받기 (${resendCooldown}초)`
+                      : hourlyEmailCount >= AUTH_EMAIL_LIMIT
+                        ? "한 시간 내 발송 한도 도달"
+                        : "인증 메일 다시 받기"}
+                  </button>
+                </div>
               )}
 
               <button
                 type="submit"
-                className="mt-2 w-full rounded-2xl bg-[#7467d8] py-3 font-black text-white transition hover:bg-[#6255c7]"
+                disabled={authSubmitting}
+                className="mt-2 w-full rounded-2xl bg-[#7467d8] py-3 font-black text-white transition hover:bg-[#6255c7] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {authMode === "login" ? "로그인" : "가입하기"}
+                {authSubmitting
+                  ? "처리 중..."
+                  : authMode === "login"
+                    ? "로그인"
+                    : "가입하기"}
               </button>
 
               <button
@@ -636,6 +929,8 @@ return (
                 onClick={() => {
                   setAuthMode(authMode === "login" ? "signup" : "login");
                   setMessage("");
+                  setMessageTone("info");
+                  setEmailSent(false);
                 }}
                 className="w-full text-sm font-bold text-[#7467d8]"
               >
