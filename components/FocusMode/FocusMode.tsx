@@ -1703,7 +1703,7 @@ useEffect(() => {
     handleProfileLauncherClick
   }
   onOpenFocus={
-    startFocusMode
+    openFocusMode
   }
   floatingButtonsDirection={
     floatingButtonsDirection
