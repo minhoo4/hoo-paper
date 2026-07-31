@@ -303,6 +303,52 @@ const [selectedGame, setSelectedGame] =
   }, []);
 
   useEffect(() => {
+  function handleOpenAuthModal(
+    event: Event,
+  ) {
+    const customEvent =
+      event as CustomEvent<{
+        mode?: "login" | "signup";
+      }>;
+
+    const requestedMode =
+      customEvent.detail?.mode ===
+      "signup"
+        ? "signup"
+        : "login";
+
+    setAuthMode(
+      requestedMode,
+    );
+
+    setMessage("");
+    setMessageTone("info");
+    setEmailSent(false);
+    setPassword("");
+
+    if (
+      requestedMode === "signup"
+    ) {
+      setNickname("");
+    }
+
+    setAuthOpen(true);
+  }
+
+  window.addEventListener(
+    "hoo-open-auth-modal",
+    handleOpenAuthModal,
+  );
+
+  return () => {
+    window.removeEventListener(
+      "hoo-open-auth-modal",
+      handleOpenAuthModal,
+    );
+  };
+}, []);
+
+  useEffect(() => {
     let mounted = true;
 
     supabase.auth.getUser().then(({ data }) => {

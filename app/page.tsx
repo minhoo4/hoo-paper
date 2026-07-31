@@ -28,6 +28,7 @@ import {
 import {
   ChevronLeft,
   ChevronRight,
+  Lock,
   Settings,
   X,
 } from "lucide-react";
@@ -387,19 +388,153 @@ function getSudokuDifficultyLabel(difficulty: SudokuDifficulty) {
    메인
 ───────────────────────────── */
 
-
 export default function Home() {
   const supabase = useMemo(
     () => createClient(),
     [],
   );
 
-  const today = useMemo(() => new Date(), []);
+  const [
+    isLoggedIn,
+    setIsLoggedIn,
+  ] = useState(false);
 
-  /* 가로 스크롤 */
+  const [
+    loggedInNickname,
+    setLoggedInNickname,
+  ] = useState<string | null>(
+    null,
+  );
 
-  const horizontalSectionRef =
-    useRef<HTMLElement | null>(null);
+  const [
+    profileImageUrl,
+    setProfileImageUrl,
+  ] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadLoginProfile() {
+      try {
+        const {
+          data: {
+            session,
+          },
+          error: sessionError,
+        } =
+          await supabase.auth.getSession();
+
+        if (sessionError) {
+          throw sessionError;
+        }
+
+        const user =
+          session?.user ?? null;
+
+        if (!user) {
+          if (!cancelled) {
+            setIsLoggedIn(false);
+            setLoggedInNickname(null);
+            setProfileImageUrl(null);
+          }
+
+          return;
+        }
+
+        const {
+          data: profile,
+          error: profileError,
+        } =
+          await supabase
+            .from("profiles")
+            .select(
+              `
+                nickname,
+                profile_image_url
+              `,
+            )
+            .eq(
+              "id",
+              user.id,
+            )
+            .maybeSingle();
+
+        if (profileError) {
+          throw profileError;
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setIsLoggedIn(true);
+
+        setLoggedInNickname(
+          typeof profile?.nickname ===
+            "string" &&
+            profile.nickname.trim()
+            ? profile.nickname.trim()
+            : user.email?.split("@")[0] ??
+                "MY PROFILE",
+        );
+
+        setProfileImageUrl(
+          typeof profile?.profile_image_url ===
+            "string" &&
+            profile.profile_image_url.trim()
+            ? profile.profile_image_url.trim()
+            : null,
+        );
+      } catch (error) {
+        console.error(
+          "로그인 사용자 정보를 불러오지 못했습니다.",
+          error,
+        );
+
+        if (!cancelled) {
+          setIsLoggedIn(false);
+          setLoggedInNickname(null);
+          setProfileImageUrl(null);
+        }
+      }
+    }
+
+    void loadLoginProfile();
+
+    const {
+      data: {
+        subscription,
+      },
+    } =
+      supabase.auth.onAuthStateChange(
+        () => {
+          void loadLoginProfile();
+        },
+      );
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [
+    supabase,
+  ]);
+
+  const today = useMemo(
+    () => new Date(),
+    [],
+  );
+
+/* ─────────────────────────────
+   프로필 닉네임 실시간 반영
+───────────────────────────── */
+
+/* 가로 스크롤 */
+
+const horizontalSectionRef =
+  useRef<HTMLElement | null>(null);
 
  const searchToggleButtonRef =
   useRef<HTMLButtonElement | null>(null);
@@ -1392,22 +1527,28 @@ useEffect(() => {
 
   async function loadCloudSchedules() {
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+     const {
+  data: {
+    session,
+  },
+  error: sessionError,
+} =
+  await supabase.auth.getSession();
 
-      if (userError) {
-        throw userError;
-      }
+if (sessionError) {
+  throw sessionError;
+}
 
-      /*
-       * 비로그인 상태에서는
-       * 기존 localStorage 일정을 그대로 사용한다.
-       */
-      if (!user) {
-        return;
-      }
+const user =
+  session?.user ?? null;
+
+/*
+ * 비로그인 상태에서는
+ * 기존 localStorage 일정을 그대로 사용한다.
+ */
+if (!user) {
+  return;
+}
 
       const {
         data: cloudSchedules,
@@ -1779,26 +1920,32 @@ useEffect(() => {
 
   async function loadCloudMemos() {
     try {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+     const {
+  data: {
+    session,
+  },
+  error: sessionError,
+} =
+  await supabase.auth.getSession();
 
-      if (userError) {
-        throw userError;
-      }
+if (sessionError) {
+  throw sessionError;
+}
 
-      /*
-       * 비로그인 상태에서는
-       * 기존 localStorage 메모를 그대로 사용한다.
-       */
-      if (!user) {
-        if (!cancelled) {
-          setIsMemoCloudReady(true);
-        }
+const user =
+  session?.user ?? null;
 
-        return;
-      }
+/*
+ * 비로그인 상태에서는
+ * 기존 localStorage 메모를 그대로 사용한다.
+ */
+if (!user) {
+  if (!cancelled) {
+    setIsMemoCloudReady(true);
+  }
+
+  return;
+}
 
       const {
         data: cloudMemos,
@@ -2216,25 +2363,31 @@ useEffect(() => {
   async function loadCloudTodos() {
     try {
       const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+  data: {
+    session,
+  },
+  error: sessionError,
+} =
+  await supabase.auth.getSession();
 
-      if (userError) {
-        throw userError;
-      }
+if (sessionError) {
+  throw sessionError;
+}
 
-      /*
-       * 로그인하지 않은 사용자는
-       * 기존 localStorage 투두를 그대로 사용한다.
-       */
-      if (!user) {
-        if (!cancelled) {
-          setIsTodoCloudReady(true);
-        }
+const user =
+  session?.user ?? null;
 
-        return;
-      }
+/*
+ * 로그인하지 않은 사용자는
+ * 기존 localStorage 투두를 그대로 사용한다.
+ */
+if (!user) {
+  if (!cancelled) {
+    setIsTodoCloudReady(true);
+  }
+
+  return;
+}
 
       const {
         data: cloudTodos,
@@ -7917,17 +8070,41 @@ className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
   )}
 </div>
 <FocusMode
+  isLoggedIn={
+    isLoggedIn
+  }
+
+  loggedInNickname={
+    loggedInNickname
+  }
+
+  onNicknameUpdated={
+    setLoggedInNickname
+  }
+
+  profileImageUrl={
+    profileImageUrl
+  }
+
+  onProfileImageUpdated={
+    setProfileImageUrl
+  }
+
   floatingButtonsDirection={
     showStickyHeader
       ? floatingButtonsDirection
       : null
   }
-  showFloatingButtons={
-    !showStickyHeader || showFloatingButtons
-  }
-  floatingButtonsTarget={floatingButtonsTarget}
-/>
 
+  showFloatingButtons={
+    !showStickyHeader ||
+    showFloatingButtons
+  }
+
+  floatingButtonsTarget={
+    floatingButtonsTarget
+  }
+/>
   
 
 

@@ -64,6 +64,22 @@ import {
 } from "@/lib/supabase/client";
 
 type FocusModeProps = {
+  isLoggedIn: boolean;
+
+  loggedInNickname:
+    string | null;
+
+  onNicknameUpdated: (
+    nickname: string,
+  ) => void;
+
+  profileImageUrl:
+    string | null;
+
+  onProfileImageUpdated: (
+    profileImageUrl: string | null,
+  ) => void;
+
   floatingButtonsDirection:
     | "toSearch"
     | "fromSearch"
@@ -97,10 +113,17 @@ function formatJournalDate(
 }
 
 export default function FocusMode({
+  isLoggedIn,
+  loggedInNickname,
+  onNicknameUpdated,
+  profileImageUrl:
+    loggedInProfileImageUrl,
+  onProfileImageUpdated,
   floatingButtonsDirection,
   showFloatingButtons,
   floatingButtonsTarget,
 }: FocusModeProps) {
+
   const supabase = useMemo(
     () => createClient(),
     [],
@@ -248,28 +271,36 @@ const [isRunning, setIsRunning] =
     setWasRunningBeforeExitConfirm,
   ] = useState(false);
 
-  const {
-    profileImageUrl,
-    isProfileImageLoading,
-    profileImageError,
-    profileImageInputRef,
-    loadProfileImage,
-    openProfileImagePicker,
-    changeProfileImage,
-    removeProfileImage,
-  } = useProfileImage();
+const {
+  profileImageUrl,
+  isProfileImageLoading,
+  profileImageError,
+  profileImageInputRef,
+  loadProfileImage,
+  openProfileImagePicker,
+  changeProfileImage,
+  removeProfileImage,
+} = useProfileImage({
+  profileImageUrl:
+    loggedInProfileImageUrl,
 
-  const {
-    nickname,
-    nicknameDraft,
-    isNicknameEditing,
-    nicknameError,
-    maxNicknameLength,
-    startNicknameEditing,
-    cancelNicknameEditing,
-    changeNicknameDraft,
-    saveNickname,
-  } = useProfileNickname();
+  onProfileImageUpdated,
+});
+
+const {
+  nickname,
+  nicknameDraft,
+  isNicknameEditing,
+  nicknameError,
+  maxNicknameLength,
+  startNicknameEditing,
+  cancelNicknameEditing,
+  changeNicknameDraft,
+  saveNickname,
+} = useProfileNickname(
+  loggedInNickname,
+  onNicknameUpdated,
+);
 
   const {
     focusedPeopleCount,
@@ -761,6 +792,32 @@ async function syncProfileDataWithCloud() {
    * 프로필 통계와 그래프를 갱신한다.
    */
   void syncProfileDataWithCloud();
+}
+
+function handleProfileLauncherClick() {
+  /*
+   * 로그인된 사용자는
+   * 기존 프로필 창을 연다.
+   */
+  if (isLoggedIn) {
+    openProfile();
+    return;
+  }
+
+  /*
+   * 비로그인 사용자는
+   * 커뮤니티 패널의 로그인 창을 연다.
+   */
+  window.dispatchEvent(
+    new CustomEvent(
+      "hoo-open-auth-modal",
+      {
+        detail: {
+          mode: "login",
+        },
+      },
+    ),
+  );
 }
 
   function closeProfile() {
@@ -1356,10 +1413,30 @@ useEffect(() => {
   };
 }, [saveDailyJournal]);
 
-  useEffect(() => {
-    let cancelled = false;
+ useEffect(() => {
+  let cancelled = false;
 
-    async function initializeFocusHistory() {
+  async function initializeFocusHistory() {
+    /*
+     * 비로그인 상태에서는
+     * Supabase를 호출하지 않고
+     * 브라우저의 기존 집중 기록을 사용한다.
+     */
+    if (!isLoggedIn) {
+      if (!cancelled) {
+        applyProfileHistory(
+          loadFocusHistory(),
+        );
+      }
+
+      return;
+    }
+
+    /*
+     * 로그인 상태에서는
+     * 서버와 집중 기록을 동기화한다.
+     */
+    try {
       const history =
         await syncFocusHistoryWithCloud();
 
@@ -1367,43 +1444,66 @@ useEffect(() => {
         return;
       }
 
-      applyProfileHistory(history);
+      applyProfileHistory(
+        history,
+      );
+    } catch (error) {
+      console.error(
+        "집중 기록 클라우드 동기화 실패:",
+        error,
+      );
+
+      /*
+       * 로그인 세션이 만료됐거나
+       * 서버 동기화에 실패해도
+       * 로컬 기록으로 정상 표시한다.
+       */
+      if (!cancelled) {
+        applyProfileHistory(
+          loadFocusHistory(),
+        );
+      }
     }
+  }
 
-    void initializeFocusHistory();
+  void initializeFocusHistory();
 
-    function handleFocusHistoryUpdated(
-      event: Event,
-    ) {
-      const customEvent =
-        event as CustomEvent<
-          FocusHistory[]
-        >;
+  function handleFocusHistoryUpdated(
+    event: Event,
+  ) {
+    const customEvent =
+      event as CustomEvent<
+        FocusHistory[]
+      >;
 
-      const history =
-        Array.isArray(
-          customEvent.detail,
-        )
-          ? customEvent.detail
-          : loadFocusHistory();
+    const history =
+      Array.isArray(
+        customEvent.detail,
+      )
+        ? customEvent.detail
+        : loadFocusHistory();
 
-      applyProfileHistory(history);
-    }
+    applyProfileHistory(
+      history,
+    );
+  }
 
-    window.addEventListener(
+  window.addEventListener(
+    "hoo-focus-history-updated",
+    handleFocusHistoryUpdated,
+  );
+
+  return () => {
+    cancelled = true;
+
+    window.removeEventListener(
       "hoo-focus-history-updated",
       handleFocusHistoryUpdated,
     );
-
-    return () => {
-      cancelled = true;
-
-      window.removeEventListener(
-        "hoo-focus-history-updated",
-        handleFocusHistoryUpdated,
-      );
-    };
-  }, []);
+  };
+}, [
+  isLoggedIn,
+]);
 
   useEffect(() => {
     if (isProfileOpen) {
@@ -1594,15 +1694,16 @@ useEffect(() => {
 
   return (
     <>
-    <FocusLaunchers
-  profileImageUrl={
-    profileImageUrl
-  }
+
+
+<FocusLaunchers
+  isLoggedIn={isLoggedIn}
+  nickname={loggedInNickname}
   onOpenProfile={
-    openProfile
+    handleProfileLauncherClick
   }
   onOpenFocus={
-    openFocusMode
+    startFocusMode
   }
   floatingButtonsDirection={
     floatingButtonsDirection

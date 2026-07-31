@@ -3,213 +3,52 @@
 import {
   type ChangeEvent,
   useCallback,
-  useEffect,
   useRef,
   useState,
 } from "react";
+
 import {
-  HOO_PROFILE_IMAGE_DB_NAME,
-  HOO_PROFILE_IMAGE_KEY,
   HOO_PROFILE_IMAGE_MAX_BYTES,
-  HOO_PROFILE_IMAGE_STORE_NAME,
 } from "../constants/focus";
-import type {
-  ProfileImageRecord,
-} from "../types/focus";
 
-function openProfileImageDatabase() {
-  return new Promise<IDBDatabase>(
-    (resolve, reject) => {
-      const request =
-        window.indexedDB.open(
-          HOO_PROFILE_IMAGE_DB_NAME,
-          1,
-        );
+import {
+  createClient,
+} from "@/lib/supabase/client";
 
-      request.onupgradeneeded = () => {
-        const database = request.result;
+const PROFILE_IMAGE_BUCKET =
+  "profile-images";
 
-        if (
-          !database.objectStoreNames.contains(
-            HOO_PROFILE_IMAGE_STORE_NAME,
-          )
-        ) {
-          database.createObjectStore(
-            HOO_PROFILE_IMAGE_STORE_NAME,
-            {
-              keyPath: "id",
-            },
-          );
-        }
-      };
+type UseProfileImageOptions = {
+  profileImageUrl:
+    string | null;
 
-      request.onsuccess = () => {
-        resolve(request.result);
-      };
+  onProfileImageUpdated: (
+    profileImageUrl: string | null,
+  ) => void;
+};
 
-      request.onerror = () => {
-        reject(
-          request.error ??
-            new Error(
-              "프로필 이미지 데이터베이스를 열지 못했습니다.",
-            ),
-        );
-      };
-    },
-  );
-}
-
-function readProfileImageRecord() {
-  return new Promise<
-    ProfileImageRecord | null
-  >(async (resolve, reject) => {
-    try {
-      const database =
-        await openProfileImageDatabase();
-
-      const transaction =
-        database.transaction(
-          HOO_PROFILE_IMAGE_STORE_NAME,
-          "readonly",
-        );
-
-      const request = transaction
-        .objectStore(
-          HOO_PROFILE_IMAGE_STORE_NAME,
-        )
-        .get(HOO_PROFILE_IMAGE_KEY);
-
-      request.onsuccess = () => {
-        database.close();
-
-        resolve(
-          (request.result as
-            | ProfileImageRecord
-            | undefined) ?? null,
-        );
-      };
-
-      request.onerror = () => {
-        database.close();
-
-        reject(
-          request.error ??
-            new Error(
-              "프로필 이미지를 불러오지 못했습니다.",
-            ),
-        );
-      };
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-function saveProfileImageRecord(
-  blob: Blob,
+function getProfileImageExtension(
+  file: File,
 ) {
-  return new Promise<void>(
-    async (resolve, reject) => {
-      try {
-        const database =
-          await openProfileImageDatabase();
+  switch (file.type) {
+    case "image/jpeg":
+      return "jpg";
 
-        const transaction =
-          database.transaction(
-            HOO_PROFILE_IMAGE_STORE_NAME,
-            "readwrite",
-          );
+    case "image/png":
+      return "png";
 
-        transaction
-          .objectStore(
-            HOO_PROFILE_IMAGE_STORE_NAME,
-          )
-          .put({
-            id: HOO_PROFILE_IMAGE_KEY,
-            blob,
-            updatedAt:
-              new Date().toISOString(),
-          } satisfies ProfileImageRecord);
+    case "image/webp":
+      return "webp";
 
-        transaction.oncomplete = () => {
-          database.close();
-          resolve();
-        };
-
-        transaction.onerror = () => {
-          database.close();
-          reject(
-            transaction.error ??
-              new Error(
-                "프로필 이미지를 저장하지 못했습니다.",
-              ),
-          );
-        };
-
-        transaction.onabort = () => {
-          database.close();
-          reject(
-            transaction.error ??
-              new Error(
-                "프로필 이미지 저장이 중단되었습니다.",
-              ),
-          );
-        };
-      } catch (error) {
-        reject(error);
-      }
-    },
-  );
+    default:
+      return null;
+  }
 }
 
-function deleteProfileImageRecord() {
-  return new Promise<void>(
-    async (resolve, reject) => {
-      try {
-        const database =
-          await openProfileImageDatabase();
-
-        const transaction =
-          database.transaction(
-            HOO_PROFILE_IMAGE_STORE_NAME,
-            "readwrite",
-          );
-
-        transaction
-          .objectStore(
-            HOO_PROFILE_IMAGE_STORE_NAME,
-          )
-          .delete(
-            HOO_PROFILE_IMAGE_KEY,
-          );
-
-        transaction.oncomplete = () => {
-          database.close();
-          resolve();
-        };
-
-        transaction.onerror = () => {
-          database.close();
-          reject(
-            transaction.error ??
-              new Error(
-                "프로필 이미지를 삭제하지 못했습니다.",
-              ),
-          );
-        };
-      } catch (error) {
-        reject(error);
-      }
-    },
-  );
-}
-
-export function useProfileImage() {
-  const [
-    profileImageUrl,
-    setProfileImageUrl,
-  ] = useState<string | null>(null);
-
+export function useProfileImage({
+  profileImageUrl,
+  onProfileImageUpdated,
+}: UseProfileImageOptions) {
   const [
     isProfileImageLoading,
     setIsProfileImageLoading,
@@ -218,51 +57,77 @@ export function useProfileImage() {
   const [
     profileImageError,
     setProfileImageError,
-  ] = useState<string | null>(null);
+  ] = useState<string | null>(
+    null,
+  );
 
   const profileImageInputRef =
-    useRef<HTMLInputElement | null>(null);
-
-  const objectUrlRef =
-    useRef<string | null>(null);
-
-  const replaceProfileImageUrl =
-    useCallback(
-      (nextUrl: string | null) => {
-        if (objectUrlRef.current) {
-          URL.revokeObjectURL(
-            objectUrlRef.current,
-          );
-        }
-
-        objectUrlRef.current = nextUrl;
-        setProfileImageUrl(nextUrl);
-      },
-      [],
+    useRef<HTMLInputElement | null>(
+      null,
     );
+
+  const openProfileImagePicker =
+    useCallback(() => {
+      profileImageInputRef.current?.click();
+    }, []);
 
   const loadProfileImage =
     useCallback(async () => {
-      if (!("indexedDB" in window)) {
-        setProfileImageError(
-          "이 브라우저에서는 프로필 이미지 저장을 지원하지 않습니다.",
-        );
-        return;
-      }
+      const supabase =
+        createClient();
 
       setIsProfileImageLoading(true);
       setProfileImageError(null);
 
       try {
-        const record =
-          await readProfileImageRecord();
+        const {
+          data: {
+            session,
+          },
+          error: sessionError,
+        } =
+          await supabase.auth.getSession();
 
-        replaceProfileImageUrl(
-          record
-            ? URL.createObjectURL(
-                record.blob,
-              )
-            : null,
+        if (sessionError) {
+          throw sessionError;
+        }
+
+        const user =
+          session?.user ?? null;
+
+        if (!user) {
+          onProfileImageUpdated(null);
+          return;
+        }
+
+        const {
+          data: profile,
+          error: profileError,
+        } =
+          await supabase
+            .from("profiles")
+            .select(
+              "profile_image_url",
+            )
+            .eq(
+              "id",
+              user.id,
+            )
+            .maybeSingle();
+
+        if (profileError) {
+          throw profileError;
+        }
+
+        const savedProfileImageUrl =
+          typeof profile?.profile_image_url ===
+            "string" &&
+          profile.profile_image_url.trim()
+            ? profile.profile_image_url.trim()
+            : null;
+
+        onProfileImageUpdated(
+          savedProfileImageUrl,
         );
       } catch (error) {
         console.error(
@@ -274,108 +139,261 @@ export function useProfileImage() {
           "프로필 이미지를 불러오지 못했습니다.",
         );
       } finally {
-        setIsProfileImageLoading(
-          false,
-        );
+        setIsProfileImageLoading(false);
       }
-    }, [replaceProfileImageUrl]);
+    }, [
+      onProfileImageUpdated,
+    ]);
 
-  function openProfileImagePicker() {
-    profileImageInputRef.current?.click();
-  }
+  const changeProfileImage =
+    useCallback(
+      async (
+        event:
+          ChangeEvent<HTMLInputElement>,
+      ) => {
+        const file =
+          event.target.files?.[0];
 
-  async function changeProfileImage(
-    event: ChangeEvent<HTMLInputElement>,
-  ) {
-    const file =
-      event.target.files?.[0];
+        event.target.value = "";
 
-    event.target.value = "";
+        if (!file) {
+          return;
+        }
 
-    if (!file) {
-      return;
-    }
+        const extension =
+          getProfileImageExtension(
+            file,
+          );
 
-    const supportedTypes = [
-      "image/jpeg",
-      "image/png",
-      "image/webp",
-    ];
+        if (!extension) {
+          setProfileImageError(
+            "JPG, PNG, WEBP 이미지만 사용할 수 있습니다.",
+          );
 
-    if (
-      !supportedTypes.includes(
-        file.type,
-      )
-    ) {
-      setProfileImageError(
-        "JPG, PNG, WEBP 이미지만 사용할 수 있습니다.",
-      );
-      return;
-    }
+          return;
+        }
 
-    if (
-      file.size >
-      HOO_PROFILE_IMAGE_MAX_BYTES
-    ) {
-      setProfileImageError(
-        "프로필 이미지는 5MB 이하만 사용할 수 있습니다.",
-      );
-      return;
-    }
+        if (
+          file.size >
+          HOO_PROFILE_IMAGE_MAX_BYTES
+        ) {
+          setProfileImageError(
+            "프로필 이미지는 5MB 이하만 사용할 수 있습니다.",
+          );
 
-    setIsProfileImageLoading(true);
-    setProfileImageError(null);
+          return;
+        }
 
-    try {
-      await saveProfileImageRecord(file);
+        const supabase =
+          createClient();
 
-      replaceProfileImageUrl(
-        URL.createObjectURL(file),
-      );
-    } catch (error) {
-      console.error(
-        "프로필 이미지 변경 실패",
-        error,
-      );
+        setIsProfileImageLoading(true);
+        setProfileImageError(null);
 
-      setProfileImageError(
-        "프로필 이미지를 저장하지 못했습니다.",
-      );
-    } finally {
-      setIsProfileImageLoading(false);
-    }
-  }
+        try {
+          const {
+            data: {
+              session,
+            },
+            error: sessionError,
+          } =
+            await supabase.auth.getSession();
 
-  async function removeProfileImage() {
-    setIsProfileImageLoading(true);
-    setProfileImageError(null);
+          if (sessionError) {
+            throw sessionError;
+          }
 
-    try {
-      await deleteProfileImageRecord();
-      replaceProfileImageUrl(null);
-    } catch (error) {
-      console.error(
-        "프로필 이미지 삭제 실패",
-        error,
-      );
+          const user =
+            session?.user ?? null;
 
-      setProfileImageError(
-        "프로필 이미지를 삭제하지 못했습니다.",
-      );
-    } finally {
-      setIsProfileImageLoading(false);
-    }
-  }
+          if (!user) {
+            setProfileImageError(
+              "프로필 이미지를 변경하려면 로그인이 필요합니다.",
+            );
 
-  useEffect(() => {
-    return () => {
-      if (objectUrlRef.current) {
-        URL.revokeObjectURL(
-          objectUrlRef.current,
+            return;
+          }
+
+          const filePath =
+            `${user.id}/avatar.${extension}`;
+
+          const {
+            error: uploadError,
+          } =
+            await supabase.storage
+              .from(
+                PROFILE_IMAGE_BUCKET,
+              )
+              .upload(
+                filePath,
+                file,
+                {
+                  cacheControl:
+                    "3600",
+
+                  contentType:
+                    file.type,
+
+                  upsert:
+                    true,
+                },
+              );
+
+          if (uploadError) {
+            throw uploadError;
+          }
+
+          const {
+            data: publicUrlData,
+          } =
+            supabase.storage
+              .from(
+                PROFILE_IMAGE_BUCKET,
+              )
+              .getPublicUrl(
+                filePath,
+              );
+
+          const publicUrl =
+            publicUrlData.publicUrl;
+
+          if (!publicUrl) {
+            throw new Error(
+              "프로필 이미지 주소를 생성하지 못했습니다.",
+            );
+          }
+
+          const cacheBustedUrl =
+            `${publicUrl}?v=${Date.now()}`;
+
+          const {
+            error: profileUpdateError,
+          } =
+            await supabase
+              .from("profiles")
+              .update({
+                profile_image_url:
+                  cacheBustedUrl,
+              })
+              .eq(
+                "id",
+                user.id,
+              );
+
+          if (profileUpdateError) {
+            throw profileUpdateError;
+          }
+
+          onProfileImageUpdated(
+            cacheBustedUrl,
+          );
+        } catch (error) {
+          console.error(
+            "프로필 이미지 변경 실패",
+            error,
+          );
+
+          setProfileImageError(
+            "프로필 이미지를 저장하지 못했습니다.",
+          );
+        } finally {
+          setIsProfileImageLoading(false);
+        }
+      },
+      [
+        onProfileImageUpdated,
+      ],
+    );
+
+  const removeProfileImage =
+    useCallback(async () => {
+      const supabase =
+        createClient();
+
+      setIsProfileImageLoading(true);
+      setProfileImageError(null);
+
+      try {
+        const {
+          data: {
+            session,
+          },
+          error: sessionError,
+        } =
+          await supabase.auth.getSession();
+
+        if (sessionError) {
+          throw sessionError;
+        }
+
+        const user =
+          session?.user ?? null;
+
+        if (!user) {
+          setProfileImageError(
+            "프로필 이미지를 삭제하려면 로그인이 필요합니다.",
+          );
+
+          return;
+        }
+
+        const imagePaths = [
+          `${user.id}/avatar.jpg`,
+          `${user.id}/avatar.png`,
+          `${user.id}/avatar.webp`,
+        ];
+
+        const {
+          error: removeError,
+        } =
+          await supabase.storage
+            .from(
+              PROFILE_IMAGE_BUCKET,
+            )
+            .remove(
+              imagePaths,
+            );
+
+        if (removeError) {
+          throw removeError;
+        }
+
+        const {
+          error: profileUpdateError,
+        } =
+          await supabase
+            .from("profiles")
+            .update({
+              profile_image_url:
+                null,
+            })
+            .eq(
+              "id",
+              user.id,
+            );
+
+        if (profileUpdateError) {
+          throw profileUpdateError;
+        }
+
+        onProfileImageUpdated(
+          null,
         );
+      } catch (error) {
+        console.error(
+          "프로필 이미지 삭제 실패",
+          error,
+        );
+
+        setProfileImageError(
+          "프로필 이미지를 삭제하지 못했습니다.",
+        );
+      } finally {
+        setIsProfileImageLoading(false);
       }
-    };
-  }, []);
+    }, [
+      onProfileImageUpdated,
+    ]);
 
   return {
     profileImageUrl,

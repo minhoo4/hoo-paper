@@ -3,8 +3,13 @@
 import {
   type ChangeEvent,
   useEffect,
+  useMemo,
   useState,
 } from "react";
+
+import {
+  createClient,
+} from "@/lib/supabase/client";
 
 const HOO_PROFILE_NICKNAME_STORAGE_KEY =
   "hoo-profile-nickname";
@@ -15,17 +20,36 @@ const DEFAULT_PROFILE_NICKNAME =
 const MAX_PROFILE_NICKNAME_LENGTH =
   20;
 
-export function useProfileNickname() {
-  const [nickname, setNickname] =
-    useState(
-      DEFAULT_PROFILE_NICKNAME,
-    );
+export function useProfileNickname(
+  loggedInNickname:
+    string | null,
+
+  onNicknameUpdated: (
+    nickname: string,
+  ) => void,
+) {
+  const supabase = useMemo(
+    () => createClient(),
+    [],
+  );
+
+  const normalizedLoggedInNickname =
+    loggedInNickname
+      ?.trim()
+      .slice(
+        0,
+        MAX_PROFILE_NICKNAME_LENGTH,
+      ) ?? "";
+
+  const nickname =
+    normalizedLoggedInNickname ||
+    DEFAULT_PROFILE_NICKNAME;
 
   const [
     nicknameDraft,
     setNicknameDraft,
   ] = useState(
-    DEFAULT_PROFILE_NICKNAME,
+    nickname,
   );
 
   const [
@@ -36,58 +60,54 @@ export function useProfileNickname() {
   const [
     nicknameError,
     setNicknameError,
-  ] = useState<string | null>(null);
+  ] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
-    try {
-      const savedNickname =
-        window.localStorage.getItem(
-          HOO_PROFILE_NICKNAME_STORAGE_KEY,
-        );
-
-      if (!savedNickname) {
-        return;
-      }
-
-      const normalizedNickname =
-        savedNickname.trim().slice(
-          0,
-          MAX_PROFILE_NICKNAME_LENGTH,
-        );
-
-      if (!normalizedNickname) {
-        return;
-      }
-
-      setNickname(
-        normalizedNickname,
-      );
-
-      setNicknameDraft(
-        normalizedNickname,
-      );
-    } catch (error) {
-      console.error(
-        "프로필 닉네임을 불러오지 못했습니다.",
-        error,
-      );
+    if (isNicknameEditing) {
+      return;
     }
-  }, []);
+
+    setNicknameDraft(
+      nickname,
+    );
+  }, [
+    nickname,
+    isNicknameEditing,
+  ]);
 
   function startNicknameEditing() {
-    setNicknameDraft(nickname);
-    setNicknameError(null);
-    setIsNicknameEditing(true);
+    setNicknameDraft(
+      nickname,
+    );
+
+    setNicknameError(
+      null,
+    );
+
+    setIsNicknameEditing(
+      true,
+    );
   }
 
   function cancelNicknameEditing() {
-    setNicknameDraft(nickname);
-    setNicknameError(null);
-    setIsNicknameEditing(false);
+    setNicknameDraft(
+      nickname,
+    );
+
+    setNicknameError(
+      null,
+    );
+
+    setIsNicknameEditing(
+      false,
+    );
   }
 
   function changeNicknameDraft(
-    event: ChangeEvent<HTMLInputElement>,
+    event:
+      ChangeEvent<HTMLInputElement>,
   ) {
     setNicknameDraft(
       event.target.value.slice(
@@ -97,28 +117,69 @@ export function useProfileNickname() {
     );
 
     if (nicknameError) {
-      setNicknameError(null);
+      setNicknameError(
+        null,
+      );
     }
   }
 
-  function saveNickname() {
+  async function saveNickname() {
     const normalizedNickname =
-      nicknameDraft.trim();
+      nicknameDraft
+        .trim()
+        .slice(
+          0,
+          MAX_PROFILE_NICKNAME_LENGTH,
+        );
 
     if (!normalizedNickname) {
       setNicknameError(
         "닉네임을 한 글자 이상 입력해주세요.",
       );
+
       return;
     }
 
     try {
+      const {
+        data: {
+          session,
+        },
+        error: sessionError,
+      } =
+        await supabase.auth.getSession();
+
+      if (sessionError) {
+        throw sessionError;
+      }
+
+      const user =
+        session?.user ?? null;
+
+      if (user) {
+        const {
+          error: updateError,
+        } =
+          await supabase
+            .from("profiles")
+            .update({
+              nickname:
+                normalizedNickname,
+              updated_at:
+                new Date().toISOString(),
+            })
+            .eq(
+              "id",
+              user.id,
+            );
+
+        if (updateError) {
+          throw updateError;
+        }
+      }
+
       window.localStorage.setItem(
         HOO_PROFILE_NICKNAME_STORAGE_KEY,
-        normalizedNickname,
-      );
-
-      setNickname(
         normalizedNickname,
       );
 
@@ -126,8 +187,17 @@ export function useProfileNickname() {
         normalizedNickname,
       );
 
-      setNicknameError(null);
-      setIsNicknameEditing(false);
+      setNicknameError(
+        null,
+      );
+
+      setIsNicknameEditing(
+        false,
+      );
+
+      onNicknameUpdated(
+        normalizedNickname,
+      );
     } catch (error) {
       console.error(
         "프로필 닉네임 저장 실패",
