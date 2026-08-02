@@ -73,13 +73,202 @@ type Favorite = {
   icon: string;
 };
 
+type TodoTaskType =
+  | "manual"
+  | "schedule"
+  | "preparation"
+  | "recommendation";
+
 type TodoItem = {
   id: string;
   content: string;
   completed: boolean;
   source: "user" | "hoo";
+  taskDate?: string;
+  taskType?: TodoTaskType;
   gameId?: string;
+  scheduleId?: string;
+  generatedAt?: string;
+  archivedAt?: string;
+  generationReason?: string;
   createdAt: string;
+};
+
+type HooBriefingStatus =
+  | "pending"
+  | "generating"
+  | "completed"
+  | "failed";
+
+type HooDailyBriefing = {
+  id: string;
+  briefingDate: string;
+
+  morningTitle: string;
+  morningContent: string;
+  morningGeneratedAt?: string;
+  morningReadAt?: string;
+  morningStatus: HooBriefingStatus;
+
+  eveningTitle?: string;
+  eveningContent?: string;
+  eveningGeneratedAt?: string;
+  eveningReadAt?: string;
+  eveningStatus?: HooBriefingStatus;
+
+  totalTodoCount: number;
+  completedTodoCount: number;
+  incompleteTodoCount: number;
+  completionRate: number;
+};
+
+
+type HooContextMessageType =
+  | "weather_care"
+  | "condition_care"
+  | "sunset";
+
+type HooContextMessageStatus =
+  | "pending"
+  | "delivered"
+  | "read"
+  | "dismissed"
+  | "expired";
+
+type HooContextMessage = {
+  id: string;
+  messageDate: string;
+  messageType: HooContextMessageType;
+  title: string;
+  content: string;
+  scheduledFor: string;
+  expiresAt: string;
+  priority: number;
+  status: HooContextMessageStatus;
+  dedupeKey: string;
+};
+
+
+type HooRoutineCandidate = {
+  id: string;
+  name: string;
+
+  routineType:
+    | "commute"
+    | "work"
+    | "study"
+    | "sleep"
+    | "meal"
+    | "exercise"
+    | "social"
+    | "care"
+    | "protected"
+    | "other";
+
+  daysOfWeek: number[];
+
+  startTime?: string;
+  endTime?: string;
+
+  confidence: number;
+
+  status:
+    | "candidate"
+    | "needs_confirmation"
+    | "confirmed"
+    | "rejected"
+    | "inactive";
+
+  protectFromSuggestions: boolean;
+  observationCount: number;
+
+  inferenceReason?: string;
+};
+
+
+type HooWeatherPreference = {
+  weatherEnabled: boolean;
+
+  /*
+   * 서버에는 정확한 원본 위치가 아닌
+   * 소수점 둘째 자리의 대략적 좌표만 저장한다.
+   */
+  latitude?: number;
+  longitude?: number;
+
+  locationName?: string;
+  timezone: string;
+
+  locationSource:
+    HooWeatherLocationSource;
+
+  backgroundWeatherEnabled: boolean;
+
+  locationProcessingMode:
+    | "ephemeral_coarse"
+    | "persisted_coarse";
+
+  /*
+   * 정확한 원본 위치는 최대 60초 동안만
+   * 브라우저 메모리에서 처리한다.
+   */
+  rawLocationRetentionSeconds: number;
+
+  storeLocationHistory: false;
+
+  consentedAt?: string;
+};
+
+type HooWeatherPermissionStatus =
+  | "idle"
+  | "requesting"
+  | "granted"
+  | "denied"
+  | "unsupported"
+  | "error";
+
+type HooLiveLocationStatus =
+  | "inactive"
+  | "starting"
+  | "active"
+  | "paused"
+  | "error";
+
+type HooSessionLocation = {
+  /*
+   * 정확한 GPS 좌표가 아니라
+   * 약 1km 단위로 낮춘 좌표만
+   * 메모리에 잠시 보관한다.
+   */
+  latitude: number;
+  longitude: number;
+
+  accuracyMeters: number;
+  capturedAt: string;
+  expiresAt: string;
+};
+
+type HooWeatherLocationSource =
+  | "browser"
+  | "manual"
+  | "default"
+  | "device_ephemeral"
+  | "device_coarse";
+
+
+type HooWeatherSnapshot = {
+  forecastAt: string;
+  provider: string;
+  weatherCode?: number;
+  temperatureCelsius?: number;
+  apparentTemperatureCelsius?: number;
+  relativeHumidity?: number;
+  precipitationProbability?: number;
+  cloudCover?: number;
+  windSpeedKmh?: number;
+  isDay?: boolean;
+  sunriseAt?: string;
+  sunsetAt?: string;
 };
 
 type HooRecommendedTask = {
@@ -615,6 +804,241 @@ const [
   isTodoCloudReady,
   setIsTodoCloudReady,
 ] = useState(false);
+
+/*
+ * HOO 아침 브리핑
+ */
+const [
+  morningBriefing,
+  setMorningBriefing,
+] =
+  useState<HooDailyBriefing | null>(
+    null,
+  );
+
+const [
+  isMorningBriefingLoading,
+  setIsMorningBriefingLoading,
+] = useState(true);
+
+const [
+  isMorningBriefingOpen,
+  setIsMorningBriefingOpen,
+] = useState(true);
+
+/*
+ * 메인 화면 중앙 브리핑 모달
+ */
+const [
+  isBriefingModalOpen,
+  setIsBriefingModalOpen,
+] = useState(false);
+
+const lastAutoBriefingKeyRef =
+  useRef<string | null>(null);
+
+
+  /*
+ * HOO 예약 컨텍스트 메시지
+ */
+const [
+  contextMessage,
+  setContextMessage,
+] =
+  useState<HooContextMessage | null>(
+    null,
+  );
+
+const [
+  isContextMessageOpen,
+  setIsContextMessageOpen,
+] = useState(false);
+
+const [
+  isContextMessageLoading,
+  setIsContextMessageLoading,
+] = useState(false);
+
+/*
+ * 현재 메시지를 처리한 뒤
+ * 다음 예약 메시지를 다시 조회하게 한다.
+ */
+const [
+  contextMessageRefreshKey,
+  setContextMessageRefreshKey,
+] = useState(0);
+
+/*
+ * 같은 메시지가 한 화면에서
+ * 반복적으로 열리는 것을 방지한다.
+ */
+const lastOpenedContextMessageIdRef =
+  useRef<string | null>(null);
+
+/*
+ * 예약 시각에 다시 조회하기 위한 타이머다.
+ */
+const contextMessageTimerRef =
+  useRef<number | null>(null);
+
+/*
+ * React 개발 모드나 탭 복귀 이벤트로
+ * 메시지 조회가 동시에 실행되는 것을 막는다.
+ */
+const contextMessageLoadInFlightRef =
+  useRef(false);
+
+
+/*
+ * HOO 반복 생활 후보
+ */
+const [
+  routineCandidates,
+  setRoutineCandidates,
+] =
+  useState<HooRoutineCandidate[]>(
+    [],
+  );
+
+const [
+  selectedRoutineCandidate,
+  setSelectedRoutineCandidate,
+] =
+  useState<HooRoutineCandidate | null>(
+    null,
+  );
+
+const [
+  isRoutineConfirmationOpen,
+  setIsRoutineConfirmationOpen,
+] = useState(false);
+
+const [
+  routineStartTime,
+  setRoutineStartTime,
+] = useState("");
+
+const [
+  routineEndTime,
+  setRoutineEndTime,
+] = useState("");
+
+const [
+  shouldProtectRoutineTime,
+  setShouldProtectRoutineTime,
+] = useState(true);
+
+const [
+  isRoutineSaving,
+  setIsRoutineSaving,
+] = useState(false);
+
+
+/*
+ * HOO 날씨·위치 설정
+ */
+const [
+  weatherPreference,
+  setWeatherPreference,
+] =
+  useState<HooWeatherPreference | null>(
+    null,
+  );
+
+const [
+  currentWeather,
+  setCurrentWeather,
+] =
+  useState<HooWeatherSnapshot | null>(
+    null,
+  );
+
+const [
+  weatherPermissionStatus,
+  setWeatherPermissionStatus,
+] =
+  useState<HooWeatherPermissionStatus>(
+    "idle",
+  );
+
+const [
+  isWeatherConsentOpen,
+  setIsWeatherConsentOpen,
+] = useState(false);
+
+const [
+  isWeatherPreferenceLoading,
+  setIsWeatherPreferenceLoading,
+] = useState(true);
+
+const [
+  isWeatherLoading,
+  setIsWeatherLoading,
+] = useState(false);
+
+const [
+  weatherErrorMessage,
+  setWeatherErrorMessage,
+] = useState("");
+
+
+/*
+ * HOO 임시 위치 처리
+ *
+ * 위치는 메모리에만 존재하며
+ * 최대 60초 후 자동으로 폐기한다.
+ */
+const [
+  liveLocationStatus,
+  setLiveLocationStatus,
+] =
+  useState<HooLiveLocationStatus>(
+    "inactive",
+  );
+
+const [
+  sessionLocation,
+  setSessionLocation,
+] =
+  useState<HooSessionLocation | null>(
+    null,
+  );
+
+/*
+ * 브라우저 위치 감시 ID
+ *
+ * 현재 웹에서는 실시간 감시를
+ * 바로 시작하지 않지만, 명시적인
+ * 중단과 앱 확장을 위해 준비한다.
+ */
+const locationWatchIdRef =
+  useRef<number | null>(null);
+
+/*
+ * 임시 위치 자동 폐기 타이머
+ */
+const locationExpiryTimerRef =
+  useRef<number | null>(null);
+
+/*
+ * 너무 잦은 날씨 요청을 막기 위한
+ * 마지막 갱신 시각
+ */
+const lastWeatherRefreshAtRef =
+  useRef(0);
+
+/*
+ * 현재 화면에서 마지막으로 날씨를
+ * 갱신한 날짜를 기억한다.
+ *
+ * 사이트 진입 시 한 번 갱신하고,
+ * 화면을 계속 열어 둔 상태에서 날짜가 바뀌면
+ * 새로운 위치를 단발성으로 다시 확인한다.
+ */
+const weatherRefreshDateRef =
+  useRef("");
+
+
 
 const [
   draggingTodoId,
@@ -2353,46 +2777,3686 @@ useEffect(() => {
 
 
 /* ─────────────────────────────
-   투두리스트 클라우드 불러오기
-   기존 localStorage 기록 자동 이전
+   HOO 오늘의 아침 브리핑 불러오기
+───────────────────────────── */
+
+
+useEffect(() => {
+  let cancelled = false;
+let briefingTimer: number | null =
+  null;
+
+  function clearBriefingTimer() {
+    if (briefingTimer === null) {
+      return;
+    }
+
+    window.clearTimeout(
+      briefingTimer,
+    );
+
+    briefingTimer = null;
+  }
+
+  function scheduleBriefingLoad(
+    delayMilliseconds: number,
+  ) {
+    clearBriefingTimer();
+
+    if (cancelled) {
+      return;
+    }
+
+    briefingTimer =
+      window.setTimeout(() => {
+        briefingTimer = null;
+
+        void loadMorningBriefing();
+      }, Math.max(
+        1000,
+        delayMilliseconds,
+      ));
+  }
+
+  function scheduleFourAmLoad(
+    now: Date,
+  ) {
+    const fourAm =
+      new Date(now);
+
+    fourAm.setHours(
+      4,
+      0,
+      0,
+      0,
+    );
+
+    if (
+      fourAm.getTime() <=
+      now.getTime()
+    ) {
+      fourAm.setDate(
+        fourAm.getDate() + 1,
+      );
+    }
+
+    scheduleBriefingLoad(
+      fourAm.getTime() -
+        now.getTime(),
+    );
+  }
+
+  function scheduleMidnightReset(
+    now: Date,
+  ) {
+    const nextMidnight =
+      new Date(now);
+
+    nextMidnight.setHours(
+      24,
+      0,
+      0,
+      0,
+    );
+
+    scheduleBriefingLoad(
+      nextMidnight.getTime() -
+        now.getTime(),
+    );
+  }
+
+  function normalizeBriefingStatus(
+    value: unknown,
+  ): HooBriefingStatus {
+    if (
+      value === "generating" ||
+      value === "completed" ||
+      value === "failed"
+    ) {
+      return value;
+    }
+
+    return "pending";
+  }
+
+  async function loadMorningBriefing() {
+    const now = new Date();
+
+    /*
+     * 자정이 지나면 전날 브리핑을 제거하고
+     * 새벽 4시까지 준비 중 카드를 표시한다.
+     */
+    if (now.getHours() < 4) {
+      if (!cancelled) {
+        setMorningBriefing(null);
+
+        setIsMorningBriefingLoading(
+          false,
+        );
+
+        scheduleFourAmLoad(now);
+      }
+
+      return;
+    }
+
+    if (!cancelled) {
+      setIsMorningBriefingLoading(
+        true,
+      );
+    }
+
+    const todayBriefingDate =
+      getTodayStorageDate();
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } =
+        await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      /*
+       * 비로그인 상태에서는 개인 브리핑을
+       * 서버에서 불러오지 않는다.
+       */
+      if (!user) {
+        if (!cancelled) {
+          setMorningBriefing(null);
+        }
+
+        return;
+      }
+
+      /*
+       * 오늘 날짜의 아침·저녁 브리핑을
+       * 한 번의 요청으로 불러온다.
+       */
+      const {
+        data: briefing,
+        error: briefingError,
+      } = await supabase
+        .from(
+          "hoo_daily_briefings",
+        )
+        .select(
+          `
+            id,
+            briefing_date,
+
+            morning_title,
+            morning_content,
+            morning_generated_at,
+            morning_read_at,
+            morning_status,
+
+            evening_title,
+            evening_content,
+            evening_generated_at,
+            evening_read_at,
+            evening_status,
+
+            total_todo_count,
+            completed_todo_count,
+            incomplete_todo_count,
+            completion_rate
+          `,
+        )
+        .eq(
+          "user_id",
+          user.id,
+        )
+        .eq(
+          "briefing_date",
+          todayBriefingDate,
+        )
+        .maybeSingle();
+
+      if (briefingError) {
+        throw briefingError;
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      /*
+       * 새벽 4시 크론이 아직 완료되지 않았다면
+       * 준비 중 카드를 유지하고 30초 후 재확인한다.
+       */
+      if (!briefing) {
+        setMorningBriefing(null);
+
+        scheduleBriefingLoad(
+          30 * 1000,
+        );
+
+        return;
+      }
+
+      const morningStatus =
+        normalizeBriefingStatus(
+          briefing.morning_status,
+        );
+
+      const eveningStatus =
+        normalizeBriefingStatus(
+          briefing.evening_status,
+        );
+
+      const hasMorningBriefing =
+        morningStatus ===
+          "completed" &&
+        typeof briefing.morning_content ===
+          "string" &&
+        briefing.morning_content.trim()
+          .length > 0;
+
+      const hasEveningBriefing =
+        eveningStatus ===
+          "completed" &&
+        typeof briefing.evening_content ===
+          "string" &&
+        briefing.evening_content.trim()
+          .length > 0;
+
+      /*
+       * 행은 있지만 브리핑 생성이 진행 중이면
+       * 30초 후 다시 확인한다.
+       */
+      if (
+        !hasMorningBriefing &&
+        !hasEveningBriefing
+      ) {
+        setMorningBriefing(null);
+
+        scheduleBriefingLoad(
+          30 * 1000,
+        );
+
+        return;
+      }
+
+      const normalizedBriefing:
+        HooDailyBriefing = {
+          id:
+            briefing.id,
+
+          briefingDate:
+            typeof briefing.briefing_date ===
+            "string"
+              ? briefing.briefing_date
+              : todayBriefingDate,
+
+          morningTitle:
+            typeof briefing.morning_title ===
+            "string"
+              ? briefing.morning_title
+              : "좋은 아침이에요.",
+
+          morningContent:
+            typeof briefing.morning_content ===
+            "string"
+              ? briefing.morning_content
+              : "",
+
+          morningGeneratedAt:
+            typeof briefing.morning_generated_at ===
+            "string"
+              ? briefing.morning_generated_at
+              : undefined,
+
+          morningReadAt:
+            typeof briefing.morning_read_at ===
+            "string"
+              ? briefing.morning_read_at
+              : undefined,
+
+          morningStatus,
+
+          eveningTitle:
+            typeof briefing.evening_title ===
+            "string"
+              ? briefing.evening_title
+              : undefined,
+
+          eveningContent:
+            typeof briefing.evening_content ===
+            "string"
+              ? briefing.evening_content
+              : undefined,
+
+          eveningGeneratedAt:
+            typeof briefing.evening_generated_at ===
+            "string"
+              ? briefing.evening_generated_at
+              : undefined,
+
+          eveningReadAt:
+            typeof briefing.evening_read_at ===
+            "string"
+              ? briefing.evening_read_at
+              : undefined,
+
+          eveningStatus,
+
+          totalTodoCount:
+            Number(
+              briefing.total_todo_count ??
+                0,
+            ),
+
+          completedTodoCount:
+            Number(
+              briefing.completed_todo_count ??
+                0,
+            ),
+
+          incompleteTodoCount:
+            Number(
+              briefing.incomplete_todo_count ??
+                0,
+            ),
+
+          completionRate:
+            Number(
+              briefing.completion_rate ??
+                0,
+            ),
+        };
+
+      if (cancelled) {
+        return;
+      }
+
+      setMorningBriefing(
+        normalizedBriefing,
+      );
+
+      setIsMorningBriefingOpen(
+        true,
+      );
+
+      /*
+       * 정상 브리핑을 불러온 후에는
+       * 다음 자정에 자동으로 날짜를 전환한다.
+       */
+      scheduleMidnightReset(
+        new Date(),
+      );
+    } catch (error) {
+      console.error(
+        "HOO 오늘의 브리핑 불러오기 실패:",
+        error,
+      );
+
+      if (!cancelled) {
+        setMorningBriefing(null);
+
+        /*
+         * 일시적인 오류는 1분 후 재시도한다.
+         */
+        scheduleBriefingLoad(
+          60 * 1000,
+        );
+      }
+    } finally {
+      if (!cancelled) {
+        setIsMorningBriefingLoading(
+          false,
+        );
+      }
+    }
+  }
+
+  void loadMorningBriefing();
+
+  function handleBriefingVisibilityChange() {
+    if (
+      document.visibilityState !==
+      "visible"
+    ) {
+      return;
+    }
+
+    /*
+     * 백그라운드 상태에서 예약 시각이
+     * 지났을 수 있으므로 즉시 재확인한다.
+     */
+    void loadMorningBriefing();
+  }
+
+  document.addEventListener(
+    "visibilitychange",
+    handleBriefingVisibilityChange,
+  );
+
+  return () => {
+    cancelled = true;
+
+    clearBriefingTimer();
+
+    document.removeEventListener(
+      "visibilitychange",
+      handleBriefingVisibilityChange,
+    );
+  };
+}, [supabase]);
+
+
+/* ─────────────────────────────
+   HOO 오후 9시 브리핑 자동 감지
 ───────────────────────────── */
 
 useEffect(() => {
   let cancelled = false;
 
-  async function loadCloudTodos() {
+  let eveningBriefingLoaded =
+    false;
+
+  async function loadEveningBriefingIfReady() {
+    const now = new Date();
+
+    /*
+     * 오후 9시 전에는 저녁 브리핑을
+     * 화면에 표시하지 않는다.
+     */
+    if (now.getHours() < 21) {
+      return;
+    }
+
+    const todayBriefingDate =
+      getTodayStorageDate();
+
     try {
       const {
-  data: {
-    session,
-  },
-  error: sessionError,
-} =
-  await supabase.auth.getSession();
+        data: { user },
+        error: userError,
+      } =
+        await supabase.auth.getUser();
 
-if (sessionError) {
-  throw sessionError;
+      if (userError) {
+        throw userError;
+      }
+
+      if (
+        !user ||
+        cancelled ||
+        eveningBriefingLoaded
+      ) {
+        return;
+      }
+
+      const {
+        data: briefing,
+        error: briefingError,
+      } = await supabase
+        .from("hoo_daily_briefings")
+        .select(
+          `
+            evening_title,
+            evening_content,
+            evening_generated_at,
+            evening_read_at,
+            evening_status,
+            total_todo_count,
+            completed_todo_count,
+            incomplete_todo_count,
+            completion_rate
+          `,
+        )
+        .eq("user_id", user.id)
+        .eq(
+          "briefing_date",
+          todayBriefingDate,
+        )
+        .maybeSingle();
+
+      if (briefingError) {
+        throw briefingError;
+      }
+
+      if (
+        cancelled ||
+        !briefing ||
+        briefing.evening_status !==
+          "completed" ||
+        typeof briefing.evening_content !==
+          "string" ||
+        briefing.evening_content.trim()
+          .length === 0
+      ) {
+        return;
+      }
+
+      eveningBriefingLoaded = true;
+
+      setMorningBriefing(
+        (previousBriefing) => {
+          if (!previousBriefing) {
+            return previousBriefing;
+          }
+
+          return {
+            ...previousBriefing,
+
+            eveningTitle:
+              typeof briefing.evening_title ===
+              "string"
+                ? briefing.evening_title
+                : "오늘 하루도 수고했어요.",
+
+            eveningContent:
+              briefing.evening_content,
+
+            eveningGeneratedAt:
+              typeof briefing.evening_generated_at ===
+              "string"
+                ? briefing.evening_generated_at
+                : undefined,
+
+            eveningReadAt:
+              typeof briefing.evening_read_at ===
+              "string"
+                ? briefing.evening_read_at
+                : undefined,
+
+            eveningStatus:
+              "completed",
+
+            totalTodoCount:
+              Number(
+                briefing.total_todo_count ??
+                  0,
+              ),
+
+            completedTodoCount:
+              Number(
+                briefing.completed_todo_count ??
+                  0,
+              ),
+
+            incompleteTodoCount:
+              Number(
+                briefing.incomplete_todo_count ??
+                  0,
+              ),
+
+            completionRate:
+              Number(
+                briefing.completion_rate ??
+                  0,
+              ),
+          };
+        },
+      );
+
+      setIsMorningBriefingOpen(true);
+    } catch (error) {
+      console.error(
+        "HOO 저녁 브리핑 자동 확인 실패:",
+        error,
+      );
+    }
+  }
+
+  /*
+   * 페이지를 열었을 때 즉시 확인한다.
+   */
+  void loadEveningBriefingIfReady();
+
+  /*
+   * 오후 9시가 지나면 최대 30초 안에
+   * 생성된 브리핑을 감지한다.
+   */
+  const eveningBriefingInterval =
+    window.setInterval(() => {
+      void loadEveningBriefingIfReady();
+    }, 30_000);
+
+  function handleVisibilityChange() {
+    if (
+      document.visibilityState ===
+      "visible"
+    ) {
+      void loadEveningBriefingIfReady();
+    }
+  }
+
+  document.addEventListener(
+    "visibilitychange",
+    handleVisibilityChange,
+  );
+
+  return () => {
+    cancelled = true;
+
+    window.clearInterval(
+      eveningBriefingInterval,
+    );
+
+    document.removeEventListener(
+      "visibilitychange",
+      handleVisibilityChange,
+    );
+  };
+}, [supabase]);
+
+
+/* ─────────────────────────────
+   HOO 예약 컨텍스트 메시지 자동 감지
+───────────────────────────── */
+
+useEffect(() => {
+  let cancelled = false;
+
+  function clearContextMessageTimer() {
+    if (
+      contextMessageTimerRef.current ===
+      null
+    ) {
+      return;
+    }
+
+    window.clearTimeout(
+      contextMessageTimerRef.current,
+    );
+
+    contextMessageTimerRef.current =
+      null;
+  }
+
+  function scheduleContextMessageLoad(
+    delayMilliseconds: number,
+  ) {
+    clearContextMessageTimer();
+
+    if (cancelled) {
+      return;
+    }
+
+    /*
+     * 브라우저 setTimeout의 최대 안전 범위를
+     * 넘지 않도록 제한한다.
+     */
+    const safeDelay =
+      Math.min(
+        Math.max(
+          delayMilliseconds,
+          1000,
+        ),
+        2_147_000_000,
+      );
+
+    contextMessageTimerRef.current =
+      window.setTimeout(() => {
+        contextMessageTimerRef.current =
+          null;
+
+        void loadContextMessage();
+      }, safeDelay);
+  }
+
+  function normalizeContextMessageType(
+    value: unknown,
+  ): HooContextMessageType {
+    if (
+      value === "weather_care" ||
+      value === "condition_care" ||
+      value === "sunset"
+    ) {
+      return value;
+    }
+
+    return "condition_care";
+  }
+
+  function normalizeContextMessageStatus(
+    value: unknown,
+  ): HooContextMessageStatus {
+    if (
+      value === "delivered" ||
+      value === "read" ||
+      value === "dismissed" ||
+      value === "expired"
+    ) {
+      return value;
+    }
+
+    return "pending";
+  }
+
+  async function scheduleNextPendingMessage(
+    userId: string,
+  ) {
+    if (cancelled) {
+      return;
+    }
+
+    const now =
+      new Date();
+
+    const {
+      data: nextMessage,
+      error: nextMessageError,
+    } =
+      await supabase
+        .from("hoo_context_messages")
+        .select(
+          `
+            id,
+            scheduled_for,
+            expires_at
+          `,
+        )
+        .eq(
+          "user_id",
+          userId,
+        )
+        .eq(
+          "status",
+          "pending",
+        )
+        .gt(
+          "scheduled_for",
+          now.toISOString(),
+        )
+        .gt(
+          "expires_at",
+          now.toISOString(),
+        )
+        .order(
+          "scheduled_for",
+          {
+            ascending: true,
+          },
+        )
+        .limit(1)
+        .maybeSingle();
+
+    if (nextMessageError) {
+      throw nextMessageError;
+    }
+
+    if (
+      cancelled ||
+      !nextMessage ||
+      typeof nextMessage.scheduled_for !==
+        "string"
+    ) {
+      /*
+       * 아직 다음 메시지가 없어도 날씨 갱신이나
+       * 새 메시지 생성을 감지할 수 있도록
+       * 5분 후 다시 확인한다.
+       */
+      scheduleContextMessageLoad(
+        5 * 60 * 1000,
+      );
+
+      return;
+    }
+
+    const scheduledTime =
+      new Date(
+        nextMessage.scheduled_for,
+      ).getTime();
+
+    if (
+      !Number.isFinite(
+        scheduledTime,
+      )
+    ) {
+      scheduleContextMessageLoad(
+        60 * 1000,
+      );
+
+      return;
+    }
+
+    scheduleContextMessageLoad(
+      scheduledTime -
+        Date.now() +
+        500,
+    );
+  }
+
+ async function loadContextMessage() {
+  clearContextMessageTimer();
+
+  if (cancelled) {
+  return;
 }
 
-const user =
-  session?.user ?? null;
-
 /*
- * 로그인하지 않은 사용자는
- * 기존 localStorage 투두를 그대로 사용한다.
+ * 현재 메시지 카드가 열려 있으면
+ * 다음 메시지를 조회하거나 delivered로 변경하지 않는다.
+ *
+ * 사용자가 현재 메시지를 처리하면
+ * refreshKey를 통해 다음 메시지를 조회한다.
  */
-if (!user) {
-  if (!cancelled) {
-    setIsTodoCloudReady(true);
-  }
+if (
+  isContextMessageOpen &&
+  contextMessage
+) {
+  setIsContextMessageLoading(
+    false,
+  );
 
   return;
 }
 
+/*
+ * React 개발 모드, 탭 복귀, 예약 타이머가
+ * 동시에 실행되더라도 DB 조회는 한 번만 수행한다.
+ */
+if (
+  contextMessageLoadInFlightRef.current
+) {
+
+
+    scheduleContextMessageLoad(
+      500,
+    );
+
+    return;
+  }
+
+  if (!isLoggedIn) {
+    setContextMessage(null);
+    setIsContextMessageOpen(false);
+    setIsContextMessageLoading(false);
+
+    return;
+  }
+
+  contextMessageLoadInFlightRef.current =
+    true;
+
+  setIsContextMessageLoading(true);
+
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } =
+      await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    if (!user) {
+      if (!cancelled) {
+        setContextMessage(null);
+        setIsContextMessageOpen(false);
+        setIsContextMessageLoading(
+          false,
+        );
+      }
+
+      return;
+    }
+
+    if (cancelled) {
+      return;
+    }
+
+    const nowIso =
+      new Date().toISOString();
+
+    /*
+     * 유효시간이 지난 pending 메시지는
+     * 화면에 표시하지 않고 expired 처리한다.
+     */
+    const {
+      error: expirationError,
+    } =
+      await supabase
+        .from("hoo_context_messages")
+        .update({
+          status: "expired",
+          updated_at: nowIso,
+        })
+        .eq(
+          "user_id",
+          user.id,
+        )
+        .eq(
+          "status",
+          "pending",
+        )
+        .lte(
+          "expires_at",
+          nowIso,
+        );
+
+    if (expirationError) {
+      throw expirationError;
+    }
+
+    if (cancelled) {
+      return;
+    }
+
+    /*
+     * 현재 송출 가능한 메시지 가운데
+     * 우선순위가 가장 높은 한 건만 가져온다.
+     */
+    const {
+      data: pendingMessage,
+      error: pendingMessageError,
+    } =
+      await supabase
+        .from("hoo_context_messages")
+        .select(
+          `
+            id,
+            message_date,
+            message_type,
+            title,
+            content,
+            scheduled_for,
+            expires_at,
+            priority,
+            status,
+            dedupe_key
+          `,
+        )
+        .eq(
+          "user_id",
+          user.id,
+        )
+        .eq(
+          "status",
+          "pending",
+        )
+        .lte(
+          "scheduled_for",
+          nowIso,
+        )
+        .gt(
+          "expires_at",
+          nowIso,
+        )
+        .order(
+          "priority",
+          {
+            ascending: false,
+          },
+        )
+        .order(
+          "scheduled_for",
+          {
+            ascending: true,
+          },
+        )
+        .limit(1)
+        .maybeSingle();
+
+    if (pendingMessageError) {
+      throw pendingMessageError;
+    }
+
+    if (cancelled) {
+      return;
+    }
+
+    if (!pendingMessage) {
+      setIsContextMessageLoading(
+        false,
+      );
+
+      await scheduleNextPendingMessage(
+        user.id,
+      );
+
+      return;
+    }
+
+    /*
+     * 여러 탭이 같은 pending 메시지를
+     * 동시에 가져온 경우에도 한 곳에서만
+     * delivered 상태로 바꿀 수 있게 한다.
+     */
+    const {
+      data: deliveredMessage,
+      error: deliveryError,
+    } =
+      await supabase
+        .from("hoo_context_messages")
+        .update({
+          status: "delivered",
+          updated_at:
+            new Date().toISOString(),
+        })
+        .eq(
+          "id",
+          pendingMessage.id,
+        )
+        .eq(
+          "user_id",
+          user.id,
+        )
+        .eq(
+          "status",
+          "pending",
+        )
+        .select(
+          `
+            id,
+            message_date,
+            message_type,
+            title,
+            content,
+            scheduled_for,
+            expires_at,
+            priority,
+            status,
+            dedupe_key
+          `,
+        )
+        .maybeSingle();
+
+    if (deliveryError) {
+      throw deliveryError;
+    }
+
+    if (cancelled) {
+      return;
+    }
+
+    /*
+     * 다른 탭이나 다른 조회가 먼저 상태를
+     * 변경했다면 잠시 후 다음 메시지를 확인한다.
+     */
+    if (!deliveredMessage) {
+      scheduleContextMessageLoad(
+        1000,
+      );
+
+      return;
+    }
+
+    const normalizedMessage:
+      HooContextMessage = {
+        id:
+          String(
+            deliveredMessage.id,
+          ),
+
+        messageDate:
+          typeof deliveredMessage.message_date ===
+          "string"
+            ? deliveredMessage.message_date
+            : getTodayStorageDate(),
+
+        messageType:
+          normalizeContextMessageType(
+            deliveredMessage.message_type,
+          ),
+
+        title:
+          typeof deliveredMessage.title ===
+          "string"
+            ? deliveredMessage.title
+            : "HOO가 전해드려요.",
+
+        content:
+          typeof deliveredMessage.content ===
+          "string"
+            ? deliveredMessage.content
+            : "",
+
+        scheduledFor:
+          typeof deliveredMessage.scheduled_for ===
+          "string"
+            ? deliveredMessage.scheduled_for
+            : nowIso,
+
+        expiresAt:
+          typeof deliveredMessage.expires_at ===
+          "string"
+            ? deliveredMessage.expires_at
+            : nowIso,
+
+        priority:
+          Number(
+            deliveredMessage.priority ??
+              0,
+          ),
+
+        status:
+          normalizeContextMessageStatus(
+            deliveredMessage.status,
+          ),
+
+        dedupeKey:
+          typeof deliveredMessage.dedupe_key ===
+          "string"
+            ? deliveredMessage.dedupe_key
+            : String(
+                deliveredMessage.id,
+              ),
+      };
+
+    /*
+     * 같은 페이지 실행 중 이미 자동으로 열었던
+     * 메시지는 다시 표시하지 않는다.
+     */
+    if (
+      lastOpenedContextMessageIdRef.current ===
+      normalizedMessage.id
+    ) {
+      await scheduleNextPendingMessage(
+        user.id,
+      );
+
+      return;
+    }
+
+
+
+    lastOpenedContextMessageIdRef.current =
+      normalizedMessage.id;
+
+    setContextMessage(
+      normalizedMessage,
+    );
+
+    setIsContextMessageOpen(
+      true,
+    );
+
+    setIsContextMessageLoading(
+      false,
+    );
+  } catch (error) {
+    console.error(
+      "HOO 예약 메시지를 불러오지 못했습니다.",
+      error,
+    );
+
+    if (!cancelled) {
+      setIsContextMessageLoading(
+        false,
+      );
+
+      /*
+       * 일시적인 네트워크 오류가 발생하면
+       * 30초 후 다시 확인한다.
+       */
+      scheduleContextMessageLoad(
+        30 * 1000,
+      );
+    }
+  } finally {
+    contextMessageLoadInFlightRef.current =
+      false;
+  }
+}
+
+  function handleContextMessageVisibilityChange() {
+    if (
+      document.visibilityState ===
+      "visible"
+    ) {
+      void loadContextMessage();
+    }
+  }
+
+  void loadContextMessage();
+
+  document.addEventListener(
+    "visibilitychange",
+    handleContextMessageVisibilityChange,
+  );
+
+  return () => {
+    cancelled = true;
+
+    clearContextMessageTimer();
+
+    document.removeEventListener(
+      "visibilitychange",
+      handleContextMessageVisibilityChange,
+    );
+  };
+
+}, [
+  supabase,
+  isLoggedIn,
+  contextMessageRefreshKey,
+  isContextMessageOpen,
+  contextMessage,
+]);
+
+
+/* ─────────────────────────────
+   HOO 날씨·위치 설정 불러오기
+───────────────────────────── */
+
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadWeatherPreference() {
+    setIsWeatherPreferenceLoading(
+      true,
+    );
+
+    try {
       const {
-        data: cloudTodos,
-        error: cloudTodoError,
+        data: authData,
+        error: authError,
+      } =
+        await supabase.auth.getUser();
+
+      if (
+        cancelled ||
+        authError ||
+        !authData.user
+      ) {
+        return;
+      }
+
+      const {
+        data,
+        error,
       } = await supabase
+        .from(
+          "hoo_weather_preferences",
+        )
+        .select(
+          `
+            weather_enabled,
+            latitude,
+            longitude,
+            location_name,
+            timezone,
+            location_source,
+            background_weather_enabled,
+            location_processing_mode,
+            raw_location_retention_seconds,
+            store_location_history,
+            consented_at
+          `,
+        )
+        .eq(
+          "user_id",
+          authData.user.id,
+        )
+        .maybeSingle();
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        throw error;
+      }
+
+      /*
+       * 아직 이용자가 선택하지 않았다면
+       * 위치를 요청하지 않고 안내창만 연다.
+       */
+      if (!data) {
+        setWeatherPreference(null);
+
+        setWeatherPermissionStatus(
+          "idle",
+        );
+
+        setIsWeatherConsentOpen(
+          true,
+        );
+
+        return;
+      }
+
+      const loadedPreference:
+        HooWeatherPreference = {
+          weatherEnabled:
+            Boolean(
+              data.weather_enabled,
+            ),
+
+          /*
+           * 좌표가 존재하더라도 DB에서
+           * 이미 약 1km 단위로 제한되어 있다.
+           */
+          latitude:
+            data.latitude === null
+              ? undefined
+              : Number(data.latitude),
+
+          longitude:
+            data.longitude === null
+              ? undefined
+              : Number(data.longitude),
+
+          locationName:
+            data.location_name ??
+            undefined,
+
+          timezone:
+            data.timezone ??
+            "Asia/Seoul",
+
+          locationSource:
+            (
+              data.location_source ??
+              "device_ephemeral"
+            ) as HooWeatherLocationSource,
+
+          backgroundWeatherEnabled:
+            Boolean(
+              data.background_weather_enabled,
+            ),
+
+        locationProcessingMode:
+  data.location_processing_mode ===
+  "persisted_coarse"
+    ? "persisted_coarse"
+    : "ephemeral_coarse",
+
+          rawLocationRetentionSeconds:
+            Math.min(
+              60,
+              Math.max(
+                1,
+                Number(
+                  data.raw_location_retention_seconds ??
+                    60,
+                ),
+              ),
+            ),
+
+          /*
+           * DB 제약조건상 항상 false다.
+           * 위치 기록 저장 기능은 제공하지 않는다.
+           */
+          storeLocationHistory:
+            false,
+
+          consentedAt:
+            data.consented_at ??
+            undefined,
+        };
+
+      setWeatherPreference(
+        loadedPreference,
+      );
+
+      setWeatherPermissionStatus(
+        loadedPreference.weatherEnabled
+          ? "granted"
+          : "denied",
+      );
+
+      setIsWeatherConsentOpen(false);
+    } catch (error) {
+      if (cancelled) {
+        return;
+      }
+
+      console.error(
+        "HOO 날씨 설정을 불러오지 못했습니다.",
+        error,
+      );
+
+      setWeatherErrorMessage(
+        "날씨 설정을 불러오지 못했어요.",
+      );
+
+      setWeatherPermissionStatus(
+        "error",
+      );
+    } finally {
+      if (!cancelled) {
+        setIsWeatherPreferenceLoading(
+          false,
+        );
+      }
+    }
+  }
+
+  void loadWeatherPreference();
+
+  return () => {
+    cancelled = true;
+  };
+}, [supabase]);
+/* ─────────────────────────────
+   HOO 사이트 진입·날짜 변경 시
+   날씨를 단발성으로 갱신
+───────────────────────────── */
+
+useEffect(() => {
+  /*
+   * 저장된 설정을 아직 불러오는 중이면
+   * 위치 권한이나 날씨를 요청하지 않는다.
+   */
+  if (
+    isWeatherPreferenceLoading
+  ) {
+    return;
+  }
+
+  /*
+   * 이용자가 날씨 사용에 동의하지 않았다면
+   * 위치를 확인하지 않는다.
+   */
+  if (
+    !weatherPreference
+      ?.weatherEnabled
+  ) {
+    return;
+  }
+
+  /*
+   * 정확한 좌표를 저장하지 않는
+   * 기기 임시 위치 방식에서만 실행한다.
+   */
+  if (
+    weatherPreference.locationSource !==
+      "device_ephemeral"
+  ) {
+    return;
+  }
+
+  let isEffectActive = true;
+  let isRefreshInFlight = false;
+
+  async function refreshWeatherForCurrentDate() {
+    if (
+      !isEffectActive ||
+      isRefreshInFlight
+    ) {
+      return;
+    }
+
+    const currentWeatherDate =
+      getTodayStorageDate();
+
+    /*
+     * 실제 날씨 저장까지 성공한 날짜라면
+     * 같은 날짜에는 위치를 다시 확인하지 않는다.
+     */
+    if (
+      weatherRefreshDateRef.current ===
+        currentWeatherDate
+    ) {
+      return;
+    }
+
+    isRefreshInFlight = true;
+
+    /*
+     * 이전 날짜의 날씨와 요청 제한을 초기화한다.
+     * DB에 저장된 과거 날씨 기록은 삭제하지 않는다.
+     */
+    setCurrentWeather(null);
+
+    lastWeatherRefreshAtRef.current =
+      0;
+
+    try {
+      /*
+       * 현재 위치를 단 한 번 확인한다.
+       *
+       * 정확한 좌표는 즉시 약 1km 단위로 축소되고,
+       * 축소된 좌표도 최대 60초 후 메모리에서 폐기된다.
+       */
+      await enableHooWeatherWithCurrentLocation();
+
+      if (!isEffectActive) {
+        return;
+      }
+
+      /*
+       * fetchHooWeatherForLocation에서 실제 날씨 저장에
+       * 성공했을 때만 이 값이 0보다 크게 변경된다.
+       *
+       * 성공하기 전에는 날짜를 기록하지 않으므로
+       * 일시적인 실패가 발생하면 다음 검사에서 재시도한다.
+       */
+      if (
+        lastWeatherRefreshAtRef.current >
+          0
+      ) {
+        weatherRefreshDateRef.current =
+          currentWeatherDate;
+      }
+    } finally {
+      isRefreshInFlight = false;
+    }
+  }
+
+  /*
+   * 다른 초기 데이터 로딩과 겹치지 않도록
+   * 사이트 진입 1초 후 오늘 날씨를 확인한다.
+   */
+  const initialRefreshTimer =
+    window.setTimeout(() => {
+      void refreshWeatherForCurrentDate();
+    }, 1_000);
+
+  /*
+   * 사이트를 계속 열어 둔 경우
+   * 날짜 변경 또는 앞선 실패 여부만 확인한다.
+   *
+   * 성공한 날짜에는 이 함수가 즉시 종료되므로
+   * 1분마다 위치를 수집하지 않는다.
+   */
+  const dateCheckInterval =
+    window.setInterval(() => {
+      void refreshWeatherForCurrentDate();
+    }, 60_000);
+
+  /*
+   * 백그라운드에서 돌아왔을 때도
+   * 날짜 변경이나 실패 여부를 다시 확인한다.
+   */
+  function handleVisibilityChange() {
+    if (
+      document.visibilityState ===
+        "visible"
+    ) {
+      void refreshWeatherForCurrentDate();
+    }
+  }
+
+  document.addEventListener(
+    "visibilitychange",
+    handleVisibilityChange,
+  );
+
+  return () => {
+    isEffectActive = false;
+
+    window.clearTimeout(
+      initialRefreshTimer,
+    );
+
+    window.clearInterval(
+      dateCheckInterval,
+    );
+
+    document.removeEventListener(
+      "visibilitychange",
+      handleVisibilityChange,
+    );
+  };
+
+  /*
+   * 날씨 설정이 변경됐을 때만
+   * 자동 갱신 효과를 다시 구성한다.
+   */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [
+  isWeatherPreferenceLoading,
+  weatherPreference?.weatherEnabled,
+  weatherPreference?.locationSource,
+]);
+
+
+/* ─────────────────────────────
+   HOO 반복 생활 확인 후보 불러오기
+───────────────────────────── */
+
+useEffect(() => {
+  let cancelled = false;
+
+  async function loadRoutineCandidates() {
+    const {
+      data: authData,
+      error: authError,
+    } =
+      await supabase.auth.getUser();
+
+    if (
+      cancelled ||
+      authError ||
+      !authData.user
+    ) {
+      if (!cancelled) {
+        setRoutineCandidates([]);
+      }
+
+      return;
+    }
+
+    const {
+      data,
+      error,
+    } = await supabase
+      .from("hoo_user_routines")
+      .select(
+        `
+          id,
+          name,
+          routine_type,
+          days_of_week,
+          start_time,
+          end_time,
+          confidence,
+          status,
+          protect_from_suggestions,
+          observation_count,
+          inference_reason
+        `,
+      )
+      .eq(
+        "user_id",
+        authData.user.id,
+      )
+      .eq(
+        "status",
+        "needs_confirmation",
+      )
+      .order(
+        "confidence",
+        {
+          ascending: false,
+        },
+      )
+      .order(
+        "observation_count",
+        {
+          ascending: false,
+        },
+      );
+
+    if (cancelled) {
+      return;
+    }
+
+    if (error) {
+      console.error(
+        "HOO 반복 생활 후보를 불러오지 못했습니다.",
+        error,
+      );
+
+      setRoutineCandidates([]);
+      return;
+    }
+
+    const candidates: HooRoutineCandidate[] =
+      (data ?? []).map(
+        (routine) => ({
+          id: routine.id,
+          name:
+            routine.name ??
+            "반복 생활",
+          routineType:
+            routine.routine_type as
+              HooRoutineCandidate["routineType"],
+          daysOfWeek:
+            Array.isArray(
+              routine.days_of_week,
+            )
+              ? routine.days_of_week
+              : [],
+          startTime:
+            routine.start_time
+              ? String(
+                  routine.start_time,
+                ).slice(0, 5)
+              : undefined,
+          endTime:
+            routine.end_time
+              ? String(
+                  routine.end_time,
+                ).slice(0, 5)
+              : undefined,
+          confidence:
+            Number(
+              routine.confidence ??
+                0,
+            ),
+          status:
+            routine.status as
+              HooRoutineCandidate["status"],
+          protectFromSuggestions:
+            Boolean(
+              routine
+                .protect_from_suggestions,
+            ),
+          observationCount:
+            Number(
+              routine.observation_count ??
+                0,
+            ),
+          inferenceReason:
+            routine.inference_reason ??
+            undefined,
+        }),
+      );
+
+    setRoutineCandidates(
+      candidates,
+    );
+  }
+
+  void loadRoutineCandidates();
+
+  return () => {
+    cancelled = true;
+  };
+}, [supabase]);
+
+function openRoutineConfirmation(
+  candidate: HooRoutineCandidate,
+) {
+  setSelectedRoutineCandidate(
+    candidate,
+  );
+
+  setRoutineStartTime(
+    candidate.startTime ?? "",
+  );
+
+  setRoutineEndTime(
+    candidate.endTime ?? "",
+  );
+
+  setShouldProtectRoutineTime(
+    candidate.protectFromSuggestions ??
+      true,
+  );
+
+  setIsRoutineConfirmationOpen(
+    true,
+  );
+}
+
+function closeRoutineConfirmation() {
+  if (isRoutineSaving) {
+    return;
+  }
+
+  setIsRoutineConfirmationOpen(
+    false,
+  );
+
+  setSelectedRoutineCandidate(
+    null,
+  );
+
+  setRoutineStartTime("");
+  setRoutineEndTime("");
+
+  setShouldProtectRoutineTime(
+    true,
+  );
+}
+
+
+async function confirmRoutineCandidate() {
+  if (
+    !selectedRoutineCandidate ||
+    isRoutineSaving
+  ) {
+    return;
+  }
+
+  setIsRoutineSaving(true);
+
+  try {
+    const {
+      error,
+    } = await supabase.rpc(
+      "confirm_hoo_routine",
+      {
+        p_routine_id:
+          selectedRoutineCandidate.id,
+        p_start_time:
+          routineStartTime.trim() ||
+          null,
+        p_end_time:
+          routineEndTime.trim() ||
+          null,
+        p_protect_from_suggestions:
+          shouldProtectRoutineTime,
+      },
+    );
+
+    if (error) {
+      throw error;
+    }
+
+    /*
+     * 확정된 후보는 확인 대기 목록에서 제거한다.
+     */
+    setRoutineCandidates(
+      (previousCandidates) =>
+        previousCandidates.filter(
+          (candidate) =>
+            candidate.id !==
+            selectedRoutineCandidate.id,
+        ),
+    );
+
+    setIsRoutineConfirmationOpen(
+      false,
+    );
+
+    setSelectedRoutineCandidate(
+      null,
+    );
+
+    setRoutineStartTime("");
+    setRoutineEndTime("");
+
+    setShouldProtectRoutineTime(
+      true,
+    );
+  } catch (error) {
+    console.error(
+      "HOO 반복 생활 확정 실패:",
+      error,
+    );
+
+    window.alert(
+      "반복 생활을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    );
+  } finally {
+    setIsRoutineSaving(false);
+  }
+}
+
+async function rejectRoutineCandidate() {
+  if (
+    !selectedRoutineCandidate ||
+    isRoutineSaving
+  ) {
+    return;
+  }
+
+  const rejectedRoutineId =
+    selectedRoutineCandidate.id;
+
+  setIsRoutineSaving(true);
+
+  try {
+    const {
+      error,
+    } = await supabase.rpc(
+      "reject_hoo_routine",
+      {
+        p_routine_id:
+          rejectedRoutineId,
+      },
+    );
+
+    if (error) {
+      throw error;
+    }
+
+    /*
+     * 거절된 후보도 확인 대기 목록에서 제거한다.
+     */
+    setRoutineCandidates(
+      (previousCandidates) =>
+        previousCandidates.filter(
+          (candidate) =>
+            candidate.id !==
+            rejectedRoutineId,
+        ),
+    );
+
+    setIsRoutineConfirmationOpen(
+      false,
+    );
+
+    setSelectedRoutineCandidate(
+      null,
+    );
+
+    setRoutineStartTime("");
+    setRoutineEndTime("");
+
+    setShouldProtectRoutineTime(
+      true,
+    );
+  } catch (error) {
+    console.error(
+      "HOO 반복 생활 거절 실패:",
+      error,
+    );
+
+    window.alert(
+      "반복 생활 후보를 처리하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    );
+  } finally {
+    setIsRoutineSaving(false);
+  }
+}
+
+
+async function disableHooWeather() {
+  if (isWeatherLoading) {
+    return;
+  }
+
+  setIsWeatherLoading(true);
+  setWeatherErrorMessage("");
+
+  try {
+    const {
+      data: authData,
+      error: authError,
+    } =
+      await supabase.auth.getUser();
+
+    if (
+      authError ||
+      !authData.user
+    ) {
+      throw new Error(
+        "로그인이 필요합니다.",
+      );
+    }
+
+    const disabledPreference:
+      HooWeatherPreference = {
+        weatherEnabled: false,
+
+        timezone:
+          Intl.DateTimeFormat()
+            .resolvedOptions()
+            .timeZone ||
+          "Asia/Seoul",
+
+        locationSource:
+          "device_ephemeral",
+
+        backgroundWeatherEnabled:
+          false,
+
+        locationProcessingMode:
+          "ephemeral_coarse",
+
+        rawLocationRetentionSeconds:
+          60,
+
+        storeLocationHistory:
+          false,
+      };
+
+    const {
+      error,
+    } = await supabase
+      .from(
+        "hoo_weather_preferences",
+      )
+      .upsert(
+        {
+          user_id:
+            authData.user.id,
+
+          weather_enabled:
+            false,
+
+          latitude: null,
+          longitude: null,
+          location_name: null,
+
+          timezone:
+            disabledPreference.timezone,
+
+          location_source:
+            "device_ephemeral",
+
+          background_weather_enabled:
+            false,
+
+          location_processing_mode:
+            "ephemeral_coarse",
+
+          raw_location_retention_seconds:
+            60,
+
+          store_location_history:
+            false,
+
+          consented_at: null,
+
+          updated_at:
+            new Date().toISOString(),
+        },
+        {
+          onConflict: "user_id",
+        },
+      );
+
+    if (error) {
+      throw error;
+    }
+
+    setWeatherPreference(
+      disabledPreference,
+    );
+
+    setCurrentWeather(null);
+
+    setWeatherPermissionStatus(
+      "denied",
+    );
+
+    setIsWeatherConsentOpen(false);
+  } catch (error) {
+    console.error(
+      "HOO 날씨 사용 안 함 저장 실패:",
+      error,
+    );
+
+    setWeatherErrorMessage(
+      "날씨 설정을 저장하지 못했어요.",
+    );
+
+    setWeatherPermissionStatus(
+      "error",
+    );
+  } finally {
+    setIsWeatherLoading(false);
+  }
+}
+async function enableHooWeatherWithCurrentLocation() {
+  if (isWeatherLoading) {
+    return;
+  }
+
+  setWeatherErrorMessage("");
+
+  if (
+    typeof navigator ===
+      "undefined" ||
+    !navigator.geolocation
+  ) {
+    setWeatherPermissionStatus(
+      "unsupported",
+    );
+
+    setWeatherErrorMessage(
+      "이 브라우저에서는 현재 위치를 사용할 수 없어요.",
+    );
+
+    return;
+  }
+
+  setIsWeatherLoading(true);
+
+  setWeatherPermissionStatus(
+    "requesting",
+  );
+
+  setLiveLocationStatus(
+    "starting",
+  );
+
+  try {
+    /*
+     * 브라우저에서 받은 정확한 위치는
+     * 콜백 안에서 즉시 소수점 둘째 자리,
+     * 약 1km 단위로 축소한다.
+     *
+     * 정확한 GeolocationPosition 객체는
+     * 상태, 로컬 저장소 또는 DB에 저장하지 않는다.
+     */
+    const coarseLocation =
+      await new Promise<HooSessionLocation>(
+        (
+          resolve,
+          reject,
+        ) => {
+          navigator.geolocation.getCurrentPosition(
+            (
+              position,
+            ) => {
+              const reducedLocation =
+                rememberHooLocationForWeather(
+                  position,
+                );
+
+              resolve(
+                reducedLocation,
+              );
+            },
+            reject,
+            {
+              enableHighAccuracy:
+                false,
+
+              timeout:
+                10_000,
+
+              maximumAge:
+                5 * 60 * 1000,
+            },
+          );
+        },
+      );
+
+    const {
+      data: authData,
+      error: authError,
+    } =
+      await supabase.auth.getUser();
+
+    if (
+      authError ||
+      !authData.user
+    ) {
+      throw new Error(
+        "로그인이 필요합니다.",
+      );
+    }
+
+    const timezone =
+      Intl.DateTimeFormat()
+        .resolvedOptions()
+        .timeZone ||
+      "Asia/Seoul";
+
+    const consentedAt =
+      new Date().toISOString();
+
+    const enabledPreference:
+      HooWeatherPreference = {
+        weatherEnabled: true,
+
+        /*
+         * 원본 GPS 좌표가 아니라 이미 축소된
+         * 소수점 둘째 자리 좌표만 사용한다.
+         */
+        latitude:
+          coarseLocation.latitude,
+
+        longitude:
+          coarseLocation.longitude,
+
+        locationName:
+          "대략적인 현재 위치",
+
+        timezone,
+
+        locationSource:
+          "device_coarse",
+
+        /*
+         * 저장된 대략적 위치를 이용해 서버가
+         * 앱 종료 후에도 날씨를 갱신할 수 있다.
+         */
+        backgroundWeatherEnabled:
+          true,
+
+        locationProcessingMode:
+          "persisted_coarse",
+
+        /*
+         * 정확한 원본 위치는 브라우저 메모리에서만
+         * 최대 60초 동안 처리한다.
+         */
+        rawLocationRetentionSeconds:
+          60,
+
+        storeLocationHistory:
+          false,
+
+        consentedAt,
+      };
+
+    const {
+      error,
+    } = await supabase
+      .from(
+        "hoo_weather_preferences",
+      )
+      .upsert(
+        {
+          user_id:
+            authData.user.id,
+
+          weather_enabled:
+            true,
+
+          /*
+           * 정확한 원본 위치가 아닌
+           * 약 1km 단위 좌표만 저장한다.
+           */
+          latitude:
+            coarseLocation.latitude,
+
+          longitude:
+            coarseLocation.longitude,
+
+          location_name:
+            "대략적인 현재 위치",
+
+          timezone,
+
+          location_source:
+            "device_coarse",
+
+          background_weather_enabled:
+            true,
+
+          location_processing_mode:
+            "persisted_coarse",
+
+          raw_location_retention_seconds:
+            60,
+
+          store_location_history:
+            false,
+
+          consented_at:
+            consentedAt,
+
+          updated_at:
+            consentedAt,
+        },
+        {
+          onConflict:
+            "user_id",
+        },
+      );
+
+    if (error) {
+      throw error;
+    }
+
+    setWeatherPreference(
+      enabledPreference,
+    );
+
+    setWeatherPermissionStatus(
+      "granted",
+    );
+
+    /*
+     * 저장된 것과 동일한 대략적 위치로
+     * 현재 날씨를 즉시 한 번 갱신한다.
+     */
+    await fetchHooWeatherForLocation(
+      coarseLocation,
+    );
+
+    setIsWeatherConsentOpen(false);
+  } catch (error) {
+    console.error(
+      "HOO 현재 위치 사용 실패:",
+      error,
+    );
+
+    stopHooLiveLocation();
+
+    setWeatherPermissionStatus(
+      "denied",
+    );
+
+    setLiveLocationStatus(
+      "error",
+    );
+
+    setWeatherErrorMessage(
+      "위치 권한을 허용하지 않았거나 현재 위치의 날씨를 확인하지 못했어요.",
+    );
+  } finally {
+    setIsWeatherLoading(false);
+  }
+}
+
+function rememberHooLocationForWeather(
+  position: GeolocationPosition,
+) {
+  /*
+   * 정확한 위도·경도를 약 1km 단위인
+   * 소수점 둘째 자리로 즉시 축소한다.
+   *
+   * 원본 position은 이 함수가 끝나면
+   * 별도로 보관하지 않는다.
+   */
+  const coarseLatitude =
+    Math.round(
+      position.coords.latitude *
+        100,
+    ) / 100;
+
+  const coarseLongitude =
+    Math.round(
+      position.coords.longitude *
+        100,
+    ) / 100;
+
+  const capturedAtDate =
+    new Date();
+
+  const expiresAtDate =
+    new Date(
+      capturedAtDate.getTime() +
+        60_000,
+    );
+
+  const temporaryLocation:
+    HooSessionLocation = {
+      latitude:
+        coarseLatitude,
+
+      longitude:
+        coarseLongitude,
+
+      accuracyMeters:
+        Math.round(
+          position.coords.accuracy,
+        ),
+
+      capturedAt:
+        capturedAtDate.toISOString(),
+
+      expiresAt:
+        expiresAtDate.toISOString(),
+    };
+
+  /*
+   * 축소된 위치만 메모리에 보관한다.
+   * localStorage와 DB에는 저장하지 않는다.
+   */
+  setSessionLocation(
+    temporaryLocation,
+  );
+
+  setLiveLocationStatus(
+    "active",
+  );
+
+  /*
+   * 기존 폐기 예약이 있으면 제거하고
+   * 마지막 위치 확인 시점부터 60초를 다시 계산한다.
+   */
+  if (
+    locationExpiryTimerRef.current !==
+    null
+  ) {
+    window.clearTimeout(
+      locationExpiryTimerRef.current,
+    );
+  }
+
+  locationExpiryTimerRef.current =
+    window.setTimeout(() => {
+      /*
+       * 임시 좌표를 메모리에서 폐기한다.
+       */
+      setSessionLocation(null);
+
+      locationExpiryTimerRef.current =
+        null;
+
+      /*
+       * 새 위치가 들어오지 않았다면
+       * 위치 사용을 일시 중지 상태로 바꾼다.
+       */
+      setLiveLocationStatus(
+        "paused",
+      );
+    }, 60_000);
+
+  return temporaryLocation;
+}
+
+function stopHooLiveLocation() {
+  /*
+   * 브라우저 위치 감시가 실행 중이면
+   * 즉시 명시적으로 중단한다.
+   */
+  if (
+    typeof navigator !==
+      "undefined" &&
+    navigator.geolocation &&
+    locationWatchIdRef.current !==
+      null
+  ) {
+    navigator.geolocation.clearWatch(
+      locationWatchIdRef.current,
+    );
+
+    locationWatchIdRef.current =
+      null;
+  }
+
+  /*
+   * 예약된 자동 폐기 타이머도 제거한다.
+   */
+  if (
+    locationExpiryTimerRef.current !==
+    null
+  ) {
+    window.clearTimeout(
+      locationExpiryTimerRef.current,
+    );
+
+    locationExpiryTimerRef.current =
+      null;
+  }
+
+  /*
+   * 메모리에 남은 대략적 위치와
+   * 현재 날씨도 즉시 제거한다.
+   */
+  setSessionLocation(null);
+  setCurrentWeather(null);
+
+  setLiveLocationStatus(
+    "inactive",
+  );
+
+  lastWeatherRefreshAtRef.current =
+    0;
+}
+
+
+async function fetchHooWeatherForLocation(
+  location: HooSessionLocation,
+) {
+  /*
+   * 위치가 이미 폐기 시각을 지났다면
+   * 외부 요청을 보내지 않는다.
+   */
+  if (
+    new Date(
+      location.expiresAt,
+    ).getTime() <= Date.now()
+  ) {
+    setSessionLocation(null);
+
+    setLiveLocationStatus(
+      "paused",
+    );
+
+    return null;
+  }
+
+  /*
+   * 같은 위치 세션에서 지나치게 자주
+   * 날씨를 요청하지 않도록 제한한다.
+   */
+  const millisecondsSinceLastRefresh =
+    Date.now() -
+    lastWeatherRefreshAtRef.current;
+
+  if (
+    millisecondsSinceLastRefresh <
+      5 * 60 * 1000 &&
+    currentWeather
+  ) {
+    return currentWeather;
+  }
+
+  setIsWeatherLoading(true);
+  setWeatherErrorMessage("");
+
+  try {
+    /*
+     * Open-Meteo에는 이미 약 1km 단위로
+     * 축소된 좌표만 전달한다.
+     */
+    const weatherUrl =
+      new URL(
+        "https://api.open-meteo.com/v1/forecast",
+      );
+
+    weatherUrl.searchParams.set(
+      "latitude",
+      String(location.latitude),
+    );
+
+    weatherUrl.searchParams.set(
+      "longitude",
+      String(location.longitude),
+    );
+
+    weatherUrl.searchParams.set(
+      "current",
+      [
+        "temperature_2m",
+        "relative_humidity_2m",
+        "apparent_temperature",
+        "is_day",
+        "precipitation",
+        "weather_code",
+        "cloud_cover",
+        "wind_speed_10m",
+      ].join(","),
+    );
+
+    weatherUrl.searchParams.set(
+      "hourly",
+      "precipitation_probability",
+    );
+
+    weatherUrl.searchParams.set(
+      "daily",
+      "sunrise,sunset",
+    );
+
+   /*
+ * 현재 위치의 실제 시간대를 Open-Meteo가
+ * 자동으로 선택하게 한다.
+ *
+ * 다른 지역으로 이동해도 해당 지역의
+ * 날짜와 일출·일몰을 받을 수 있다.
+ */
+weatherUrl.searchParams.set(
+  "timezone",
+  "auto",
+);
+
+weatherUrl.searchParams.set(
+  "forecast_days",
+  "2",
+);
+
+    const weatherResponse =
+      await fetch(
+        weatherUrl.toString(),
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            Accept:
+              "application/json",
+          },
+        },
+      );
+
+    if (!weatherResponse.ok) {
+      throw new Error(
+        `날씨 API 응답 오류: ${weatherResponse.status}`,
+      );
+    }
+
+    const weatherPayload =
+  (await weatherResponse.json()) as {
+    timezone?: string;
+    utc_offset_seconds?: number;
+
+    current?: {
+      time?: string;
+      temperature_2m?: number;
+      relative_humidity_2m?: number;
+      apparent_temperature?: number;
+      is_day?: number;
+      precipitation?: number;
+      weather_code?: number;
+      cloud_cover?: number;
+      wind_speed_10m?: number;
+    };
+
+    hourly?: {
+      time?: string[];
+      precipitation_probability?:
+        Array<number | null>;
+    };
+
+    daily?: {
+      sunrise?: string[];
+      sunset?: string[];
+    };
+  };
+
+   const weatherCurrent =
+  weatherPayload.current;
+
+if (
+  !weatherCurrent ||
+  !weatherCurrent.time
+) {
+  throw new Error(
+    "현재 날씨 정보가 없습니다.",
+  );
+}
+
+/*
+ * Open-Meteo가 반환한 현지 시각을
+ * 정확한 UTC 시각으로 변환한다.
+ */
+function parseHooWeatherTime(
+  value?: string,
+) {
+  if (!value) {
+    return undefined;
+  }
+
+  /*
+   * 이미 UTC 또는 시간대 정보가 포함된 값은
+   * 그대로 해석한다.
+   */
+  if (
+    value.endsWith("Z") ||
+    /[+-]\d{2}:\d{2}$/.test(
+      value,
+    )
+  ) {
+    const parsedDate =
+      new Date(value);
+
+    if (
+      Number.isNaN(
+        parsedDate.getTime(),
+      )
+    ) {
+      return undefined;
+    }
+
+    return parsedDate.toISOString();
+  }
+
+  /*
+   * 시간대 정보가 없는 현지 시각은
+   * Open-Meteo가 제공한 UTC 오프셋을 이용해
+   * 정확한 UTC 시각으로 변환한다.
+   */
+  const utcOffsetSeconds =
+    typeof weatherPayload
+      .utc_offset_seconds ===
+      "number"
+      ? weatherPayload
+          .utc_offset_seconds
+      : 0;
+
+  const localTimestamp =
+    new Date(
+      `${value}Z`,
+    ).getTime();
+
+  if (
+    Number.isNaN(
+      localTimestamp,
+    )
+  ) {
+    return undefined;
+  }
+
+  return new Date(
+    localTimestamp -
+      utcOffsetSeconds * 1000,
+  ).toISOString();
+}
+
+const forecastAt =
+  parseHooWeatherTime(
+    weatherCurrent.time,
+  ) ??
+  new Date().toISOString();
+
+const forecastTimestamp =
+  new Date(
+    forecastAt,
+  ).getTime();
+
+const hourlyTimes =
+  weatherPayload.hourly?.time ??
+  [];
+
+const hourlyRainProbabilities =
+  weatherPayload.hourly
+    ?.precipitation_probability ??
+  [];
+
+let nearestHourlyIndex = -1;
+
+let nearestHourlyDifference =
+  Number.POSITIVE_INFINITY;
+
+hourlyTimes.forEach(
+  (
+    hourlyTime,
+    index,
+  ) => {
+    const parsedHourlyTime =
+      parseHooWeatherTime(
+        hourlyTime,
+      );
+
+    if (!parsedHourlyTime) {
+      return;
+    }
+
+    const difference =
+      Math.abs(
+        new Date(
+          parsedHourlyTime,
+        ).getTime() -
+          forecastTimestamp,
+      );
+
+    if (
+      difference <
+      nearestHourlyDifference
+    ) {
+      nearestHourlyDifference =
+        difference;
+
+      nearestHourlyIndex =
+        index;
+    }
+  },
+);
+
+const precipitationProbability =
+  nearestHourlyIndex >= 0
+    ? hourlyRainProbabilities[
+        nearestHourlyIndex
+      ]
+    : undefined;
+
+/*
+ * timezone=auto를 사용하므로 첫 번째 값은
+ * 현재 위치 기준 오늘의 일출·일몰이다.
+ */
+const sunriseAt =
+  parseHooWeatherTime(
+    weatherPayload.daily
+      ?.sunrise?.[0],
+  );
+
+const sunsetAt =
+  parseHooWeatherTime(
+    weatherPayload.daily
+      ?.sunset?.[0],
+  );
+
+  const weatherSnapshot:
+  HooWeatherSnapshot = {
+
+
+        forecastAt,
+        provider:
+          "open-meteo",
+
+        weatherCode:
+          weatherCurrent.weather_code,
+
+        temperatureCelsius:
+          weatherCurrent
+            .temperature_2m,
+
+        apparentTemperatureCelsius:
+          weatherCurrent
+            .apparent_temperature,
+
+        relativeHumidity:
+          weatherCurrent
+            .relative_humidity_2m,
+
+        precipitationProbability:
+          typeof precipitationProbability ===
+          "number"
+            ? precipitationProbability
+            : undefined,
+
+        cloudCover:
+          weatherCurrent.cloud_cover,
+
+        windSpeedKmh:
+          weatherCurrent
+            .wind_speed_10m,
+
+        isDay:
+          typeof weatherCurrent.is_day ===
+          "number"
+            ? weatherCurrent.is_day ===
+              1
+            : undefined,
+
+        sunriseAt,
+        sunsetAt,
+      };
+
+    const {
+      data: authData,
+      error: authError,
+    } =
+      await supabase.auth.getUser();
+
+    if (
+      authError ||
+      !authData.user
+    ) {
+      throw new Error(
+        "로그인이 필요합니다.",
+      );
+    }
+
+    /*
+     * 서버에는 좌표나 위치명이 아니라
+     * 날씨 결과만 저장한다.
+     */
+    const {
+      error: snapshotError,
+    } = await supabase
+      .from(
+        "hoo_weather_snapshots",
+      )
+      .upsert(
+        {
+          user_id:
+            authData.user.id,
+
+          forecast_at:
+            forecastAt,
+
+          provider:
+            weatherSnapshot.provider,
+
+          weather_code:
+            weatherSnapshot.weatherCode ??
+            null,
+
+          temperature_celsius:
+            weatherSnapshot.temperatureCelsius ??
+            null,
+
+          apparent_temperature_celsius:
+            weatherSnapshot.apparentTemperatureCelsius ??
+            null,
+
+          relative_humidity:
+            weatherSnapshot.relativeHumidity ??
+            null,
+
+          precipitation_probability:
+            weatherSnapshot.precipitationProbability ??
+            null,
+
+          cloud_cover:
+            weatherSnapshot.cloudCover ??
+            null,
+
+          wind_speed_kmh:
+            weatherSnapshot.windSpeedKmh ??
+            null,
+
+          is_day:
+            weatherSnapshot.isDay ??
+            null,
+
+          sunrise_at:
+            weatherSnapshot.sunriseAt ??
+            null,
+
+          sunset_at:
+            weatherSnapshot.sunsetAt ??
+            null,
+
+          /*
+           * raw_data에도 좌표나 API 원본 전체를
+           * 넣지 않고 필요한 상태만 보관한다.
+           */
+          raw_data: {
+            sourceTime:
+              weatherCurrent.time,
+
+            precipitation:
+              weatherCurrent.precipitation ??
+              null,
+          },
+
+          fetched_at:
+            new Date().toISOString(),
+        },
+        {
+          onConflict:
+            "user_id,forecast_at,provider",
+        },
+      );
+
+   if (snapshotError) {
+  throw snapshotError;
+}
+
+/*
+ * 저장된 날씨 결과를 오늘의
+ * 아침·저녁 브리핑에 각각 반영한다.
+ */
+const todayBriefingDate =
+  getTodayStorageDate();
+
+const [
+  morningWeatherResult,
+  eveningWeatherResult,
+  contextMessageResult,
+] = await Promise.all([
+  supabase.rpc(
+    "apply_hoo_weather_to_morning_briefing",
+    {
+      p_briefing_date:
+        todayBriefingDate,
+    },
+  ),
+
+  supabase.rpc(
+    "apply_hoo_weather_to_evening_briefing",
+    {
+      p_briefing_date:
+        todayBriefingDate,
+    },
+  ),
+
+  /*
+   * 현재 날씨를 기준으로
+   * 오늘의 상황형 메시지를 생성한다.
+   */
+  supabase.rpc(
+    "generate_hoo_weather_context_messages",
+    {
+      p_message_date:
+        todayBriefingDate,
+    },
+  ),
+]);
+
+if (morningWeatherResult.error) {
+  /*
+   * 아침 브리핑 결합에 실패해도
+   * 날씨 확인 자체는 정상으로 유지한다.
+   */
+  console.error(
+    "HOO 아침 날씨 브리핑 반영 실패:",
+    morningWeatherResult.error,
+  );
+}
+
+if (eveningWeatherResult.error) {
+  /*
+   * 저녁 브리핑이 아직 생성되지 않았거나
+   * 결합에 실패하더라도 날씨 확인은 유지한다.
+   */
+  console.error(
+    "HOO 저녁 날씨 브리핑 반영 실패:",
+    eveningWeatherResult.error,
+  );
+}
+
+if (contextMessageResult.error) {
+  /*
+   * 상황형 메시지 생성에 실패하더라도
+   * 기본 날씨와 브리핑 기능은 정상 유지한다.
+   */
+
+  console.error(
+    "HOO 상황형 메시지 생성 실패:",
+    contextMessageResult.error,
+  );
+}
+
+/*
+ * DB에서 날씨가 반영된 최신 아침·저녁 본문을
+ * 다시 읽어 새로고침 없이 화면에 적용한다.
+ */
+const {
+  data: updatedBriefing,
+  error: updatedBriefingError,
+} = await supabase
+  .from(
+    "hoo_daily_briefings",
+  )
+  .select(
+    `
+      morning_content,
+      morning_generated_at,
+      evening_content,
+      evening_generated_at,
+      evening_status
+    `,
+  )
+  .eq(
+    "user_id",
+    authData.user.id,
+  )
+  .eq(
+    "briefing_date",
+    todayBriefingDate,
+  )
+  .maybeSingle();
+
+if (updatedBriefingError) {
+  console.error(
+    "HOO 날씨 브리핑 다시 불러오기 실패:",
+    updatedBriefingError,
+  );
+}
+
+if (updatedBriefing) {
+  setMorningBriefing(
+    (previousBriefing) => {
+      if (
+        !previousBriefing ||
+        previousBriefing.briefingDate !==
+          todayBriefingDate
+      ) {
+        return previousBriefing;
+      }
+
+      return {
+        ...previousBriefing,
+
+        morningContent:
+          updatedBriefing.morning_content ??
+          previousBriefing.morningContent,
+
+        morningGeneratedAt:
+          updatedBriefing.morning_generated_at ??
+          previousBriefing.morningGeneratedAt,
+
+        eveningContent:
+          updatedBriefing.evening_content ??
+          previousBriefing.eveningContent,
+
+        eveningGeneratedAt:
+          updatedBriefing.evening_generated_at ??
+          previousBriefing.eveningGeneratedAt,
+
+        eveningStatus:
+          updatedBriefing.evening_status ===
+          "completed"
+            ? "completed"
+            : previousBriefing.eveningStatus,
+      };
+    },
+  );
+}
+
+setCurrentWeather(
+  weatherSnapshot,
+);
+
+lastWeatherRefreshAtRef.current =
+  Date.now();
+
+return weatherSnapshot;
+
+
+  } catch (error) {
+    console.error(
+      "HOO 날씨 확인 실패:",
+      error,
+    );
+
+    setWeatherErrorMessage(
+      "현재 지역의 날씨를 확인하지 못했어요.",
+    );
+
+    setLiveLocationStatus(
+      "error",
+    );
+
+    return null;
+  } finally {
+    setIsWeatherLoading(false);
+  }
+}
+
+/* ─────────────────────────────
+   HOO 오늘의 일정 성격 분석
+───────────────────────────── */
+
+useEffect(() => {
+  let cancelled = false;
+async function analyzeTodaySchedules() {
+  const now = new Date();
+
+  /*
+   * 자정부터 새벽 4시까지는
+   * 새로운 일정 분석을 실행하지 않는다.
+   */
+  if (now.getHours() < 4) {
+    return;
+  }
+
+  const todayScheduleDate =
+    getTodayStorageDate();
+
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } =
+      await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    if (!user || cancelled) {
+      return;
+    }
+
+    /*
+     * 1. 오늘 일정의 성격을 분석한다.
+     */
+    const {
+      data: analyzedCount,
+      error: analysisError,
+    } =
+      await supabase.rpc(
+        "analyze_hoo_daily_schedules",
+        {
+          p_schedule_date:
+            todayScheduleDate,
+        },
+      );
+
+    if (analysisError) {
+      throw analysisError;
+    }
+
+    if (cancelled) {
+      return;
+    }
+
+    /*
+     * 2. 분석 결과를 아침 브리핑에 반영한다.
+     */
+    const {
+      data: briefingRefreshed,
+      error: briefingRefreshError,
+    } =
+      await supabase.rpc(
+        "refresh_hoo_morning_briefing_from_insights",
+        {
+          p_briefing_date:
+            todayScheduleDate,
+        },
+      );
+
+    if (briefingRefreshError) {
+      throw briefingRefreshError;
+    }
+
+    if (
+      cancelled ||
+      briefingRefreshed !== true
+    ) {
+      return;
+    }
+
+    /*
+     * 3. 갱신된 아침 브리핑을 다시 불러온다.
+     */
+    const {
+      data: updatedBriefing,
+      error: updatedBriefingError,
+    } = await supabase
+      .from("hoo_daily_briefings")
+      .select(
+        `
+          morning_title,
+          morning_content,
+          morning_generated_at,
+          morning_read_at,
+          morning_status,
+
+          total_todo_count,
+          completed_todo_count,
+          incomplete_todo_count,
+          completion_rate
+        `,
+      )
+      .eq("user_id", user.id)
+      .eq(
+        "briefing_date",
+        todayScheduleDate,
+      )
+      .maybeSingle();
+
+    if (updatedBriefingError) {
+      throw updatedBriefingError;
+    }
+
+    if (
+      cancelled ||
+      !updatedBriefing ||
+      updatedBriefing.morning_status !==
+        "completed" ||
+      typeof updatedBriefing.morning_content !==
+        "string"
+    ) {
+      return;
+    }
+
+    /*
+     * 4. 페이지 전체를 새로고침하지 않고
+     * 현재 브리핑 카드만 갱신한다.
+     */
+    setMorningBriefing(
+      (previousBriefing) => {
+        if (!previousBriefing) {
+          return previousBriefing;
+        }
+
+        return {
+          ...previousBriefing,
+
+          morningTitle:
+            typeof updatedBriefing.morning_title ===
+            "string"
+              ? updatedBriefing.morning_title
+              : "좋은 아침이에요.",
+
+          morningContent:
+            updatedBriefing.morning_content,
+
+          morningGeneratedAt:
+            typeof updatedBriefing.morning_generated_at ===
+            "string"
+              ? updatedBriefing.morning_generated_at
+              : undefined,
+
+          morningReadAt:
+            typeof updatedBriefing.morning_read_at ===
+            "string"
+              ? updatedBriefing.morning_read_at
+              : undefined,
+
+          morningStatus:
+            "completed",
+
+          totalTodoCount:
+            Number(
+              updatedBriefing.total_todo_count ??
+                previousBriefing.totalTodoCount,
+            ),
+
+          completedTodoCount:
+            Number(
+              updatedBriefing.completed_todo_count ??
+                previousBriefing.completedTodoCount,
+            ),
+
+          incompleteTodoCount:
+            Number(
+              updatedBriefing.incomplete_todo_count ??
+                previousBriefing.incompleteTodoCount,
+            ),
+
+          completionRate:
+            Number(
+              updatedBriefing.completion_rate ??
+                previousBriefing.completionRate,
+            ),
+        };
+      },
+    );
+
+    setIsMorningBriefingOpen(true);
+
+    const safeAnalyzedCount =
+      typeof analyzedCount === "number"
+        ? analyzedCount
+        : Number(analyzedCount ?? 0);
+
+    if (
+      Number.isFinite(
+        safeAnalyzedCount,
+      ) &&
+      safeAnalyzedCount > 0
+    ) {
+      console.log(
+        `HOO가 오늘 일정 ${safeAnalyzedCount}개를 분석해 브리핑에 반영했습니다.`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      "HOO 오늘의 일정 분석 및 브리핑 반영 실패:",
+      error,
+    );
+
+    /*
+     * 분석에 실패해도 캘린더와 투두는
+     * 기존 방식으로 정상 작동한다.
+     */
+  }
+}
+
+  void analyzeTodaySchedules();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  schedules,
+  supabase,
+]);
+
+/* ─────────────────────────────
+   HOO 브리핑 최초 자동 열기
+───────────────────────────── */
+
+useEffect(() => {
+  if (
+    isMorningBriefingLoading ||
+    !morningBriefing
+  ) {
+    return;
+  }
+
+  const now = new Date();
+
+  const hasEveningBriefing =
+    now.getHours() >= 21 &&
+    morningBriefing.eveningStatus ===
+      "completed" &&
+    typeof morningBriefing.eveningContent ===
+      "string" &&
+    morningBriefing.eveningContent.trim()
+      .length > 0;
+
+  const briefingPhase =
+    hasEveningBriefing
+      ? "evening"
+      : "morning";
+
+  const briefingKey =
+    `${morningBriefing.briefingDate}:${briefingPhase}`;
+
+  /*
+   * 같은 렌더링 과정에서 중복 실행되는 것을 막는다.
+   */
+  if (
+    lastAutoBriefingKeyRef.current ===
+    briefingKey
+  ) {
+    return;
+  }
+
+  lastAutoBriefingKeyRef.current =
+    briefingKey;
+
+  const viewedStorageKey =
+    `hoo-briefing-viewed:${briefingKey}`;
+
+  const hasAlreadyViewed =
+    window.localStorage.getItem(
+      viewedStorageKey,
+    ) === "true";
+
+  /*
+   * 오늘 해당 브리핑을 처음 불러온 경우에만
+   * 중앙 모달을 자동으로 연다.
+   */
+  if (!hasAlreadyViewed) {
+    setIsBriefingModalOpen(true);
+
+    /*
+     * 모달이 열린 순간 확인 기록을 남긴다.
+     * 따라서 열린 상태에서 새로고침해도
+     * 다시 자동 실행되지 않는다.
+     */
+    window.localStorage.setItem(
+      viewedStorageKey,
+      "true",
+    );
+  }
+}, [
+  isMorningBriefingLoading,
+  morningBriefing,
+]);
+
+/* ─────────────────────────────
+   HOO 브리핑 모달 제어
+───────────────────────────── */
+
+useEffect(() => {
+  if (!isBriefingModalOpen) {
+    return;
+  }
+
+  const previousBodyOverflow =
+    document.body.style.overflow;
+
+  /*
+   * 모달이 열리면 뒤쪽 페이지 스크롤을 막는다.
+   */
+  document.body.style.overflow =
+    "hidden";
+
+  function handleBriefingKeyDown(
+    event: KeyboardEvent,
+  ) {
+    if (event.key !== "Escape") {
+      return;
+    }
+
+    setIsBriefingModalOpen(false);
+  }
+
+  window.addEventListener(
+    "keydown",
+    handleBriefingKeyDown,
+  );
+
+  return () => {
+    document.body.style.overflow =
+      previousBodyOverflow;
+
+    window.removeEventListener(
+      "keydown",
+      handleBriefingKeyDown,
+    );
+  };
+}, [isBriefingModalOpen]);
+
+
+/* ─────────────────────────────
+   HOO 반복 생활 확인 모달 제어
+───────────────────────────── */
+
+useEffect(() => {
+  if (
+    !isRoutineConfirmationOpen
+  ) {
+    return;
+  }
+
+  const previousBodyOverflow =
+    document.body.style.overflow;
+
+  /*
+   * 반복 생활 확인창이 열려 있는 동안
+   * 뒤쪽 메인화면의 스크롤을 막는다.
+   */
+  document.body.style.overflow =
+    "hidden";
+
+  function handleRoutineKeyDown(
+    event: KeyboardEvent,
+  ) {
+    if (
+      event.key !== "Escape" ||
+      isRoutineSaving
+    ) {
+      return;
+    }
+
+    setIsRoutineConfirmationOpen(
+      false,
+    );
+
+    setSelectedRoutineCandidate(
+      null,
+    );
+
+    setRoutineStartTime("");
+    setRoutineEndTime("");
+
+    setShouldProtectRoutineTime(
+      true,
+    );
+  }
+
+  window.addEventListener(
+    "keydown",
+    handleRoutineKeyDown,
+  );
+
+  return () => {
+    document.body.style.overflow =
+      previousBodyOverflow;
+
+    window.removeEventListener(
+      "keydown",
+      handleRoutineKeyDown,
+    );
+  };
+}, [
+  isRoutineConfirmationOpen,
+  isRoutineSaving,
+]);
+
+
+/* ─────────────────────────────
+   HOO 브리핑 최초 자동 열기
+───────────────────────────── */
+
+useEffect(() => {
+  if (
+    isMorningBriefingLoading ||
+    !morningBriefing
+  ) {
+    return;
+  }
+
+  const now = new Date();
+
+  const hasEveningBriefing =
+    now.getHours() >= 21 &&
+    morningBriefing.eveningStatus ===
+      "completed" &&
+    typeof morningBriefing.eveningContent ===
+      "string" &&
+    morningBriefing.eveningContent.trim()
+      .length > 0;
+
+  const briefingPhase =
+    hasEveningBriefing
+      ? "evening"
+      : "morning";
+
+  const briefingKey =
+    `${morningBriefing.briefingDate}:${briefingPhase}`;
+
+  /*
+   * 같은 렌더링 과정에서 중복 실행되는 것을 막는다.
+   */
+  if (
+    lastAutoBriefingKeyRef.current ===
+    briefingKey
+  ) {
+    return;
+  }
+
+  lastAutoBriefingKeyRef.current =
+    briefingKey;
+
+  const viewedStorageKey =
+    `hoo-briefing-viewed:${briefingKey}`;
+
+  const hasAlreadyViewed =
+    window.localStorage.getItem(
+      viewedStorageKey,
+    ) === "true";
+
+  /*
+   * 오늘 해당 브리핑을 처음 불러온 경우에만
+   * 중앙 모달을 자동으로 연다.
+   */
+  if (!hasAlreadyViewed) {
+    setIsBriefingModalOpen(true);
+
+    /*
+     * 모달이 열린 순간 확인 기록을 남긴다.
+     * 따라서 열린 상태에서 새로고침해도
+     * 다시 자동 실행되지 않는다.
+     */
+    window.localStorage.setItem(
+      viewedStorageKey,
+      "true",
+    );
+  }
+}, [
+  isMorningBriefingLoading,
+  morningBriefing,
+]);
+
+
+/* ─────────────────────────────
+   HOO 오늘의 일정 투두 생성
+───────────────────────────── */
+useEffect(() => {
+  let cancelled = false;
+
+ async function generateTodayScheduleTodos() {
+  const now = new Date();
+
+  /*
+   * 자정부터 새벽 4시까지는
+   * 투두와 브리핑을 동기화하지 않는다.
+   */
+  if (now.getHours() < 4) {
+    return;
+  }
+
+  const todayTaskDate =
+    getTodayStorageDate();
+
+  function normalizeBriefingStatus(
+    value: unknown,
+  ): HooBriefingStatus {
+    if (
+      value === "generating" ||
+      value === "completed" ||
+      value === "failed"
+    ) {
+      return value;
+    }
+
+    return "pending";
+  }
+
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } =
+      await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    if (!user || cancelled) {
+      return;
+    }
+
+    /*
+     * 캘린더 일정, 오늘의 투두,
+     * 아침 브리핑을 서버에서 동기화한다.
+     */
+    const {
+      data: changedTodoCount,
+      error: generationError,
+    } =
+      await supabase.rpc(
+        "generate_hoo_daily_todos",
+        {
+          p_task_date:
+            todayTaskDate,
+        },
+      );
+
+    if (generationError) {
+      throw generationError;
+    }
+
+    if (cancelled) {
+      return;
+    }
+
+    const safeChangedTodoCount =
+      typeof changedTodoCount === "number"
+        ? changedTodoCount
+        : Number(
+            changedTodoCount ?? 0,
+          );
+
+    /*
+     * 실제 일정 변경이 없다면
+     * 추가 조회를 실행하지 않는다.
+     */
+    if (
+      !Number.isFinite(
+        safeChangedTodoCount,
+      ) ||
+      safeChangedTodoCount <= 0
+    ) {
+      return;
+    }
+
+    /*
+     * 최신 투두와 최신 브리핑을
+     * 동시에 다시 불러온다.
+     */
+    const [
+      updatedTodosResult,
+      updatedBriefingResult,
+    ] = await Promise.all([
+      supabase
         .from("todos")
         .select(
           `
@@ -2400,203 +6464,688 @@ if (!user) {
             content,
             completed,
             source,
+            task_date,
+            task_type,
             game_id,
+            schedule_id,
+            generated_at,
+            archived_at,
+            generation_reason,
             sort_order,
             created_at
           `,
         )
         .eq("user_id", user.id)
+        .eq(
+          "task_date",
+          todayTaskDate,
+        )
+        .is("archived_at", null)
         .order("sort_order", {
           ascending: true,
         })
         .order("created_at", {
           ascending: true,
-        });
+        }),
 
-      if (cloudTodoError) {
-        throw cloudTodoError;
-      }
+      supabase
+        .from("hoo_daily_briefings")
+        .select(
+          `
+            id,
+            briefing_date,
 
-      /*
-       * 서버에 투두가 있다면
-       * 서버 데이터를 최우선으로 사용한다.
-       */
-      if (
-        Array.isArray(cloudTodos) &&
-        cloudTodos.length > 0
-      ) {
-        const normalizedTodos: TodoItem[] =
-          cloudTodos.map((todo) => ({
+            morning_title,
+            morning_content,
+            morning_generated_at,
+            morning_read_at,
+            morning_status,
+
+            evening_title,
+            evening_content,
+            evening_generated_at,
+            evening_read_at,
+            evening_status,
+
+            total_todo_count,
+            completed_todo_count,
+            incomplete_todo_count,
+            completion_rate
+          `,
+        )
+        .eq("user_id", user.id)
+        .eq(
+          "briefing_date",
+          todayTaskDate,
+        )
+        .maybeSingle(),
+    ]);
+
+    if (updatedTodosResult.error) {
+      throw updatedTodosResult.error;
+    }
+
+    if (updatedBriefingResult.error) {
+      throw updatedBriefingResult.error;
+    }
+
+    if (cancelled) {
+      return;
+    }
+
+    /*
+     * 최신 투두를 화면에 반영한다.
+     */
+    const updatedTodos =
+      updatedTodosResult.data;
+
+    if (Array.isArray(updatedTodos)) {
+      const normalizedTodos:
+        TodoItem[] =
+        updatedTodos.map((todo) => {
+          const taskType: TodoTaskType =
+            todo.task_type === "schedule" ||
+            todo.task_type ===
+              "preparation" ||
+            todo.task_type ===
+              "recommendation"
+              ? todo.task_type
+              : "manual";
+
+          return {
             id: todo.id,
             content: todo.content,
-            completed: todo.completed,
+
+            completed:
+              todo.completed === true,
+
             source:
               todo.source === "hoo"
                 ? "hoo"
                 : "user",
+
+            taskDate:
+              typeof todo.task_date ===
+              "string"
+                ? todo.task_date
+                : todayTaskDate,
+
+            taskType,
+
             gameId:
-              typeof todo.game_id === "string"
+              typeof todo.game_id ===
+              "string"
                 ? todo.game_id
                 : undefined,
-            createdAt:
-              todo.created_at ??
-              new Date().toISOString(),
-          }));
 
-        if (cancelled) {
-          return;
+            scheduleId:
+              typeof todo.schedule_id ===
+              "string"
+                ? todo.schedule_id
+                : undefined,
+
+            generatedAt:
+              typeof todo.generated_at ===
+              "string"
+                ? todo.generated_at
+                : undefined,
+
+            archivedAt:
+              typeof todo.archived_at ===
+              "string"
+                ? todo.archived_at
+                : undefined,
+
+            generationReason:
+              typeof todo.generation_reason ===
+              "string"
+                ? todo.generation_reason
+                : undefined,
+
+            createdAt:
+              typeof todo.created_at ===
+              "string"
+                ? todo.created_at
+                : new Date().toISOString(),
+          };
+        });
+
+      setTodos(normalizedTodos);
+
+      window.localStorage.setItem(
+        TODO_STORAGE_KEY,
+        JSON.stringify(normalizedTodos),
+      );
+    }
+
+    /*
+     * 최신 아침·저녁 브리핑을 화면에 반영한다.
+     */
+    const updatedBriefing =
+      updatedBriefingResult.data;
+
+    if (updatedBriefing) {
+      const normalizedBriefing:
+        HooDailyBriefing = {
+          id: updatedBriefing.id,
+
+          briefingDate:
+            typeof updatedBriefing.briefing_date ===
+            "string"
+              ? updatedBriefing.briefing_date
+              : todayTaskDate,
+
+          morningTitle:
+            typeof updatedBriefing.morning_title ===
+            "string"
+              ? updatedBriefing.morning_title
+              : "좋은 아침이에요.",
+
+          morningContent:
+            typeof updatedBriefing.morning_content ===
+            "string"
+              ? updatedBriefing.morning_content
+              : "",
+
+          morningGeneratedAt:
+            typeof updatedBriefing.morning_generated_at ===
+            "string"
+              ? updatedBriefing.morning_generated_at
+              : undefined,
+
+          morningReadAt:
+            typeof updatedBriefing.morning_read_at ===
+            "string"
+              ? updatedBriefing.morning_read_at
+              : undefined,
+
+          morningStatus:
+            normalizeBriefingStatus(
+              updatedBriefing.morning_status,
+            ),
+
+          eveningTitle:
+            typeof updatedBriefing.evening_title ===
+            "string"
+              ? updatedBriefing.evening_title
+              : undefined,
+
+          eveningContent:
+            typeof updatedBriefing.evening_content ===
+            "string"
+              ? updatedBriefing.evening_content
+              : undefined,
+
+          eveningGeneratedAt:
+            typeof updatedBriefing.evening_generated_at ===
+            "string"
+              ? updatedBriefing.evening_generated_at
+              : undefined,
+
+          eveningReadAt:
+            typeof updatedBriefing.evening_read_at ===
+            "string"
+              ? updatedBriefing.evening_read_at
+              : undefined,
+
+          eveningStatus:
+            normalizeBriefingStatus(
+              updatedBriefing.evening_status,
+            ),
+
+          totalTodoCount:
+            Number(
+              updatedBriefing.total_todo_count ??
+                0,
+            ),
+
+          completedTodoCount:
+            Number(
+              updatedBriefing.completed_todo_count ??
+                0,
+            ),
+
+          incompleteTodoCount:
+            Number(
+              updatedBriefing.incomplete_todo_count ??
+                0,
+            ),
+
+          completionRate:
+            Number(
+              updatedBriefing.completion_rate ??
+                0,
+            ),
+        };
+
+      setMorningBriefing(
+        normalizedBriefing,
+      );
+
+      setIsMorningBriefingOpen(true);
+    }
+  } catch (error) {
+    console.error(
+      "HOO 오늘의 일정과 브리핑 동기화 실패:",
+      error,
+    );
+
+    /*
+     * 자동 동기화가 실패해도
+     * 현재 화면과 기존 기능은 유지한다.
+     */
+  }
+}
+
+  void generateTodayScheduleTodos();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  schedules,
+  supabase,
+]);
+
+/* ─────────────────────────────
+   투두리스트 클라우드 불러오기
+   기존 localStorage 기록 자동 이전
+───────────────────────────── */
+
+useEffect(() => {
+  let cancelled = false;
+
+ async function loadCloudTodos() {
+  const now = new Date();
+  const todayTaskDate =
+    getTodayStorageDate();
+
+  /*
+   * 자정부터 새벽 4시까지는
+   * 전날과 오늘의 투두를 모두 숨긴다.
+   */
+  if (now.getHours() < 4) {
+    if (!cancelled) {
+      setTodos([]);
+      setIsTodoCloudReady(true);
+    }
+
+    return;
+  }
+
+  /*
+   * 기존 로컬 투두 또는 서버 투두를
+   * 현재 TodoItem 형식으로 변환한다.
+   */
+  function normalizeLocalTodos(
+    value: unknown,
+  ): TodoItem[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.reduce<TodoItem[]>(
+      (result, item, index) => {
+        if (
+          !item ||
+          typeof item !== "object"
+        ) {
+          return result;
         }
 
-        setTodos(normalizedTodos);
+        const todo =
+          item as Partial<TodoItem>;
 
-        window.localStorage.setItem(
-          TODO_STORAGE_KEY,
-          JSON.stringify(normalizedTodos),
-        );
+        const content =
+          typeof todo.content === "string"
+            ? todo.content.trim()
+            : "";
 
-        return;
-      }
+        if (!content) {
+          return result;
+        }
 
-      /*
-       * 서버에 기록이 없으면
-       * 현재 브라우저의 기존 투두를 서버로 이전한다.
-       */
+        /*
+         * 개편 이전 투두에는 날짜가 없으므로
+         * 최초 이전 시 오늘 날짜를 부여한다.
+         */
+        const taskDate =
+          typeof todo.taskDate === "string"
+            ? todo.taskDate
+            : todayTaskDate;
+
+        /*
+         * 오늘 날짜가 아닌 투두는
+         * 기록에서 삭제하지 않고 화면에서만 제외한다.
+         */
+        if (taskDate !== todayTaskDate) {
+          return result;
+        }
+
+        const taskType: TodoTaskType =
+          todo.taskType === "schedule" ||
+          todo.taskType === "preparation" ||
+          todo.taskType ===
+            "recommendation"
+            ? todo.taskType
+            : "manual";
+
+        result.push({
+          id:
+            typeof todo.id === "string"
+              ? todo.id
+              : createId(),
+
+          content,
+
+          completed:
+            todo.completed === true,
+
+          source:
+            todo.source === "hoo"
+              ? "hoo"
+              : "user",
+
+          taskDate,
+          taskType,
+
+          gameId:
+            typeof todo.gameId === "string"
+              ? todo.gameId
+              : undefined,
+
+          scheduleId:
+            typeof todo.scheduleId === "string"
+              ? todo.scheduleId
+              : undefined,
+
+          generatedAt:
+            typeof todo.generatedAt === "string"
+              ? todo.generatedAt
+              : undefined,
+
+          archivedAt:
+            typeof todo.archivedAt === "string"
+              ? todo.archivedAt
+              : undefined,
+
+          generationReason:
+            typeof todo.generationReason ===
+            "string"
+              ? todo.generationReason
+              : undefined,
+
+          createdAt:
+            typeof todo.createdAt === "string"
+              ? todo.createdAt
+              : new Date(
+                  Date.now() + index,
+                ).toISOString(),
+        });
+
+        return result;
+      },
+      [],
+    );
+  }
+
+  try {
+    const {
+      data: { session },
+      error: sessionError,
+    } =
+      await supabase.auth.getSession();
+
+    if (sessionError) {
+      throw sessionError;
+    }
+
+    const user =
+      session?.user ?? null;
+
+    /*
+     * 비로그인 사용자는 로컬 데이터에서
+     * 오늘 날짜의 투두만 불러온다.
+     */
+    if (!user) {
       const savedTodos =
         window.localStorage.getItem(
           TODO_STORAGE_KEY,
         );
 
-      if (!savedTodos) {
-        if (!cancelled) {
-          setTodos([]);
-        }
-
-        return;
-      }
-
-      const parsedValue: unknown =
-        JSON.parse(savedTodos);
-
-      if (!Array.isArray(parsedValue)) {
-        if (!cancelled) {
-          setTodos([]);
-        }
-
-        return;
-      }
-
-     const localTodos =
-  parsedValue.reduce<TodoItem[]>(
-    (result, value, index) => {
-      if (
-        !value ||
-        typeof value !== "object"
-      ) {
-        return result;
-      }
-
-      const todo =
-        value as Partial<TodoItem>;
-
-      const content =
-        typeof todo.content === "string"
-          ? todo.content.trim()
-          : "";
-
-      if (!content) {
-        return result;
-      }
-
-      const normalizedTodo: TodoItem = {
-        id:
-          typeof todo.id === "string"
-            ? todo.id
-            : createId(),
-
-        content,
-
-        completed:
-          todo.completed === true,
-
-        source:
-          todo.source === "hoo"
-            ? "hoo"
-            : "user",
-
-        gameId:
-          typeof todo.gameId === "string"
-            ? todo.gameId
-            : undefined,
-
-        createdAt:
-          typeof todo.createdAt === "string"
-            ? todo.createdAt
-            : new Date(
-                Date.now() + index,
-              ).toISOString(),
-      };
-
-      result.push(normalizedTodo);
-
-      return result;
-    },
-    [],
-  );
-
-
-      if (localTodos.length === 0) {
-        if (!cancelled) {
-          setTodos([]);
-        }
-
-        return;
-      }
-
-      const migrationRows =
-        localTodos.map((todo, index) => ({
-          id: todo.id,
-          user_id: user.id,
-          content: todo.content,
-          completed: todo.completed,
-          source: todo.source,
-          game_id: todo.gameId ?? null,
-          sort_order: index,
-          created_at: todo.createdAt,
-          updated_at: new Date().toISOString(),
-        }));
-
-      const { error: migrationError } =
-        await supabase
-          .from("todos")
-          .insert(migrationRows);
-
-      if (migrationError) {
-        throw migrationError;
-      }
+      const localTodos =
+        savedTodos
+          ? normalizeLocalTodos(
+              JSON.parse(savedTodos),
+            )
+          : [];
 
       if (!cancelled) {
         setTodos(localTodos);
 
-        console.log(
-          `${localTodos.length}개의 기존 투두를 서버로 이전했습니다.`,
+        window.localStorage.setItem(
+          TODO_STORAGE_KEY,
+          JSON.stringify(localTodos),
         );
       }
-    } catch (error) {
-      console.error(
-        "투두리스트 클라우드 불러오기 실패:",
-        error,
+
+      return;
+    }
+
+    /*
+     * 로그인 사용자는 서버에서
+     * 오늘 날짜의 활성 투두만 불러온다.
+     */
+    const {
+      data: cloudTodos,
+      error: cloudTodoError,
+    } = await supabase
+      .from("todos")
+      .select(
+        `
+          id,
+          content,
+          completed,
+          source,
+          task_date,
+          task_type,
+          game_id,
+          schedule_id,
+          generated_at,
+          archived_at,
+          generation_reason,
+          sort_order,
+          created_at
+        `,
+      )
+      .eq("user_id", user.id)
+      .eq("task_date", todayTaskDate)
+      .is("archived_at", null)
+      .order("sort_order", {
+        ascending: true,
+      })
+      .order("created_at", {
+        ascending: true,
+      });
+
+    if (cloudTodoError) {
+      throw cloudTodoError;
+    }
+
+    /*
+     * 서버에 오늘의 투두가 있으면
+     * 서버 데이터를 최우선으로 사용한다.
+     */
+    if (
+      Array.isArray(cloudTodos) &&
+      cloudTodos.length > 0
+    ) {
+      const normalizedTodos: TodoItem[] =
+        cloudTodos.map((todo) => {
+          const taskType: TodoTaskType =
+            todo.task_type === "schedule" ||
+            todo.task_type ===
+              "preparation" ||
+            todo.task_type ===
+              "recommendation"
+              ? todo.task_type
+              : "manual";
+
+          return {
+            id: todo.id,
+            content: todo.content,
+            completed:
+              todo.completed === true,
+
+            source:
+              todo.source === "hoo"
+                ? "hoo"
+                : "user",
+
+            taskDate:
+              typeof todo.task_date === "string"
+                ? todo.task_date
+                : todayTaskDate,
+
+            taskType,
+
+            gameId:
+              typeof todo.game_id === "string"
+                ? todo.game_id
+                : undefined,
+
+            scheduleId:
+              typeof todo.schedule_id === "string"
+                ? todo.schedule_id
+                : undefined,
+
+            generatedAt:
+              typeof todo.generated_at === "string"
+                ? todo.generated_at
+                : undefined,
+
+            archivedAt:
+              typeof todo.archived_at === "string"
+                ? todo.archived_at
+                : undefined,
+
+            generationReason:
+              typeof todo.generation_reason ===
+              "string"
+                ? todo.generation_reason
+                : undefined,
+
+            createdAt:
+              typeof todo.created_at === "string"
+                ? todo.created_at
+                : new Date().toISOString(),
+          };
+        });
+
+      if (cancelled) {
+        return;
+      }
+
+      setTodos(normalizedTodos);
+
+      window.localStorage.setItem(
+        TODO_STORAGE_KEY,
+        JSON.stringify(normalizedTodos),
       );
 
-      /*
-       * 서버 연결이 실패해도
-       * 기존 localStorage 투두는 유지한다.
-       */
-    } finally {
+      return;
+    }
+
+    /*
+     * 서버에 오늘의 투두가 없다면
+     * 기존 브라우저 투두를 오늘 날짜로 이전한다.
+     */
+    const savedTodos =
+      window.localStorage.getItem(
+        TODO_STORAGE_KEY,
+      );
+
+    const localTodos =
+      savedTodos
+        ? normalizeLocalTodos(
+            JSON.parse(savedTodos),
+          )
+        : [];
+
+    if (localTodos.length === 0) {
       if (!cancelled) {
-        setIsTodoCloudReady(true);
+        setTodos([]);
       }
+
+      return;
+    }
+
+    const migrationRows =
+      localTodos.map((todo, index) => ({
+        id: todo.id,
+        user_id: user.id,
+        content: todo.content,
+        completed: todo.completed,
+        source: todo.source,
+        task_date:
+          todo.taskDate ?? todayTaskDate,
+        task_type:
+          todo.taskType ?? "manual",
+        game_id:
+          todo.gameId ?? null,
+        schedule_id:
+          todo.scheduleId ?? null,
+        generated_at:
+          todo.generatedAt ?? null,
+        archived_at:
+          todo.archivedAt ?? null,
+        generation_reason:
+          todo.generationReason ?? null,
+        sort_order: index,
+        created_at: todo.createdAt,
+        updated_at:
+          new Date().toISOString(),
+      }));
+
+    const { error: migrationError } =
+      await supabase
+        .from("todos")
+        .upsert(migrationRows, {
+          onConflict: "id",
+        });
+
+    if (migrationError) {
+      throw migrationError;
+    }
+
+    if (!cancelled) {
+      setTodos(localTodos);
+
+      window.localStorage.setItem(
+        TODO_STORAGE_KEY,
+        JSON.stringify(localTodos),
+      );
+
+      console.log(
+        `${localTodos.length}개의 기존 투두를 오늘 날짜로 이전했습니다.`,
+      );
+    }
+  } catch (error) {
+    console.error(
+      "오늘의 투두리스트 불러오기 실패:",
+      error,
+    );
+
+    /*
+     * 서버 연결 실패 시에도
+     * 이미 표시된 로컬 데이터는 삭제하지 않는다.
+     */
+  } finally {
+    if (!cancelled) {
+      setIsTodoCloudReady(true);
     }
   }
+}
 
   void loadCloudTodos();
 
@@ -2627,6 +7176,192 @@ useEffect(() => {
   isTodoCloudReady,
 ]);
 
+/* ─────────────────────────────
+   HOO 투두 날짜 자동 전환
+   00:00 종료 · 04:00 시작
+───────────────────────────── */
+
+useEffect(() => {
+  let previousDate =
+    getTodayStorageDate();
+
+  let previousPhase:
+    | "preparing"
+    | "active" =
+    new Date().getHours() < 4
+      ? "preparing"
+      : "active";
+
+  let scheduledReloadTimer:
+    number | null = null;
+
+  function clearScheduledReload() {
+    if (
+      scheduledReloadTimer === null
+    ) {
+      return;
+    }
+
+    window.clearTimeout(
+      scheduledReloadTimer,
+    );
+
+    scheduledReloadTimer =
+      null;
+  }
+
+  function scheduleTodoReload() {
+    if (
+      scheduledReloadTimer !== null
+    ) {
+      return;
+    }
+
+    /*
+     * 새벽 4시 크론과 브라우저 새로고침이
+     * 동시에 실행되는 경쟁 상태를 방지한다.
+     *
+     * 크론이 오늘의 투두와 브리핑을 저장할
+     * 시간을 확보한 뒤 화면을 새로 불러온다.
+     */
+    scheduledReloadTimer =
+      window.setTimeout(() => {
+        scheduledReloadTimer =
+          null;
+
+        window.location.reload();
+      }, 10_000);
+  }
+
+  function handleTodoDayCycle() {
+    const now =
+      new Date();
+
+    const currentDate =
+      getTodayStorageDate();
+
+    const currentPhase:
+      | "preparing"
+      | "active" =
+      now.getHours() < 4
+        ? "preparing"
+        : "active";
+
+    const dateChanged =
+      currentDate !== previousDate;
+
+    const phaseChanged =
+      currentPhase !== previousPhase;
+
+    /*
+     * 자정이 지나 날짜가 바뀌면
+     * 전날 투두를 화면에서 즉시 종료한다.
+     *
+     * 서버의 기존 기록은 삭제하지 않는다.
+     */
+    if (
+      dateChanged &&
+      currentPhase === "preparing"
+    ) {
+      clearScheduledReload();
+
+      setTodos([]);
+
+      previousDate =
+        currentDate;
+
+      previousPhase =
+        currentPhase;
+
+      return;
+    }
+
+    /*
+     * 새벽 4시가 되면 크론 작업이 끝날 시간을
+     * 확보한 뒤 오늘 투두를 다시 불러온다.
+     */
+    if (
+      phaseChanged &&
+      currentPhase === "active"
+    ) {
+      previousDate =
+        currentDate;
+
+      previousPhase =
+        currentPhase;
+
+      scheduleTodoReload();
+
+      return;
+    }
+
+    /*
+     * 컴퓨터 절전 등으로 자정과 새벽 4시를
+     * 모두 건너뛴 경우에도 오늘 화면으로 전환한다.
+     */
+    if (
+      dateChanged &&
+      currentPhase === "active"
+    ) {
+      previousDate =
+        currentDate;
+
+      previousPhase =
+        currentPhase;
+
+      scheduleTodoReload();
+
+      return;
+    }
+
+    previousDate =
+      currentDate;
+
+    previousPhase =
+      currentPhase;
+  }
+
+  /*
+   * 브라우저 시간의 경계 오차를 줄이기 위해
+   * 30초마다 날짜와 현재 단계를 확인한다.
+   */
+  const todoDayCycleInterval =
+    window.setInterval(
+      handleTodoDayCycle,
+      30_000,
+    );
+
+  /*
+   * 브라우저가 백그라운드에 있다가
+   * 다시 열렸을 때 즉시 날짜를 확인한다.
+   */
+  function handleVisibilityChange() {
+    if (
+      document.visibilityState ===
+      "visible"
+    ) {
+      handleTodoDayCycle();
+    }
+  }
+
+  document.addEventListener(
+    "visibilitychange",
+    handleVisibilityChange,
+  );
+
+  return () => {
+    clearScheduledReload();
+
+    window.clearInterval(
+      todoDayCycleInterval,
+    );
+
+    document.removeEventListener(
+      "visibilitychange",
+      handleVisibilityChange,
+    );
+  };
+}, []);
 
 /* ─────────────────────────────
    추천 투두 자동 저장
@@ -4093,8 +8828,7 @@ async function deleteMemo(
       ),
     );
   }
-
- async function addTodo(
+async function addTodo(
   event: FormEvent<HTMLFormElement>,
 ) {
   event.preventDefault();
@@ -4105,16 +8839,38 @@ async function deleteMemo(
     return;
   }
 
+  const now = new Date();
+
+  /*
+   * 자정부터 새벽 4시까지는 하루 전환 시간이다.
+   * 이 시간에는 새로운 투두를 생성하지 않는다.
+   */
+  if (now.getHours() < 4) {
+    window.alert(
+      "HOO가 새로운 하루를 준비하고 있어요. 오늘의 투두는 새벽 4시부터 작성할 수 있습니다.",
+    );
+
+    return;
+  }
+
+  const todayTaskDate =
+    getTodayStorageDate();
+
+  const createdAt =
+    now.toISOString();
+
   const newTodo: TodoItem = {
     id: createId(),
     content,
     completed: false,
     source: "user",
-    createdAt: new Date().toISOString(),
+    taskDate: todayTaskDate,
+    taskType: "manual",
+    createdAt,
   };
 
   /*
-   * 화면에는 즉시 추가한다.
+   * 화면에는 즉시 투두를 추가한다.
    */
   setTodos((previousTodos) => [
     ...previousTodos,
@@ -4134,7 +8890,8 @@ async function deleteMemo(
     }
 
     /*
-     * 비로그인 사용자는 localStorage만 사용한다.
+     * 비로그인 사용자는
+     * 날짜 정보가 포함된 상태로 localStorage에 저장한다.
      */
     if (!user) {
       return;
@@ -4149,10 +8906,16 @@ async function deleteMemo(
           content: newTodo.content,
           completed: newTodo.completed,
           source: newTodo.source,
-          game_id: newTodo.gameId ?? null,
+          task_date: todayTaskDate,
+          task_type: "manual",
+          game_id: null,
+          schedule_id: null,
+          generated_at: null,
+          archived_at: null,
+          generation_reason: null,
           sort_order: todos.length,
-          created_at: newTodo.createdAt,
-          updated_at: newTodo.createdAt,
+          created_at: createdAt,
+          updated_at: createdAt,
         });
 
     if (insertError) {
@@ -4160,13 +8923,13 @@ async function deleteMemo(
     }
   } catch (error) {
     console.error(
-      "투두 추가 서버 저장 실패:",
+      "오늘의 투두 추가 서버 저장 실패:",
       error,
     );
 
     /*
      * 서버 저장에 실패하면
-     * 화면에서도 추가 내용을 되돌린다.
+     * 화면에서도 새 투두를 제거한다.
      */
     setTodos((previousTodos) =>
       previousTodos.filter(
@@ -4175,7 +8938,7 @@ async function deleteMemo(
     );
 
     window.alert(
-      "투두를 서버에 저장하지 못했습니다.",
+      "오늘의 투두를 서버에 저장하지 못했습니다.",
     );
   }
 }
@@ -5083,6 +9846,119 @@ useEffect(() => {
   };
 }, [safeTodoProgressPercent]);
 
+
+async function updateContextMessageStatus(
+  nextStatus:
+    | "read"
+    | "dismissed",
+) {
+  if (!contextMessage) {
+    return;
+  }
+
+  const targetMessageId =
+    contextMessage.id;
+
+  try {
+    const {
+      data: { user },
+      error: userError,
+    } =
+      await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    if (!user) {
+      throw new Error(
+        "로그인이 필요합니다.",
+      );
+    }
+
+    const {
+      error: updateError,
+    } =
+      await supabase
+        .from("hoo_context_messages")
+        .update({
+          status: nextStatus,
+          updated_at:
+            new Date().toISOString(),
+        })
+        .eq(
+          "id",
+          targetMessageId,
+        )
+        .eq(
+          "user_id",
+          user.id,
+        )
+        .eq(
+          "status",
+          "delivered",
+        );
+
+    if (updateError) {
+      throw updateError;
+    }
+
+    setContextMessage(
+      (previousMessage) => {
+        if (
+          previousMessage?.id !==
+          targetMessageId
+        ) {
+          return previousMessage;
+        }
+
+        return null;
+      },
+    );
+
+    setIsContextMessageOpen(
+      false,
+    );
+
+    /*
+     * 현재 메시지를 처리한 뒤
+     * 다음 예약 메시지를 즉시 확인한다.
+     */
+    setContextMessageRefreshKey(
+      (previousKey) =>
+        previousKey + 1,
+    );
+  } catch (error) {
+    console.error(
+      "HOO 예약 메시지 상태를 변경하지 못했습니다.",
+      error,
+    );
+
+    window.alert(
+      "메시지를 처리하지 못했어요. 잠시 후 다시 시도해 주세요.",
+    );
+  }
+}
+
+async function handleContextMessageRead() {
+  await updateContextMessageStatus(
+    "read",
+  );
+}
+
+async function handleContextMessageDismiss() {
+  await updateContextMessageStatus(
+    "dismissed",
+  );
+}
+
+async function handleContextMessageDoNotShowAgain() {
+  await updateContextMessageStatus(
+    "dismissed",
+  );
+}
+
+
 return (
   <main
     className="relative min-h-screen overflow-x-hidden bg-[#102f24] text-[#332f45]"
@@ -5888,10 +10764,106 @@ setSecretPinInput("");
             })}
           </div>
 
-          <div className="mt-7 flex flex-col items-center gap-2 text-xs font-black tracking-[0.18em] text-white/75">
-            <span>SCROLL TO EXPLORE</span>
-            <span className="animate-bounce text-xl">↓</span>
-          </div>
+         <button
+  type="button"
+  onClick={() => {
+    if (!morningBriefing) {
+      return;
+    }
+
+    setIsBriefingModalOpen(true);
+  }}
+  disabled={!morningBriefing}
+  className={`group mt-5 flex w-full max-w-xl items-center justify-between rounded-2xl border px-5 py-3.5 text-left text-white shadow-[0_12px_35px_rgba(0,0,0,0.18)] backdrop-blur-md transition duration-300 ${
+    morningBriefing
+      ? "cursor-pointer border-white/45 bg-white/[0.10] hover:-translate-y-0.5 hover:border-white/80 hover:bg-white/[0.18]"
+      : "cursor-default border-white/30 bg-white/[0.07]"
+  }`}
+  aria-label={
+    morningBriefing
+      ? "오늘의 HOO 브리핑 열기"
+      : "오늘의 HOO 브리핑 준비 중"
+  }
+>
+  <div className="flex min-w-0 items-center gap-3">
+    <span
+      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-xl shadow-[0_8px_20px_rgba(40,30,100,0.35)] transition-transform duration-300 ${
+        morningBriefing
+          ? "bg-[#7467d8] group-hover:scale-105"
+          : "animate-pulse bg-[#7467d8]/70"
+      }`}
+    >
+      {morningBriefing ? "◉" : "○"}
+    </span>
+
+    <span className="min-w-0">
+      <span className="block text-[10px] font-bold tracking-[0.16em] text-white/70 [text-shadow:none]">
+        HOO AI 1.0
+      </span>
+
+      <span className="mt-0.5 block truncate text-sm font-bold text-white [text-shadow:none]">
+        {morningBriefing
+          ? "오늘의 브리핑"
+          : "오늘의 브리핑을 준비하고 있어요"}
+      </span>
+    </span>
+  </div>
+
+  <span className="shrink-0 text-xs font-semibold text-white/75 [text-shadow:none]">
+    {morningBriefing
+      ? "다시 보기 →"
+      : "새벽 4시 공개"}
+  </span>
+</button>
+
+{routineCandidates.length > 0 && (
+  <button
+    type="button"
+    onClick={() => {
+      const firstCandidate =
+        routineCandidates[0];
+
+      if (!firstCandidate) {
+        return;
+      }
+
+      openRoutineConfirmation(
+        firstCandidate,
+      );
+    }}
+    className="group mt-3 flex w-full max-w-xl items-center justify-between rounded-2xl border border-[#f0d49b]/70 bg-[#2f291f]/75 px-5 py-3.5 text-left text-white shadow-[0_12px_35px_rgba(0,0,0,0.2)] backdrop-blur-md transition duration-300 hover:-translate-y-0.5 hover:border-[#ffe0a2] hover:bg-[#3a3123]/90"
+    aria-label="HOO가 발견한 반복 생활 확인하기"
+  >
+    <div className="flex min-w-0 items-center gap-3">
+      <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#e2ad52] text-xl text-[#2f2414] shadow-[0_8px_20px_rgba(85,55,10,0.3)] transition-transform duration-300 group-hover:scale-105">
+        ↻
+
+        <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#fff4da] px-1 text-[10px] font-black text-[#6c4a12]">
+          {routineCandidates.length}
+        </span>
+      </span>
+
+      <span className="min-w-0">
+        <span className="block text-[10px] font-bold tracking-[0.16em] text-[#f5d99f] [text-shadow:none]">
+          HOO ROUTINE
+        </span>
+
+        <span className="mt-0.5 block truncate text-sm font-bold text-white [text-shadow:none]">
+          반복되는 생활을 발견했어요
+        </span>
+      </span>
+    </div>
+
+    <span className="shrink-0 text-xs font-semibold text-[#f8dfaa] [text-shadow:none]">
+      확인하기 →
+    </span>
+  </button>
+)}
+
+<div className="mt-6 flex flex-col items-center gap-2 text-xs font-black tracking-[0.18em] text-white/75">
+  <span>SCROLL TO EXPLORE</span>
+  <span className="animate-bounce text-xl">↓</span>
+</div>
         </div>
       </section>
 
@@ -5925,19 +10897,20 @@ setSecretPinInput("");
   <div className="mx-auto w-full max-w-[1380px]">
     <section className="grid min-h-[630px] overflow-hidden rounded-[34px] border border-white/55 bg-white/90 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl xl:grid-cols-[1.3fr_0.7fr]">
       <article className="border-b border-[#dedaf0] p-6 md:p-8 xl:border-b-0 xl:border-r">
+      
         <header>
-          <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
-            HOO TO DO
-          </p>
+  <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
+    HOO TO DO
+  </p>
 
-          <h2 className="mt-1 text-3xl font-black text-[#332f45]">
-            오늘의 할 일
-          </h2>
+  <h2 className="mt-1 text-3xl font-black text-[#332f45]">
+    오늘의 할 일
+  </h2>
 
-          <p className="mt-2 text-sm font-bold text-[#8b849d]">
-            작은 목표부터 하나씩 완료해보세요.
-          </p>
-        </header>
+  <p className="mt-2 text-sm font-bold text-[#8b849d]">
+    작은 목표부터 하나씩 완료해보세요.
+  </p>
+</header>
 
         <form
           onSubmit={addTodo}
@@ -5975,79 +10948,116 @@ setSecretPinInput("");
             </div>
           ) : (
 
-          todos.map((todo, index) => (
-  <article
-    key={todo.id}
-    onDragOver={handleTodoDragOver}
-    onDragEnter={() =>
-      handleTodoDragEnter(todo.id)
-    }
-    onDrop={handleTodoDrop}
-    className={`flex items-center gap-3 rounded-2xl px-4 py-3 transition ${
-      draggingTodoId === todo.id
-        ? "scale-[0.98] border-2 border-dashed border-[#7467d8] bg-[#eeeaff] opacity-60"
-        : dragOverTodoId === todo.id
-          ? "border-2 border-[#a99df0] bg-[#f2efff]"
-          : "border-2 border-transparent bg-[#faf9ff] hover:border-[#d8d0ff] hover:bg-[#f7f5ff]"
-    }`}
-  >
-    <div
-      draggable
-      onDragStart={(event) =>
-        handleTodoDragStart(
-          event,
-          todo.id,
-        )
-      }
-      onDragEnd={handleTodoDragEnd}
-      className="flex w-7 shrink-0 cursor-grab select-none flex-col items-center justify-center gap-[3px] rounded-lg py-2 text-[#aaa4b8] transition hover:bg-[#eeeaff] hover:text-[#7467d8] active:cursor-grabbing"
-      aria-label={`${todo.content} 순서 변경`}
-      title="잡고 끌어서 순서 변경"
-    >
-      <span className="h-[2px] w-4 rounded-full bg-current" />
-      <span className="h-[2px] w-4 rounded-full bg-current" />
-      <span className="h-[2px] w-4 rounded-full bg-current" />
-    </div>
+        todos.map((todo, index) => {
+  const isHooScheduleTodo =
+    todo.source === "hoo" &&
+    todo.taskType === "schedule";
 
-    <button
-      type="button"
-      onClick={() =>
-        toggleTodo(todo.id)
+  return (
+    <article
+      key={todo.id}
+      onDragOver={handleTodoDragOver}
+      onDragEnter={() =>
+        handleTodoDragEnter(todo.id)
       }
-      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-sm font-black transition ${
-        todo.completed
-          ? "border-[#7467d8] bg-[#7467d8] text-white"
-          : "border-[#cfc9df] bg-white text-transparent"
+      onDrop={handleTodoDrop}
+      className={`flex items-center gap-3 rounded-2xl px-4 py-3 transition ${
+        draggingTodoId === todo.id
+          ? "scale-[0.98] border-2 border-dashed border-[#7467d8] bg-[#eeeaff] opacity-60"
+          : dragOverTodoId === todo.id
+            ? "border-2 border-[#a99df0] bg-[#f2efff]"
+            : isHooScheduleTodo
+              ? "border-2 border-[#c9c0ff] bg-gradient-to-r from-[#f2efff] to-[#faf9ff] shadow-sm hover:border-[#9f92e8]"
+              : "border-2 border-transparent bg-[#faf9ff] hover:border-[#d8d0ff] hover:bg-[#f7f5ff]"
       }`}
-      aria-label={`${todo.content} 완료 상태 변경`}
     >
-      ✓
-    </button>
-
-    <div className="min-w-0 flex-1">
-      <p
-        className={`break-words text-sm font-black ${
-          todo.completed
-            ? "text-[#aaa4b8] line-through"
-            : "text-[#423c55]"
-        }`}
+      <div
+        draggable
+        onDragStart={(event) =>
+          handleTodoDragStart(
+            event,
+            todo.id,
+          )
+        }
+        onDragEnd={handleTodoDragEnd}
+        className="flex w-7 shrink-0 cursor-grab select-none flex-col items-center justify-center gap-[3px] rounded-lg py-2 text-[#aaa4b8] transition hover:bg-[#eeeaff] hover:text-[#7467d8] active:cursor-grabbing"
+        aria-label={`${todo.content} 순서 변경`}
+        title="잡고 끌어서 순서 변경"
       >
-        {index + 1}.{" "}
-        {todo.content}
-      </p>
-    </div>
+        <span className="h-[2px] w-4 rounded-full bg-current" />
+        <span className="h-[2px] w-4 rounded-full bg-current" />
+        <span className="h-[2px] w-4 rounded-full bg-current" />
+      </div>
 
-    <button
-      type="button"
-      onClick={() =>
-        deleteTodo(todo.id)
-      }
-      className="shrink-0 rounded-full bg-[#ffe2e8] px-3 py-1.5 text-xs font-black text-[#d94f6b]"
-    >
-      삭제
-    </button>
-  </article>
-))
+      <button
+        type="button"
+        onClick={() =>
+          toggleTodo(todo.id)
+        }
+        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-sm font-black transition ${
+          todo.completed
+            ? "border-[#7467d8] bg-[#7467d8] text-white"
+            : isHooScheduleTodo
+              ? "border-[#9f92e8] bg-white text-transparent"
+              : "border-[#cfc9df] bg-white text-transparent"
+        }`}
+        aria-label={`${todo.content} 완료 상태 변경`}
+      >
+        ✓
+      </button>
+
+      <div className="min-w-0 flex-1">
+        {isHooScheduleTodo && (
+          <div className="mb-1 flex items-center gap-1.5">
+            <span className="rounded-full bg-[#7467d8] px-2 py-0.5 text-[9px] font-black tracking-wide text-white">
+              HOO 일정
+            </span>
+
+            <span className="truncate text-[10px] font-bold text-[#8b83a3]">
+              캘린더에서 자동 생성
+            </span>
+          </div>
+        )}
+
+        <p
+          className={`break-words text-sm font-black ${
+            todo.completed
+              ? "text-[#aaa4b8] line-through"
+              : "text-[#423c55]"
+          }`}
+          title={
+            isHooScheduleTodo
+              ? todo.generationReason ??
+                "캘린더에 등록된 오늘의 일정"
+              : undefined
+          }
+        >
+          {index + 1}.{" "}
+          {todo.content}
+        </p>
+      </div>
+
+      {isHooScheduleTodo ? (
+        <span
+          className="shrink-0 rounded-full border border-[#d8d0ff] bg-white px-3 py-1.5 text-[10px] font-black text-[#7467d8]"
+          title="이 투두는 캘린더 일정과 연결되어 있습니다."
+        >
+          캘린더
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() =>
+            deleteTodo(todo.id)
+          }
+          className="shrink-0 rounded-full bg-[#ffe2e8] px-3 py-1.5 text-xs font-black text-[#d94f6b]"
+        >
+          삭제
+        </button>
+      )}
+    </article>
+  );
+})
             
           )}
         </div>
@@ -7883,6 +12893,993 @@ setSecretPinInput("");
 
  </div>
       </section>
+
+{/* HOO 날씨 위치 사용 동의 모달 */}
+
+{isWeatherConsentOpen &&
+  !isWeatherPreferenceLoading && (
+    <div
+      className="fixed inset-0 z-[150] flex items-center justify-center bg-[#090711]/80 px-4 py-6 backdrop-blur-md"
+      role="presentation"
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hoo-weather-consent-title"
+        className="w-full max-w-[560px] overflow-hidden rounded-[32px] border border-[#ddd6ff] bg-[#faf9ff] shadow-[0_35px_120px_rgba(0,0,0,0.55)]"
+      >
+        <header className="border-b border-[#e7e2f2] bg-gradient-to-r from-[#f1efff] via-[#faf8ff] to-[#eef7ff] px-6 py-7 text-center md:px-8">
+          <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-[#7467d8] text-3xl shadow-[0_12px_30px_rgba(70,55,170,0.28)]">
+            ☀
+          </span>
+
+          <p className="mt-5 text-[11px] font-black tracking-[0.2em] text-[#7569bd]">
+            HOO WEATHER BRIEFING
+          </p>
+
+          <h2
+            id="hoo-weather-consent-title"
+            className="mt-2 text-2xl font-black text-[#302b40] md:text-3xl"
+          >
+            오늘의 날씨도 함께 볼까요?
+          </h2>
+        </header>
+
+        <div className="max-h-[calc(100vh-220px)] overflow-y-auto px-6 py-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:px-8">
+          <p className="text-center text-[15px] font-semibold leading-7 text-[#625c71]">
+            현재 지역의 날씨를 일정과
+            함께 분석해 더 자연스러운
+            브리핑을 전해드릴게요.
+          </p>
+
+          <div className="mt-6 space-y-3">
+            <div className="rounded-2xl border border-[#e0daf0] bg-white p-4">
+              <p className="text-sm font-black text-[#403a50]">
+                최소한의 위치만 사용해요
+              </p>
+
+              <p className="mt-1 text-xs font-semibold leading-5 text-[#817a8e]">
+                정확한 주소나 이동 경로는
+                저장하지 않아요. 날씨 확인에
+                필요한 대략적인 좌표만 한 번
+                확인합니다.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-[#e0daf0] bg-white p-4">
+              <p className="text-sm font-black text-[#403a50]">
+                계속 추적하지 않아요
+              </p>
+
+              <p className="mt-1 text-xs font-semibold leading-5 text-[#817a8e]">
+                위치를 실시간으로 추적하지
+                않고, 저장된 지역의 날씨만
+                확인합니다.
+              </p>
+            </div>
+
+            <div className="rounded-2xl border border-[#e0daf0] bg-white p-4">
+              <p className="text-sm font-black text-[#403a50]">
+                언제든 변경할 수 있어요
+              </p>
+
+              <p className="mt-1 text-xs font-semibold leading-5 text-[#817a8e]">
+                날씨 브리핑을 사용하지 않아도
+                일정과 투두 기능은 동일하게
+                이용할 수 있어요.
+              </p>
+            </div>
+          </div>
+
+          {weatherErrorMessage && (
+            <p
+              role="alert"
+              className="mt-5 rounded-2xl border border-[#f1caca] bg-[#fff2f2] px-4 py-3 text-center text-sm font-bold leading-6 text-[#a34f4f]"
+            >
+              {weatherErrorMessage}
+            </p>
+          )}
+
+          <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={
+                disableHooWeather
+              }
+              disabled={isWeatherLoading}
+              className="rounded-2xl border border-[#ddd7e8] bg-white px-5 py-3.5 text-sm font-black text-[#726b7e] transition hover:bg-[#f1eef6] disabled:cursor-wait disabled:opacity-50"
+            >
+              날씨 없이 이용하기
+            </button>
+
+            <button
+              type="button"
+              onClick={
+                enableHooWeatherWithCurrentLocation
+              }
+              disabled={isWeatherLoading}
+              className="rounded-2xl bg-[#7365d7] px-5 py-3.5 text-sm font-black text-white shadow-[0_12px_30px_rgba(73,60,170,0.28)] transition hover:bg-[#6254c9] disabled:cursor-wait disabled:opacity-60"
+            >
+              {weatherPermissionStatus ===
+              "requesting"
+                ? "현재 위치 확인 중..."
+                : "현재 위치로 시작"}
+            </button>
+          </div>
+
+          <p className="mt-4 text-center text-[11px] font-semibold leading-5 text-[#9690a1]">
+            현재 위치를 선택하면 브라우저의
+            위치 권한 확인창이 표시됩니다.
+          </p>
+        </div>
+      </section>
+    </div>
+  )}
+
+{/* HOO 반복 생활 확인 모달 */}
+
+
+{isRoutineConfirmationOpen &&
+  selectedRoutineCandidate && (
+    <div
+      className="fixed inset-0 z-[140] flex items-center justify-center bg-[#090711]/80 px-4 py-6 backdrop-blur-md"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (
+          event.target ===
+          event.currentTarget
+        ) {
+          closeRoutineConfirmation();
+        }
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hoo-routine-title"
+        className="w-full max-w-[620px] overflow-hidden rounded-[32px] border border-[#ddd6ff] bg-[#faf9ff] shadow-[0_35px_120px_rgba(0,0,0,0.55)]"
+        onMouseDown={(event) => {
+          event.stopPropagation();
+        }}
+      >
+        <header className="flex items-start justify-between border-b border-[#e6e1f3] bg-gradient-to-r from-[#f2efff] to-[#fffaf0] px-6 py-6 md:px-8">
+          <div className="flex min-w-0 items-center gap-4">
+            <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-[#e2ad52] text-2xl font-black text-[#352711] shadow-[0_10px_25px_rgba(107,72,15,0.22)]">
+              ↻
+            </span>
+
+            <div className="min-w-0">
+              <p className="text-[11px] font-black tracking-[0.2em] text-[#8a7044]">
+                HOO ROUTINE
+              </p>
+
+              <h2
+                id="hoo-routine-title"
+                className="mt-1 text-xl font-black text-[#302b40] md:text-2xl"
+              >
+                반복되는 생활을 발견했어요
+              </h2>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={
+              closeRoutineConfirmation
+            }
+            disabled={isRoutineSaving}
+            className="ml-3 flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[#ddd7eb] bg-white text-xl font-bold text-[#625c72] shadow-sm transition hover:bg-[#f1eef8] disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="반복 생활 확인창 닫기"
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="max-h-[calc(100vh-210px)] overflow-y-auto px-6 py-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:px-8">
+          <p className="text-[15px] font-semibold leading-7 text-[#5d576d]">
+            최근 일정에서 아래 생활이
+            반복되는 것을 확인했어요.
+            이용자의 시간을 임의로 채우지
+            않도록, 먼저 확인을 요청드려요.
+          </p>
+
+          <div className="mt-6 rounded-3xl border border-[#ddd6f6] bg-[#f3f0ff] p-5">
+            <p className="text-[11px] font-black tracking-[0.18em] text-[#7568c9]">
+              발견한 생활
+            </p>
+
+            <h3 className="mt-2 text-2xl font-black text-[#332e45]">
+              {
+                selectedRoutineCandidate.name
+              }
+            </h3>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              {selectedRoutineCandidate.daysOfWeek.map(
+                (day) => {
+                  const dayNames = [
+                    "일요일",
+                    "월요일",
+                    "화요일",
+                    "수요일",
+                    "목요일",
+                    "금요일",
+                    "토요일",
+                  ];
+
+                  return (
+                    <span
+                      key={day}
+                      className="rounded-full border border-[#cec5f4] bg-white px-3 py-1.5 text-xs font-bold text-[#5c50ae]"
+                    >
+                      {dayNames[day] ??
+                        `${day}요일`}
+                    </span>
+                  );
+                },
+              )}
+
+              <span className="rounded-full border border-[#e1d5bc] bg-[#fffaf0] px-3 py-1.5 text-xs font-bold text-[#806333]">
+                {
+                  selectedRoutineCandidate.observationCount
+                }
+                회 관찰
+              </span>
+
+              <span className="rounded-full border border-[#ddd8e8] bg-white px-3 py-1.5 text-xs font-bold text-[#70697e]">
+                신뢰도{" "}
+                {Math.round(
+                  selectedRoutineCandidate.confidence *
+                    100,
+                )}
+                %
+              </span>
+            </div>
+
+            {selectedRoutineCandidate.inferenceReason && (
+              <p className="mt-4 text-sm font-semibold leading-6 text-[#746d82]">
+                {
+                  selectedRoutineCandidate.inferenceReason
+                }
+              </p>
+            )}
+          </div>
+
+          <div className="mt-6">
+            <p className="text-sm font-black text-[#403a50]">
+              보통 어느 시간에
+              이루어지나요?
+            </p>
+
+            <p className="mt-1 text-xs font-semibold text-[#8a8496]">
+              정확하지 않아도 괜찮아요.
+              나중에 다시 조정할 수 있어요.
+            </p>
+
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="mb-2 block text-xs font-bold text-[#777082]">
+                  시작 시간
+                </span>
+
+                <input
+                  type="time"
+                  value={routineStartTime}
+                  onChange={(event) =>
+                    setRoutineStartTime(
+                      event.target.value,
+                    )
+                  }
+                  className="w-full rounded-2xl border border-[#dcd6e8] bg-white px-4 py-3 text-sm font-bold text-[#393345] outline-none transition focus:border-[#7668db] focus:ring-2 focus:ring-[#7668db]/15"
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-bold text-[#777082]">
+                  종료 시간
+                </span>
+
+                <input
+                  type="time"
+                  value={routineEndTime}
+                  onChange={(event) =>
+                    setRoutineEndTime(
+                      event.target.value,
+                    )
+                  }
+                  className="w-full rounded-2xl border border-[#dcd6e8] bg-white px-4 py-3 text-sm font-bold text-[#393345] outline-none transition focus:border-[#7668db] focus:ring-2 focus:ring-[#7668db]/15"
+                />
+              </label>
+            </div>
+          </div>
+
+          <label className="mt-6 flex cursor-pointer items-start gap-3 rounded-2xl border border-[#ddd7ec] bg-white p-4">
+            <input
+              type="checkbox"
+              checked={
+                shouldProtectRoutineTime
+              }
+              onChange={(event) =>
+                setShouldProtectRoutineTime(
+                  event.target.checked,
+                )
+              }
+              className="mt-1 h-5 w-5 shrink-0 accent-[#7365d7]"
+            />
+
+            <span>
+              <span className="block text-sm font-black text-[#40394f]">
+                이 시간대를 존중해 주세요
+              </span>
+
+              <span className="mt-1 block text-xs font-semibold leading-5 text-[#81798e]">
+                HOO가 빈 시간으로 판단해
+                새로운 할 일을 권하지
+                않도록 보호합니다.
+              </span>
+            </span>
+          </label>
+
+          <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={
+                rejectRoutineCandidate
+              }
+              disabled={isRoutineSaving}
+              className="rounded-2xl border border-[#ddd7e8] bg-white px-5 py-3.5 text-sm font-black text-[#726b7e] transition hover:bg-[#f1eef6] disabled:cursor-wait disabled:opacity-50"
+            >
+              내 반복 생활이 아니에요
+            </button>
+
+            <button
+              type="button"
+              onClick={
+                confirmRoutineCandidate
+              }
+              disabled={isRoutineSaving}
+              className="rounded-2xl bg-[#7365d7] px-5 py-3.5 text-sm font-black text-white shadow-[0_12px_30px_rgba(73,60,170,0.28)] transition hover:bg-[#6254c9] disabled:cursor-wait disabled:opacity-60"
+            >
+              {isRoutineSaving
+                ? "저장하고 있어요..."
+                : "내 생활로 확인"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  )}
+
+
+{/* HOO 예약 컨텍스트 메시지 */}
+
+{isContextMessageOpen &&
+  contextMessage &&
+  (() => {
+    const messageDesign =
+      contextMessage.messageType ===
+      "weather_care"
+        ? {
+            icon: "☂",
+            label: "HOO WEATHER CARE",
+            header:
+              "from-[#dcecff] via-[#eef6ff] to-white",
+            iconBackground:
+              "bg-[#4f8fd8]",
+            labelColor:
+              "text-[#3977bd]",
+            titleColor:
+              "text-[#263d58]",
+            contentColor:
+              "text-[#4c6077]",
+            border:
+              "border-[#c8def3]",
+            button:
+              "bg-[#4f8fd8] hover:bg-[#3f7fc8]",
+            shadow:
+              "shadow-[0_30px_90px_rgba(35,86,140,0.3)]",
+          }
+        : contextMessage.messageType ===
+            "sunset"
+          ? {
+              icon: "☀",
+              label: "HOO SUNSET",
+              header:
+                "from-[#f2dcff] via-[#fff0ec] to-white",
+              iconBackground:
+                "bg-gradient-to-br from-[#dd7f72] to-[#8c68cb]",
+              labelColor:
+                "text-[#9a5c9d]",
+              titleColor:
+                "text-[#49354f]",
+              contentColor:
+                "text-[#66526c]",
+              border:
+                "border-[#e6cfea]",
+              button:
+                "bg-[#8d68c6] hover:bg-[#7957b3]",
+              shadow:
+                "shadow-[0_30px_90px_rgba(90,54,120,0.32)]",
+            }
+          : {
+              icon: "♡",
+              label:
+                "HOO CONDITION CARE",
+              header:
+                "from-[#fff0d8] via-[#fff8ed] to-white",
+              iconBackground:
+                "bg-[#ed9b50]",
+              labelColor:
+                "text-[#c37431]",
+              titleColor:
+                "text-[#55402d]",
+              contentColor:
+                "text-[#705b49]",
+              border:
+                "border-[#efd9bd]",
+              button:
+                "bg-[#e99145] hover:bg-[#d88038]",
+              shadow:
+                "shadow-[0_30px_90px_rgba(125,78,34,0.3)]",
+            };
+
+    return (
+      <div
+        className="fixed inset-0 z-[12100] flex items-center justify-center bg-[#11101b]/45 px-4 py-8 backdrop-blur-[3px]"
+        role="presentation"
+        onMouseDown={(event) => {
+          if (
+            event.target ===
+            event.currentTarget
+          ) {
+            void handleContextMessageDismiss();
+          }
+        }}
+      >
+        <section
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="hoo-context-message-title"
+          className={`relative w-full max-w-lg overflow-hidden rounded-[30px] border bg-white ${messageDesign.border} ${messageDesign.shadow} [&_*]:[text-shadow:none] [&_*]:[-webkit-text-stroke:0px]`}
+          style={{
+            fontFamily:
+              '"Pretendard Variable", Pretendard, "Noto Sans KR", "Malgun Gothic", sans-serif',
+          }}
+          onMouseDown={(event) => {
+            event.stopPropagation();
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              void handleContextMessageDismiss();
+            }}
+            className="absolute right-5 top-5 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-black/10 bg-white/85 text-[#625b70] shadow-sm transition hover:bg-white hover:text-[#302a3d]"
+            aria-label="메시지 닫기"
+          >
+            <X
+              size={19}
+              strokeWidth={2.2}
+            />
+          </button>
+
+          <header
+            className={`bg-gradient-to-br px-7 pb-7 pt-8 md:px-9 md:pb-8 md:pt-9 ${messageDesign.header}`}
+          >
+            <div className="flex items-start gap-4">
+              <div
+                className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-[22px] text-3xl text-white shadow-[0_12px_28px_rgba(0,0,0,0.16)] ${messageDesign.iconBackground}`}
+                aria-hidden="true"
+              >
+                {messageDesign.icon}
+              </div>
+
+              <div className="min-w-0 pr-9">
+                <p
+                  className={`text-[10px] font-black tracking-[0.17em] ${messageDesign.labelColor}`}
+                >
+                  {messageDesign.label}
+                </p>
+
+                <h2
+                  id="hoo-context-message-title"
+                  className={`mt-3 break-keep text-[23px] font-bold leading-[1.35] tracking-[-0.035em] md:text-[26px] ${messageDesign.titleColor}`}
+                >
+                  {contextMessage.title}
+                </h2>
+              </div>
+            </div>
+          </header>
+
+          <div className="px-7 py-7 md:px-9 md:py-8">
+            <p
+              className={`break-keep text-[16px] font-medium leading-[1.9] tracking-[-0.015em] md:text-[17px] ${messageDesign.contentColor}`}
+            >
+              {contextMessage.content}
+            </p>
+
+            <div className="mt-6 flex items-center gap-2 text-[11px] font-semibold text-[#948c9e]">
+              <span>
+                {new Date(
+                  contextMessage.scheduledFor,
+                ).toLocaleTimeString(
+                  "ko-KR",
+                  {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  },
+                )}
+              </span>
+
+              <span aria-hidden="true">
+                ·
+              </span>
+
+              <span>
+                HOO AI 1.0
+              </span>
+            </div>
+
+            <div className="mt-7 border-t border-[#ebe7ef] pt-5">
+              <p className="text-right text-[12px] font-semibold text-[#8b8494]">
+                일상에 필요한 순간만 조용히
+                알려드릴게요. — HOO
+              </p>
+
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleContextMessageDoNotShowAgain();
+                  }}
+                  className="rounded-2xl border border-[#ddd7e5] bg-white px-5 py-3 text-sm font-semibold text-[#685f72] transition hover:bg-[#f6f3f8]"
+                >
+                  오늘 다시 보지 않기
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleContextMessageRead();
+                  }}
+                  className={`rounded-2xl px-7 py-3 text-sm font-bold text-white shadow-[0_10px_24px_rgba(0,0,0,0.16)] transition ${messageDesign.button}`}
+                >
+                  확인
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  })()}
+
+
+
+{/* HOO AI 중앙 브리핑 모달 */}
+
+{isBriefingModalOpen &&
+  morningBriefing &&
+  (() => {
+    const isEveningBriefing =
+      new Date().getHours() >= 21 &&
+      morningBriefing.eveningStatus ===
+        "completed" &&
+      typeof morningBriefing.eveningContent ===
+        "string" &&
+      morningBriefing.eveningContent.trim()
+        .length > 0;
+
+    const briefingTitle =
+      isEveningBriefing
+        ? morningBriefing.eveningTitle ??
+          "오늘 하루도 수고했어요."
+        : morningBriefing.morningTitle;
+
+    const briefingContent =
+      isEveningBriefing
+        ? morningBriefing.eveningContent ??
+          ""
+        : morningBriefing.morningContent;
+
+    const briefingGeneratedAt =
+      isEveningBriefing
+        ? morningBriefing.eveningGeneratedAt
+        : morningBriefing.morningGeneratedAt;
+
+    return (
+      <div
+        className="fixed inset-0 z-[12000] flex items-center justify-center bg-[#080713]/75 px-4 py-8 backdrop-blur-[6px]"
+        onMouseDown={(event) => {
+          if (
+            event.target ===
+            event.currentTarget
+          ) {
+            setIsBriefingModalOpen(
+              false,
+            );
+          }
+        }}
+        role="presentation"
+      >
+      <section
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="hoo-briefing-modal-title"
+  className="relative flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[32px] border border-white/70 bg-[#fbfaff] shadow-[0_35px_120px_rgba(0,0,0,0.55)] [&_*]:[text-shadow:none] [&_*]:[-webkit-text-stroke:0px]"
+  style={{
+    fontFamily:
+      '"Pretendard Variable", Pretendard, "Noto Sans KR", "Malgun Gothic", sans-serif',
+  }}
+  onMouseDown={(event) =>
+    event.stopPropagation()
+  }
+>
+          <button
+            type="button"
+            onClick={() =>
+              setIsBriefingModalOpen(
+                false,
+              )
+            }
+            className="absolute right-5 top-5 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-[#ded8ef] bg-white text-xl font-medium text-[#625b75] shadow-sm transition hover:bg-[#eeeaff] hover:text-[#5144b8]"
+            aria-label="브리핑 닫기"
+          >
+            ×
+          </button>
+
+         <header
+  className={`shrink-0 rounded-t-[32px] px-7 pb-7 pt-8 md:px-10 md:pb-9 md:pt-10 ${
+    isEveningBriefing
+      ? "bg-gradient-to-br from-[#393359] via-[#4f467f] to-[#665a98] text-white"
+      : "bg-gradient-to-br from-[#ede9ff] via-[#f7f5ff] to-white text-[#332d48]"
+  }`}
+>
+            <div className="flex items-center gap-4">
+              <div
+                className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-[22px] text-3xl ${
+                  isEveningBriefing
+                    ? "bg-white/15 text-white shadow-[0_12px_35px_rgba(0,0,0,0.22)]"
+                    : "bg-[#7467d8] text-white shadow-[0_12px_35px_rgba(116,103,216,0.32)]"
+                }`}
+              >
+                {isEveningBriefing
+                  ? "☾"
+                  : "☀"}
+              </div>
+
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-full px-3 py-1 text-[10px] font-bold tracking-[0.16em] ${
+                      isEveningBriefing
+                        ? "bg-white/15 text-white"
+                        : "bg-[#7467d8] text-white"
+                    }`}
+                  >
+                    {isEveningBriefing
+                      ? "HOO EVENING BRIEFING"
+                      : "HOO MORNING BRIEFING"}
+                  </span>
+
+                  {briefingGeneratedAt && (
+                    <span
+                      className={`text-[11px] font-semibold ${
+                        isEveningBriefing
+                          ? "text-white/70"
+                          : "text-[#756e88]"
+                      }`}
+                    >
+                      {new Date(
+                        briefingGeneratedAt,
+                      ).toLocaleTimeString(
+                        "ko-KR",
+                        {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        },
+                      )}
+                    </span>
+                  )}
+                </div>
+
+                <h2
+                  id="hoo-briefing-modal-title"
+                  className="mt-3 break-keep pr-10 text-2xl font-bold tracking-[-0.03em] md:text-3xl"
+                >
+                  {briefingTitle}
+                </h2>
+              </div>
+            </div>
+          </header>
+
+          <div
+  className="min-h-0 flex-1 overflow-y-auto px-7 py-8 overscroll-contain md:px-10 md:py-10 [&::-webkit-scrollbar]:hidden"
+  style={{
+    scrollbarWidth: "none",
+    msOverflowStyle: "none",
+  }}
+>
+   {(() => {
+  /*
+   * 저녁 마무리 문장은 본문에서 제거하고
+   * 모달 최하단에서 한 번만 표시한다.
+   */
+  const eveningClosingSentence =
+    "오늘의 기록은 내일을 더 잘 이해하는 데 사용할게요.";
+
+  const normalizedBriefingContent =
+    isEveningBriefing
+      ? briefingContent
+          .split(
+            eveningClosingSentence,
+          )
+          .join(" ")
+          .replace(
+            /\s+/g,
+            " ",
+          )
+          .trim()
+      : briefingContent
+          .replace(
+            /\s+/g,
+            " ",
+          )
+          .trim();
+
+  /*
+   * 첫 문장은 TODAY 요약으로 분리한다.
+   */
+  const firstSentenceMatch =
+    normalizedBriefingContent.match(
+      /^.*?[.!?](?:\s|$)/,
+    );
+
+  const briefingOpening =
+    firstSentenceMatch
+      ? firstSentenceMatch[0].trim()
+      : normalizedBriefingContent;
+
+  const remainingBriefingContent =
+    firstSentenceMatch
+      ? normalizedBriefingContent
+          .slice(
+            firstSentenceMatch[0]
+              .length,
+          )
+          .trim()
+      : "";
+
+  /*
+   * 날씨가 중복 저장된 경우를 대비한다.
+   *
+   * 첫 번째 "현재 지역" 앞까지만
+   * HOO 권고 문단으로 사용하고,
+   *
+   * 마지막 "현재 지역"부터 끝까지만
+   * 가장 최신 날씨 문단으로 사용한다.
+   */
+  const firstWeatherStartIndex =
+    remainingBriefingContent.indexOf(
+      "현재 지역",
+    );
+
+  const lastWeatherStartIndex =
+    remainingBriefingContent.lastIndexOf(
+      "현재 지역",
+    );
+
+  const briefingAdvice =
+    firstWeatherStartIndex >= 0
+      ? remainingBriefingContent
+          .slice(
+            0,
+            firstWeatherStartIndex,
+          )
+          .trim()
+      : remainingBriefingContent;
+
+  const briefingWeather =
+    lastWeatherStartIndex >= 0
+      ? remainingBriefingContent
+          .slice(
+            lastWeatherStartIndex,
+          )
+          .trim()
+      : "";
+
+  const calendarTodos =
+    todos.filter(
+      (todo) =>
+        todo.source === "hoo" &&
+        todo.taskType ===
+          "schedule",
+    );
+
+  return (
+    <div className="space-y-7">
+      {/* 오늘 요약 */}
+
+      <section>
+        <p className="text-[11px] font-bold tracking-[0.14em] text-[#8c84a2]">
+          TODAY
+        </p>
+
+        <p className="mt-2 break-keep text-[17px] font-semibold leading-[1.85] tracking-[-0.02em] text-[#393248] md:text-[18px]">
+          {briefingOpening}
+        </p>
+      </section>
+
+      {/* 아침 일정 안내 */}
+
+      {!isEveningBriefing && (
+        <section>
+          <p className="text-[11px] font-bold tracking-[0.14em] text-[#8c84a2]">
+            TODAY&apos;S SCHEDULE
+          </p>
+
+          {calendarTodos.length >
+          0 ? (
+            <ul className="mt-3 space-y-2">
+              {calendarTodos.map(
+                (todo) => (
+                  <li
+                    key={todo.id}
+                    className="flex items-center gap-3 rounded-2xl border border-[#ddd6f6] bg-[#f5f2ff] px-4 py-3"
+                  >
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#7467d8] text-[11px] font-bold text-white">
+                      ✓
+                    </span>
+
+                    <span className="break-words text-[15px] font-semibold text-[#443d58]">
+                      {todo.content}
+                    </span>
+                  </li>
+                ),
+              )}
+            </ul>
+          ) : (
+            <p className="mt-3 rounded-2xl border border-[#e2ddea] bg-[#f8f7fa] px-4 py-3 text-[14px] font-medium text-[#746d82]">
+              오늘 등록된 일정은 없어요.
+            </p>
+          )}
+        </section>
+      )}
+
+      {/* HOO 권고 문단 */}
+
+      {briefingAdvice && (
+        <section className="rounded-[22px] border border-[#d8d0f5] bg-gradient-to-br from-[#f3f0ff] to-[#faf9ff] px-5 py-5">
+          <p className="text-[11px] font-bold tracking-[0.14em] text-[#7467d8]">
+            HOO ADVICE
+          </p>
+
+          <p className="mt-3 break-keep text-[15px] font-medium leading-[1.9] tracking-[-0.015em] text-[#514a64] md:text-[16px]">
+            {briefingAdvice}
+          </p>
+        </section>
+      )}
+
+      {/* 현재 날씨 문단 */}
+
+      {briefingWeather && (
+        <section className="rounded-[22px] border border-[#cfd9ef] bg-gradient-to-br from-[#f0f5ff] to-[#fafcff] px-5 py-5">
+          <div className="flex items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-[#6e78cc] text-sm text-white"
+            >
+              {isEveningBriefing
+                ? "☾"
+                : "☀"}
+            </span>
+
+            <p className="text-[11px] font-bold tracking-[0.14em] text-[#6670bd]">
+              HOO WEATHER
+            </p>
+          </div>
+
+          <p className="mt-3 break-keep text-[15px] font-medium leading-[1.9] tracking-[-0.015em] text-[#4e566d] md:text-[16px]">
+            {briefingWeather}
+          </p>
+        </section>
+      )}
+    </div>
+  );
+})()}
+
+            {isEveningBriefing ? (
+              <div className="mt-7 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-[#b8dfc7] bg-[#eefaf3] p-4 text-center">
+                  <p className="text-[11px] font-semibold text-[#5b8069]">
+                    완료
+                  </p>
+
+                  <p className="mt-1 text-2xl font-bold text-[#397454]">
+                    {
+                      morningBriefing.completedTodoCount
+                    }
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-[#efc8d0] bg-[#fff2f4] p-4 text-center">
+                  <p className="text-[11px] font-semibold text-[#9b6872]">
+                    미완료
+                  </p>
+
+                  <p className="mt-1 text-2xl font-bold text-[#ad5062]">
+                    {
+                      morningBriefing.incompleteTodoCount
+                    }
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-[#c8c0ed] bg-[#f1efff] p-4 text-center">
+                  <p className="text-[11px] font-semibold text-[#71689a]">
+                    달성률
+                  </p>
+
+                  <p className="mt-1 text-2xl font-bold text-[#5548ae]">
+                    {Math.round(
+                      morningBriefing.completionRate,
+                    )}
+                    %
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-7 flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-[#b9adf3] bg-[#eeeaff] px-4 py-2 text-[12px] font-bold text-[#5144b8]">
+                  오늘의 투두{" "}
+                  {todos.length}개
+                </span>
+
+                <span className="rounded-full border border-[#d9d4e5] bg-[#f7f6fa] px-4 py-2 text-[12px] font-semibold text-[#625c70]">
+                  {
+                    morningBriefing.briefingDate
+                  }
+                </span>
+              </div>
+            )}
+
+            <div className="mt-8 border-t border-[#e7e2ef] pt-6">
+              <p className="text-right text-[13px] font-semibold text-[#746d88]">
+                {isEveningBriefing
+                  ? "오늘의 기록은 내일을 더 잘 이해하는 데 사용할게요. — HOO"
+                  : "오늘도 조용히 함께할게요. — HOO"}
+              </p>
+
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setIsBriefingModalOpen(
+                      false,
+                    )
+                  }
+                  className="rounded-2xl border border-[#d8d0e6] bg-white px-5 py-3 text-sm font-semibold text-[#625b75] transition hover:bg-[#f4f1fa]"
+                >
+                  오늘 다시 보지 않기
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setIsBriefingModalOpen(
+                      false,
+                    )
+                  }
+                  className="rounded-2xl bg-[#7467d8] px-6 py-3 text-sm font-bold text-white shadow-[0_10px_25px_rgba(116,103,216,0.28)] transition hover:bg-[#6255c7]"
+                >
+                  브리핑 닫기
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  })()}
 
 
       {/* 왼쪽 하단 전달사항 */}
