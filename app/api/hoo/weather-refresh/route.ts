@@ -76,6 +76,76 @@ function parseOpenMeteoTime(
   ).toISOString();
 }
 
+
+const OPEN_METEO_MAX_ATTEMPTS = 3;
+const OPEN_METEO_RETRY_DELAY_MS = 700;
+
+function waitForOpenMeteoRetry(
+  milliseconds: number,
+) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+async function fetchOpenMeteoWithRetry(
+  url: string,
+) {
+  let lastNetworkError: unknown;
+
+  for (
+    let attempt = 1;
+    attempt <= OPEN_METEO_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      const response = await fetch(
+        url,
+        {
+          method: "GET",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json",
+          },
+        },
+      );
+
+      const shouldRetry =
+        response.status === 429 ||
+        response.status >= 500;
+
+      if (
+        response.ok ||
+        !shouldRetry ||
+        attempt === OPEN_METEO_MAX_ATTEMPTS
+      ) {
+        return response;
+      }
+    } catch (error) {
+      lastNetworkError = error;
+
+      if (
+        attempt === OPEN_METEO_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+    }
+
+    await waitForOpenMeteoRetry(
+      OPEN_METEO_RETRY_DELAY_MS *
+        2 ** (attempt - 1),
+    );
+  }
+
+  throw (
+    lastNetworkError ??
+    new Error(
+      "Open-Meteo 요청을 완료하지 못했습니다.",
+    )
+  );
+}
+
+
 export async function POST(
   request: Request,
 ) {
@@ -113,7 +183,7 @@ export async function POST(
     `Bearer ${cronSecret}`
   ) {
 
-    
+
     return NextResponse.json(
       {
         ok: false,
@@ -253,19 +323,12 @@ export async function POST(
         "2",
       );
 
-      const weatherResponse =
-        await fetch(
+          const weatherResponse =
+        await fetchOpenMeteoWithRetry(
           weatherUrl.toString(),
-          {
-            method: "GET",
-            cache: "no-store",
-            headers: {
-              Accept:
-                "application/json",
-            },
-          },
         );
 
+        
       if (!weatherResponse.ok) {
         throw new Error(
           `Open-Meteo 응답 오류: ${weatherResponse.status}`,
