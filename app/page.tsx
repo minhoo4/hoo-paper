@@ -5863,55 +5863,56 @@ return weatherSnapshot;
    HOO 오늘의 일정 성격 분석
 ───────────────────────────── */
 
+
 useEffect(() => {
   let cancelled = false;
-async function analyzeTodaySchedules() {
-  /*
-   * 사용자의 기기 시간대와 관계없이
-   * 한국시간을 기준으로 실행 여부를 판단한다.
-   */
-  const koreaHour = Number(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "Asia/Seoul",
-      hour: "2-digit",
-      hourCycle: "h23",
-    }).format(new Date()),
-  );
 
-  /*
-   * 한국시간 자정부터 새벽 4시까지는
-   * 새로운 일정 분석을 실행하지 않는다.
-   */
-  if (koreaHour < 4) {
-    return;
-  }
+  async function analyzeTodaySchedules() {
+    /*
+     * 사용자의 기기 시간대와 관계없이
+     * 한국시간을 기준으로 실행 여부를 판단한다.
+     */
+    const koreaHour = Number(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Seoul",
+        hour: "2-digit",
+        hourCycle: "h23",
+      }).format(new Date()),
+    );
 
-  const todayScheduleDate =
-    getTodayStorageDate();
-
-  try {
-    const {
-      data: { user },
-      error: userError,
-    } =
-      await supabase.auth.getUser();
-
-    if (userError) {
-      throw userError;
-    }
-
-    if (!user || cancelled) {
+    /*
+     * 한국시간 자정부터 새벽 4시까지는
+     * 새로운 일정 분석을 실행하지 않는다.
+     */
+    if (koreaHour < 4) {
       return;
     }
 
-    /*
-     * 1. 오늘 일정의 성격을 분석한다.
-     */
-    const {
-      data: analyzedCount,
-      error: analysisError,
-    } =
-      await supabase.rpc(
+    const todayScheduleDate =
+      getTodayStorageDate();
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } =
+        await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      if (!user || cancelled) {
+        return;
+      }
+
+      /*
+       * 1. 오늘 일정의 성격을 분석한다.
+       */
+      const {
+        data: analyzedCount,
+        error: analysisError,
+      } = await supabase.rpc(
         "analyze_hoo_daily_schedules",
         {
           p_schedule_date:
@@ -5919,22 +5920,21 @@ async function analyzeTodaySchedules() {
         },
       );
 
-    if (analysisError) {
-      throw analysisError;
-    }
+      if (analysisError) {
+        throw analysisError;
+      }
 
-    if (cancelled) {
-      return;
-    }
+      if (cancelled) {
+        return;
+      }
 
-    /*
-     * 2. 분석 결과를 아침 브리핑에 반영한다.
-     */
-    const {
-      data: briefingRefreshed,
-      error: briefingRefreshError,
-    } =
-      await supabase.rpc(
+      /*
+       * 2. 분석 결과를 아침 브리핑에 반영한다.
+       */
+      const {
+        data: briefingRefreshed,
+        error: briefingRefreshError,
+      } = await supabase.rpc(
         "refresh_hoo_morning_briefing_from_insights",
         {
           p_briefing_date:
@@ -5942,154 +5942,184 @@ async function analyzeTodaySchedules() {
         },
       );
 
-    if (briefingRefreshError) {
-      throw briefingRefreshError;
-    }
+      if (briefingRefreshError) {
+        throw briefingRefreshError;
+      }
 
-    if (
-      cancelled ||
-      briefingRefreshed !== true
-    ) {
-      return;
-    }
+      if (
+        cancelled ||
+        briefingRefreshed !== true
+      ) {
+        return;
+      }
 
-    /*
-     * 3. 갱신된 아침 브리핑을 다시 불러온다.
-     */
-    const {
-      data: updatedBriefing,
-      error: updatedBriefingError,
-    } = await supabase
-      .from("hoo_daily_briefings")
-      .select(
-        `
-          morning_title,
-          morning_content,
-          morning_generated_at,
-          morning_read_at,
-          morning_status,
-
-          total_todo_count,
-          completed_todo_count,
-          incomplete_todo_count,
-          completion_rate
-        `,
-      )
-      .eq("user_id", user.id)
-      .eq(
-        "briefing_date",
-        todayScheduleDate,
-      )
-      .maybeSingle();
-
-    if (updatedBriefingError) {
-      throw updatedBriefingError;
-    }
-
-    if (
-      cancelled ||
-      !updatedBriefing ||
-      updatedBriefing.morning_status !==
-        "completed" ||
-      typeof updatedBriefing.morning_content !==
-        "string"
-    ) {
-      return;
-    }
-
-    /*
-     * 4. 페이지 전체를 새로고침하지 않고
-     * 현재 브리핑 카드만 갱신한다.
-     */
-    setMorningBriefing(
-      (previousBriefing) => {
-        if (!previousBriefing) {
-          return previousBriefing;
-        }
-
-        return {
-          ...previousBriefing,
-
-          morningTitle:
-            typeof updatedBriefing.morning_title ===
-            "string"
-              ? updatedBriefing.morning_title
-              : "좋은 아침이에요.",
-
-          morningContent:
-            updatedBriefing.morning_content,
-
-          morningGeneratedAt:
-            typeof updatedBriefing.morning_generated_at ===
-            "string"
-              ? updatedBriefing.morning_generated_at
-              : undefined,
-
-          morningReadAt:
-            typeof updatedBriefing.morning_read_at ===
-            "string"
-              ? updatedBriefing.morning_read_at
-              : undefined,
-
-          morningStatus:
-            "completed",
-
-          totalTodoCount:
-            Number(
-              updatedBriefing.total_todo_count ??
-                previousBriefing.totalTodoCount,
-            ),
-
-          completedTodoCount:
-            Number(
-              updatedBriefing.completed_todo_count ??
-                previousBriefing.completedTodoCount,
-            ),
-
-          incompleteTodoCount:
-            Number(
-              updatedBriefing.incomplete_todo_count ??
-                previousBriefing.incompleteTodoCount,
-            ),
-
-          completionRate:
-            Number(
-              updatedBriefing.completion_rate ??
-                previousBriefing.completionRate,
-            ),
-        };
-      },
-    );
-
-    setIsMorningBriefingOpen(true);
-
-    const safeAnalyzedCount =
-      typeof analyzedCount === "number"
-        ? analyzedCount
-        : Number(analyzedCount ?? 0);
-
-    if (
-      Number.isFinite(
-        safeAnalyzedCount,
-      ) &&
-      safeAnalyzedCount > 0
-    ) {
-      console.log(
-        `HOO가 오늘 일정 ${safeAnalyzedCount}개를 분석해 브리핑에 반영했습니다.`,
+      /*
+       * 3. 일정 분석 과정에서 아침 본문이 변경됐으므로
+       * 최신 날씨를 다시 결합한다.
+       */
+      const {
+        error: weatherRefreshError,
+      } = await supabase.rpc(
+        "apply_hoo_weather_to_morning_briefing",
+        {
+          p_briefing_date:
+            todayScheduleDate,
+        },
       );
-    }
-  } catch (error) {
-    console.error(
-      "HOO 오늘의 일정 분석 및 브리핑 반영 실패:",
-      error,
-    );
 
-    /*
-     * 분석에 실패해도 캘린더와 투두는
-     * 기존 방식으로 정상 작동한다.
-     */
+      if (weatherRefreshError) {
+        /*
+         * 날씨 결합에 실패해도 일정 분석 브리핑은
+         * 정상적으로 표시한다.
+         */
+        console.warn(
+          "HOO 아침 브리핑 날씨 재반영 실패:",
+          weatherRefreshError,
+        );
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      /*
+       * 4. 일정과 날씨가 모두 반영된
+       * 최신 아침 브리핑을 다시 불러온다.
+       */
+      const {
+        data: updatedBriefing,
+        error: updatedBriefingError,
+      } = await supabase
+        .from("hoo_daily_briefings")
+        .select(
+          `
+            morning_title,
+            morning_content,
+            morning_generated_at,
+            morning_read_at,
+            morning_status,
+
+            total_todo_count,
+            completed_todo_count,
+            incomplete_todo_count,
+            completion_rate
+          `,
+        )
+        .eq("user_id", user.id)
+        .eq(
+          "briefing_date",
+          todayScheduleDate,
+        )
+        .maybeSingle();
+
+      if (updatedBriefingError) {
+        throw updatedBriefingError;
+      }
+
+      if (
+        cancelled ||
+        !updatedBriefing ||
+        updatedBriefing.morning_status !==
+          "completed" ||
+        typeof updatedBriefing.morning_content !==
+          "string"
+      ) {
+        return;
+      }
+
+      /*
+       * 5. 페이지 전체를 새로고침하지 않고
+       * 현재 브리핑 카드에 최신 내용을 반영한다.
+       */
+      setMorningBriefing(
+        (previousBriefing) => {
+          if (!previousBriefing) {
+            return previousBriefing;
+          }
+
+          return {
+            ...previousBriefing,
+
+            morningTitle:
+              typeof updatedBriefing.morning_title ===
+              "string"
+                ? updatedBriefing.morning_title
+                : "좋은 아침이에요.",
+
+            morningContent:
+              updatedBriefing.morning_content,
+
+            morningGeneratedAt:
+              typeof updatedBriefing.morning_generated_at ===
+              "string"
+                ? updatedBriefing.morning_generated_at
+                : undefined,
+
+            morningReadAt:
+              typeof updatedBriefing.morning_read_at ===
+              "string"
+                ? updatedBriefing.morning_read_at
+                : undefined,
+
+            morningStatus:
+              "completed",
+
+            totalTodoCount:
+              Number(
+                updatedBriefing.total_todo_count ??
+                  previousBriefing.totalTodoCount,
+              ),
+
+            completedTodoCount:
+              Number(
+                updatedBriefing.completed_todo_count ??
+                  previousBriefing.completedTodoCount,
+              ),
+
+            incompleteTodoCount:
+              Number(
+                updatedBriefing.incomplete_todo_count ??
+                  previousBriefing.incompleteTodoCount,
+              ),
+
+            completionRate:
+              Number(
+                updatedBriefing.completion_rate ??
+                  previousBriefing.completionRate,
+              ),
+          };
+        },
+      );
+
+      setIsMorningBriefingOpen(true);
+
+      const safeAnalyzedCount =
+        typeof analyzedCount === "number"
+          ? analyzedCount
+          : Number(analyzedCount ?? 0);
+
+      if (
+        Number.isFinite(
+          safeAnalyzedCount,
+        ) &&
+        safeAnalyzedCount > 0
+      ) {
+        console.log(
+          `HOO가 오늘 일정 ${safeAnalyzedCount}개를 분석해 브리핑에 반영했습니다.`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        "HOO 오늘의 일정 분석 및 브리핑 반영 실패:",
+        error,
+      );
+
+      /*
+       * 분석에 실패해도 캘린더와 투두는
+       * 기존 방식으로 정상 작동한다.
+       */
+    }
   }
-}
 
   void analyzeTodaySchedules();
 
@@ -6100,6 +6130,8 @@ async function analyzeTodaySchedules() {
   schedules,
   supabase,
 ]);
+
+
 async function handleBriefingRead() {
   if (!morningBriefing) {
     setIsBriefingModalOpen(false);
