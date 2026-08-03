@@ -14423,12 +14423,13 @@ className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
       }
 
       .hoo-dark-opacity-scope h1,
-      .hoo-dark-opacity-scope h2,
-      .hoo-dark-opacity-scope h3,
-      .hoo-dark-opacity-scope [class*="font-black"],
-      .hoo-dark-opacity-scope [class*="font-bold"] {
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
-      }
+.hoo-dark-opacity-scope h2,
+.hoo-dark-opacity-scope h3,
+.hoo-dark-opacity-scope [class*="font-black"],
+.hoo-dark-opacity-scope [class*="font-bold"] {
+  text-shadow: none !important;
+  -webkit-text-stroke: 0 !important;
+}
 
       /* 입력창 */
       .hoo-dark-opacity-scope input,
@@ -14478,23 +14479,23 @@ className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
         opacity: 1 !important;
       }
 
-      .hoo-community-readable h1,
-      .hoo-community-readable h2,
-      .hoo-community-readable h3,
-      .hoo-community-readable h4,
-      .hoo-community-readable p,
-      .hoo-community-readable span,
-      .hoo-community-readable strong,
-      .hoo-community-readable small,
-      .hoo-community-readable label,
-      .hoo-community-readable li,
-      .hoo-community-readable button {
-        color: rgba(255, 255, 255, 0.98) !important;
-        -webkit-text-fill-color: rgba(255, 255, 255, 0.98);
-        text-shadow:
-          0 1px 2px rgba(0, 0, 0, 0.88),
-          0 0 5px rgba(0, 0, 0, 0.32);
-      }
+     .hoo-community-readable h1,
+.hoo-community-readable h2,
+.hoo-community-readable h3,
+.hoo-community-readable h4,
+.hoo-community-readable p,
+.hoo-community-readable span,
+.hoo-community-readable strong,
+.hoo-community-readable small,
+.hoo-community-readable label,
+.hoo-community-readable li,
+.hoo-community-readable button {
+  color: rgba(255, 255, 255, 0.98) !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.98);
+  text-shadow: none !important;
+  -webkit-text-stroke: 0 !important;
+}
+  
 
       /* 보라색 닉네임, 점수, 레벨과 강조 텍스트는 색 유지 */
       .hoo-community-readable [class*="text-[#7467d8]"],
