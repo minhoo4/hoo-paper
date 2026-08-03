@@ -249,6 +249,7 @@ export async function POST(
       []) as WeatherPreferenceRow[];
 
   let refreshedCount = 0;
+  let briefingAppliedCount = 0;
   let failedCount = 0;
 
   const failures: Array<{
@@ -540,6 +541,63 @@ export async function POST(
         throw snapshotError;
       }
 
+      /*
+       * 서비스 역할에서는 auth.uid()가 대상 사용자를 가리키지 않는다.
+       * 서버 전용 RPC가 대상 사용자의 인증 문맥을 제한적으로 설정한 뒤
+       * 기존 아침·저녁 날씨 결합 함수를 실행한다.
+       */
+      const briefingDate =
+        new Intl.DateTimeFormat(
+          "en-CA",
+          {
+            timeZone:
+              preference.timezone ??
+              "Asia/Seoul",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+          },
+        ).format(new Date(forecastAt));
+
+      const {
+        data: briefingApplyResult,
+        error: briefingApplyError,
+      } = await supabase.rpc(
+        "apply_hoo_weather_to_briefings_for_user",
+        {
+          p_user_id:
+            preference.user_id,
+          p_briefing_date:
+            briefingDate,
+        },
+      );
+
+      if (briefingApplyError) {
+        throw briefingApplyError;
+      }
+
+      if (
+        briefingApplyResult &&
+        typeof briefingApplyResult ===
+          "object" &&
+        !Array.isArray(
+          briefingApplyResult,
+        )
+      ) {
+        const applyResult =
+          briefingApplyResult as {
+            morningApplied?: boolean;
+            eveningApplied?: boolean;
+          };
+
+        if (
+          applyResult.morningApplied ||
+          applyResult.eveningApplied
+        ) {
+          briefingAppliedCount += 1;
+        }
+      }
+
       refreshedCount += 1;
     } catch (error) {
       failedCount += 1;
@@ -588,6 +646,7 @@ export async function POST(
     targetCount:
       preferences.length,
     refreshedCount,
+    briefingAppliedCount,
     failedCount,
     generatedMessageCount:
       Number(
