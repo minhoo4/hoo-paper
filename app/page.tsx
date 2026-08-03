@@ -2780,88 +2780,52 @@ useEffect(() => {
    HOO 오늘의 아침 브리핑 불러오기
 ───────────────────────────── */
 
-
 useEffect(() => {
   let cancelled = false;
-let briefingTimer: number | null =
-  null;
+  let briefingTimer: number | null = null;
+  let authRetryCount = 0;
 
   function clearBriefingTimer() {
-    if (briefingTimer === null) {
-      return;
-    }
+    if (briefingTimer === null) return;
 
-    window.clearTimeout(
-      briefingTimer,
-    );
-
+    window.clearTimeout(briefingTimer);
     briefingTimer = null;
   }
 
-  function scheduleBriefingLoad(
-    delayMilliseconds: number,
-  ) {
+  function scheduleBriefingLoad(delayMilliseconds: number) {
     clearBriefingTimer();
 
-    if (cancelled) {
-      return;
-    }
+    if (cancelled) return;
 
-    briefingTimer =
-      window.setTimeout(() => {
-        briefingTimer = null;
-
-        void loadMorningBriefing();
-      }, Math.max(
-        1000,
-        delayMilliseconds,
-      ));
+    briefingTimer = window.setTimeout(() => {
+      briefingTimer = null;
+      void loadMorningBriefing();
+    }, Math.max(1000, delayMilliseconds));
   }
 
-  function scheduleFourAmLoad(
-    now: Date,
-  ) {
-    const fourAm =
-      new Date(now);
+  function scheduleFourAmLoad(now: Date) {
+    const nextFourAm = new Date(now);
 
-    fourAm.setHours(
-      4,
-      0,
-      0,
-      0,
-    );
+    nextFourAm.setHours(4, 0, 0, 0);
 
-    if (
-      fourAm.getTime() <=
-      now.getTime()
-    ) {
-      fourAm.setDate(
-        fourAm.getDate() + 1,
+    if (nextFourAm <= now) {
+      nextFourAm.setDate(
+        nextFourAm.getDate() + 1,
       );
     }
 
     scheduleBriefingLoad(
-      fourAm.getTime() -
-        now.getTime(),
+      nextFourAm.getTime() - now.getTime(),
     );
   }
 
-  function scheduleMidnightReset(
-    now: Date,
-  ) {
-    const nextMidnight =
-      new Date(now);
+  function scheduleMidnightReset(now: Date) {
+    const nextMidnight = new Date(now);
 
-    nextMidnight.setHours(
-      24,
-      0,
-      0,
-      0,
-    );
+    nextMidnight.setHours(24, 0, 5, 0);
 
     scheduleBriefingLoad(
-      nextMidnight.getTime() -
-        now.getTime(),
+      nextMidnight.getTime() - now.getTime(),
     );
   }
 
@@ -2882,18 +2846,10 @@ let briefingTimer: number | null =
   async function loadMorningBriefing() {
     const now = new Date();
 
-    /*
-     * 자정이 지나면 전날 브리핑을 제거하고
-     * 새벽 4시까지 준비 중 카드를 표시한다.
-     */
     if (now.getHours() < 4) {
       if (!cancelled) {
         setMorningBriefing(null);
-
-        setIsMorningBriefingLoading(
-          false,
-        );
-
+        setIsMorningBriefingLoading(false);
         scheduleFourAmLoad(now);
       }
 
@@ -2901,9 +2857,7 @@ let briefingTimer: number | null =
     }
 
     if (!cancelled) {
-      setIsMorningBriefingLoading(
-        true,
-      );
+      setIsMorningBriefingLoading(true);
     }
 
     const todayBriefingDate =
@@ -2913,63 +2867,60 @@ let briefingTimer: number | null =
       const {
         data: { user },
         error: userError,
-      } =
-        await supabase.auth.getUser();
+      } = await supabase.auth.getUser();
 
-      if (userError) {
+      if (
+        userError &&
+        userError.name !==
+          "AuthSessionMissingError"
+      ) {
         throw userError;
       }
 
       /*
-       * 비로그인 상태에서는 개인 브리핑을
-       * 서버에서 불러오지 않는다.
+       * 페이지가 먼저 렌더되고 로그인 세션이
+       * 조금 늦게 복원되는 경우를 처리한다.
        */
       if (!user) {
         if (!cancelled) {
           setMorningBriefing(null);
+          setIsMorningBriefingLoading(false);
+
+          if (authRetryCount < 3) {
+            authRetryCount += 1;
+            scheduleBriefingLoad(1000);
+          }
         }
 
         return;
       }
 
-      /*
-       * 오늘 날짜의 아침·저녁 브리핑을
-       * 한 번의 요청으로 불러온다.
-       */
+      authRetryCount = 0;
+
       const {
         data: briefing,
         error: briefingError,
       } = await supabase
-        .from(
-          "hoo_daily_briefings",
-        )
-        .select(
-          `
-            id,
-            briefing_date,
-
-            morning_title,
-            morning_content,
-            morning_generated_at,
-            morning_read_at,
-            morning_status,
-
-            evening_title,
-            evening_content,
-            evening_generated_at,
-            evening_read_at,
-            evening_status,
-
-            total_todo_count,
-            completed_todo_count,
-            incomplete_todo_count,
-            completion_rate
-          `,
-        )
-        .eq(
-          "user_id",
-          user.id,
-        )
+        .from("hoo_daily_briefings")
+        .select(`
+          id,
+          briefing_date,
+          morning_title,
+          morning_content,
+          morning_generated_at,
+          morning_read_at,
+          morning_status,
+          evening_title,
+          evening_content,
+          evening_generated_at,
+          evening_read_at,
+          evening_status,
+          total_todo_count,
+          completed_todo_count,
+          incomplete_todo_count,
+          completion_rate
+        `)
+        .eq("user_id", user.id)
         .eq(
           "briefing_date",
           todayBriefingDate,
@@ -2980,21 +2931,11 @@ let briefingTimer: number | null =
         throw briefingError;
       }
 
-      if (cancelled) {
-        return;
-      }
+      if (cancelled) return;
 
-      /*
-       * 새벽 4시 크론이 아직 완료되지 않았다면
-       * 준비 중 카드를 유지하고 30초 후 재확인한다.
-       */
       if (!briefing) {
         setMorningBriefing(null);
-
-        scheduleBriefingLoad(
-          30 * 1000,
-        );
-
+        scheduleBriefingLoad(15000);
         return;
       }
 
@@ -3009,42 +2950,31 @@ let briefingTimer: number | null =
         );
 
       const hasMorningBriefing =
-        morningStatus ===
-          "completed" &&
+        morningStatus === "completed" &&
         typeof briefing.morning_content ===
           "string" &&
         briefing.morning_content.trim()
           .length > 0;
 
       const hasEveningBriefing =
-        eveningStatus ===
-          "completed" &&
+        eveningStatus === "completed" &&
         typeof briefing.evening_content ===
           "string" &&
         briefing.evening_content.trim()
           .length > 0;
 
-      /*
-       * 행은 있지만 브리핑 생성이 진행 중이면
-       * 30초 후 다시 확인한다.
-       */
       if (
         !hasMorningBriefing &&
         !hasEveningBriefing
       ) {
         setMorningBriefing(null);
-
-        scheduleBriefingLoad(
-          30 * 1000,
-        );
-
+        scheduleBriefingLoad(15000);
         return;
       }
 
-      const normalizedBriefing:
-        HooDailyBriefing = {
-          id:
-            briefing.id,
+      const normalizedBriefing: HooDailyBriefing =
+        {
+          id: briefing.id,
 
           briefingDate:
             typeof briefing.briefing_date ===
@@ -3054,7 +2984,9 @@ let briefingTimer: number | null =
 
           morningTitle:
             typeof briefing.morning_title ===
-            "string"
+            "string" &&
+            briefing.morning_title.trim()
+              .length > 0
               ? briefing.morning_title
               : "좋은 아침이에요.",
 
@@ -3068,126 +3000,101 @@ let briefingTimer: number | null =
             typeof briefing.morning_generated_at ===
             "string"
               ? briefing.morning_generated_at
-              : undefined,
+              : null,
 
           morningReadAt:
             typeof briefing.morning_read_at ===
             "string"
               ? briefing.morning_read_at
-              : undefined,
+              : null,
 
           morningStatus,
 
           eveningTitle:
             typeof briefing.evening_title ===
-            "string"
+            "string" &&
+            briefing.evening_title.trim()
+              .length > 0
               ? briefing.evening_title
-              : undefined,
+              : "오늘 하루도 수고했어요.",
 
           eveningContent:
             typeof briefing.evening_content ===
             "string"
               ? briefing.evening_content
-              : undefined,
+              : "",
 
           eveningGeneratedAt:
             typeof briefing.evening_generated_at ===
             "string"
               ? briefing.evening_generated_at
-              : undefined,
+              : null,
 
           eveningReadAt:
             typeof briefing.evening_read_at ===
             "string"
               ? briefing.evening_read_at
-              : undefined,
+              : null,
 
           eveningStatus,
 
-          totalTodoCount:
-            Number(
-              briefing.total_todo_count ??
-                0,
-            ),
+          totalTodoCount: Number(
+            briefing.total_todo_count ?? 0,
+          ),
 
-          completedTodoCount:
-            Number(
-              briefing.completed_todo_count ??
-                0,
-            ),
+          completedTodoCount: Number(
+            briefing.completed_todo_count ?? 0,
+          ),
 
-          incompleteTodoCount:
-            Number(
-              briefing.incomplete_todo_count ??
-                0,
-            ),
+          incompleteTodoCount: Number(
+            briefing.incomplete_todo_count ?? 0,
+          ),
 
-          completionRate:
-            Number(
-              briefing.completion_rate ??
-                0,
-            ),
+          completionRate: Number(
+            briefing.completion_rate ?? 0,
+          ),
         };
 
-      if (cancelled) {
-        return;
-      }
+      if (cancelled) return;
 
-      setMorningBriefing(
-        normalizedBriefing,
-      );
+      setMorningBriefing(normalizedBriefing);
+      setIsMorningBriefingOpen(true);
 
-      setIsMorningBriefingOpen(
-        true,
-      );
-
-      /*
-       * 정상 브리핑을 불러온 후에는
-       * 다음 자정에 자동으로 날짜를 전환한다.
-       */
-      scheduleMidnightReset(
-        new Date(),
-      );
+      scheduleMidnightReset(new Date());
     } catch (error) {
       console.error(
-        "HOO 오늘의 브리핑 불러오기 실패:",
+        "HOO 아침 브리핑을 불러오지 못했습니다.",
         error,
       );
 
       if (!cancelled) {
         setMorningBriefing(null);
-
-        /*
-         * 일시적인 오류는 1분 후 재시도한다.
-         */
-        scheduleBriefingLoad(
-          60 * 1000,
-        );
+        scheduleBriefingLoad(30000);
       }
     } finally {
       if (!cancelled) {
-        setIsMorningBriefingLoading(
-          false,
-        );
+        setIsMorningBriefingLoading(false);
       }
     }
   }
 
   void loadMorningBriefing();
 
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange(() => {
+    authRetryCount = 0;
+    scheduleBriefingLoad(0);
+  });
+
   function handleBriefingVisibilityChange() {
     if (
-      document.visibilityState !==
-      "visible"
+      document.visibilityState !== "visible"
     ) {
       return;
     }
 
-    /*
-     * 백그라운드 상태에서 예약 시각이
-     * 지났을 수 있으므로 즉시 재확인한다.
-     */
-    void loadMorningBriefing();
+    scheduleBriefingLoad(0);
   }
 
   document.addEventListener(
@@ -3197,8 +3104,8 @@ let briefingTimer: number | null =
 
   return () => {
     cancelled = true;
-
     clearBriefingTimer();
+    subscription.unsubscribe();
 
     document.removeEventListener(
       "visibilitychange",
