@@ -88,13 +88,17 @@ export default function FocusSetup({
               />
 
               <button
-                type="button"
-                onClick={closeFocusMode}
-                className="absolute right-5 top-5 z-10 flex h-11 w-11 items-center justify-center rounded-full border border-white/0 text-3xl font-light text-white/65 transition hover:border-white/15 hover:bg-white/[0.06] hover:text-white"
-                aria-label="집중 모드 닫기"
-              >
-                ×
-              </button>
+  type="button"
+  onClick={(event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    closeFocusMode();
+  }}
+  className="absolute right-3 top-3 z-50 flex h-12 w-12 touch-manipulation items-center justify-center rounded-full border border-white/10 bg-[#0d1320]/80 text-3xl font-light text-white shadow-lg backdrop-blur-md transition active:scale-95 md:right-5 md:top-5 md:hover:border-white/25 md:hover:bg-white/10"
+  aria-label="집중 모드 닫기"
+>
+  ×
+</button>
 
               <div className="relative z-10">
                 <header className="pr-12">

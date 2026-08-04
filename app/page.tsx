@@ -10107,7 +10107,7 @@ async function handleContextMessageDoNotShowAgain() {
 
 return (
   <main
-    className="relative min-h-screen overflow-x-hidden bg-[#102f24] text-[#332f45]"
+    className="relative min-h-[100dvh] overflow-x-hidden bg-[#102f24] text-[#332f45]"
     style={{
       fontFamily:
         '"Arial Rounded MT Bold", "Trebuchet MS", "Malgun Gothic", sans-serif',
@@ -10579,6 +10579,8 @@ setSecretPinInput("");
             ? "translate-y-0 opacity-100"
             : "-translate-y-full pointer-events-none opacity-0"
         }`}
+
+
       >
      <div
   className={`relative mt-3 flex max-w-7xl items-center gap-4 rounded-2xl border border-white/20 bg-slate-900/80 px-5 py-3 shadow-2xl backdrop-blur-xl transition-[left,width,transform] duration-500 ease-in-out ${
@@ -10587,6 +10589,8 @@ setSecretPinInput("");
       : "left-1/2 w-[95%] -translate-x-1/2"
   }`}
 >
+
+
           <button
             type="button"
             onClick={() =>
@@ -10616,30 +10620,31 @@ setSecretPinInput("");
       : "min-w-0 flex-1 gap-2"
   }`}
 >
-  <form
-    action="https://www.google.com/search"
-    method="GET"
-    target="_blank"
-    className={`flex overflow-hidden rounded-full bg-white transition-all duration-300 ${
-      isSearchBarCollapsed
-        ? "pointer-events-none w-0 opacity-0"
-        : "min-w-0 flex-1 opacity-100"
-    }`}
-  >
-    <input
-      type="search"
-      name="q"
-      placeholder="Google 검색"
-      className="min-w-0 flex-1 px-5 py-2 text-black outline-none"
-    />
+ <form
+  action="https://www.google.com/search"
+  method="GET"
+  target="_blank"
+  className={`max-md:hidden md:flex md:overflow-hidden md:rounded-full md:bg-white md:transition-all md:duration-300 ${
+    isSearchBarCollapsed
+      ? "pointer-events-none md:w-0 md:opacity-0"
+      : "md:min-w-0 md:flex-1 md:opacity-100"
+  }`}
+>
+  <input
+    type="search"
+    name="q"
+    placeholder="Google 검색"
+    className="min-w-0 flex-1 px-5 py-2 text-black outline-none"
+  />
 
-    <button
-      type="submit"
-      className="shrink-0 bg-blue-600 px-6 text-white transition hover:bg-blue-700"
-    >
-      검색
-    </button>
-  </form>
+  <button
+    type="submit"
+    className="shrink-0 bg-blue-600 px-6 text-white transition hover:bg-blue-700"
+  >
+    검색
+  </button>
+</form>
+
 
 <div className="relative shrink-0">
   <button
@@ -10777,14 +10782,14 @@ setSecretPinInput("");
         </div>
       )}
 
-      {/* 첫 화면 */}
-      <section className="relative z-10 flex min-h-screen items-start justify-center px-5 pt-20 text-white">
-        <div className="relative flex w-full max-w-3xl flex-col items-center">
-          <h1 className="text-7xl font-black tracking-[-0.08em] drop-shadow-[0_7px_20px_rgba(0,0,0,0.7)] md:text-8xl">
+     {/* 첫 화면 */}
+<section className="relative z-10 flex min-h-[100dvh] items-start justify-center px-4 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(112px+var(--hoo-safe-top))] text-white sm:px-5 sm:pt-20">
+  <div className="relative flex w-full min-w-0 max-w-3xl flex-col items-center">
+          <h1 className="text-5xl font-black tracking-[-0.08em] drop-shadow-[0_7px_20px_rgba(0,0,0,0.7)] sm:text-7xl md:text-8xl">
             HOO
           </h1>
 
-          <p className="mt-2 text-3xl font-black tracking-[0.08em] drop-shadow-[0_5px_15px_rgba(0,0,0,0.75)] md:text-4xl">
+          <p className="mt-2 text-2xl font-black tracking-[0.06em] drop-shadow-[0_5px_15px_rgba(0,0,0,0.75)] sm:text-3xl md:text-4xl">
             {currentTime
               ? currentTime.toLocaleTimeString("ko-KR", {
                   hour12: false,
@@ -10810,7 +10815,7 @@ setSecretPinInput("");
             action="https://www.google.com/search"
             method="GET"
             target="_blank"
-            className="mt-7 flex w-full max-w-md overflow-hidden rounded-full border border-white/45 bg-white/90 p-1.5 shadow-[0_16px_45px_rgba(0,0,0,0.34)] backdrop-blur-xl"
+           className="mt-6 flex w-full max-w-md overflow-hidden rounded-full border border-white/45 bg-white/90 p-1 shadow-[0_16px_45px_rgba(0,0,0,0.34)] backdrop-blur-xl sm:mt-7 sm:p-1.5"
           >
             <input
               type="search"
@@ -10823,94 +10828,92 @@ setSecretPinInput("");
 
             <button
               type="submit"
-              className="shrink-0 rounded-full bg-[#5967a9] px-5 py-2.5 text-sm font-black text-white transition hover:scale-[1.03] hover:bg-[#475795]"
+            className="min-h-11 shrink-0 rounded-full bg-[#5967a9] px-4 py-2.5 text-sm font-black text-white transition active:scale-[0.98] md:px-5 md:hover:scale-[1.03] md:hover:bg-[#475795]"
             >
               검색
             </button>
           </form>
 
-          {/* 즐겨찾기 8칸 */}
-          <div className="mt-7 grid w-full max-w-xl grid-cols-4 gap-3">
-            {favorites.map((favorite, index) => {
-              const isConfigured =
-                Boolean(favorite.name) &&
-                Boolean(favorite.url);
+        {/* 즐겨찾기 8칸 */}
+<div className="mt-6 grid w-full max-w-xl grid-cols-4 gap-2 sm:mt-7 sm:gap-3">
+  {favorites.map((favorite, index) => {
+    const isConfigured =
+      Boolean(favorite.name) &&
+      Boolean(favorite.url);
 
-              return (
-                <div
-                  key={favorite.id}
-                  className="group relative"
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (isConfigured) {
-                        openFavorite(favorite);
-                        return;
-                      }
+    return (
+      <div
+        key={favorite.id}
+        className="group relative"
+      >
+        <button
+          type="button"
+          onClick={() => {
+            if (isConfigured) {
+              openFavorite(favorite);
+              return;
+            }
 
-                      editFavorite(index);
-                    }}
-                    className="flex h-20 w-full flex-col items-center justify-center rounded-2xl border border-white/35 bg-white/[0.04] px-2 text-center text-white shadow-[0_8px_26px_rgba(0,0,0,0.12)] backdrop-blur-[2px] transition duration-300 hover:-translate-y-1 hover:border-white/75 hover:bg-white/[0.13]"
-                    aria-label={
-                      isConfigured
-                        ? `${favorite.name} 열기`
-                        : `즐겨찾기 ${index + 1} 설정`
-                    }
-                  >
-                    {isConfigured ? (
-                      <>
-                        <span className="text-2xl drop-shadow-md">
-                          {favorite.icon || "⭐"}
-                        </span>
+            editFavorite(index);
+          }}
+          className="flex h-[68px] w-full min-w-0 flex-col items-center justify-center rounded-xl border border-white/35 bg-white/[0.06] px-1 text-center text-white shadow-[0_8px_26px_rgba(0,0,0,0.12)] backdrop-blur-[2px] transition duration-300 active:scale-[0.97] sm:h-20 sm:rounded-2xl sm:px-2 md:hover:-translate-y-1 md:hover:border-white/75 md:hover:bg-white/[0.13]"
+          aria-label={
+            isConfigured
+              ? `${favorite.name} 열기`
+              : `즐겨찾기 ${index + 1} 설정`
+          }
+        >
+          {isConfigured ? (
+            <>
+              <span className="text-2xl drop-shadow-md">
+                {favorite.icon || "⭐"}
+              </span>
 
-                        <span className="mt-1.5 max-w-full truncate text-[11px] font-black drop-shadow-md">
-                          {favorite.name}
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="flex h-10 w-10 items-center justify-center rounded-full border border-dashed border-white/40 text-2xl font-light text-white/60 transition-all duration-300 group-hover:scale-110 group-hover:border-white group-hover:text-white">
-                           +
-                        </span>
+              <span className="mt-1.5 max-w-full truncate text-[11px] font-black drop-shadow-md">
+                {favorite.name}
+              </span>
+            </>
+          ) : (
+            <span className="flex h-10 w-10 items-center justify-center rounded-full border border-dashed border-white/40 text-2xl font-light text-white/60 transition-all duration-300 group-hover:scale-110 group-hover:border-white group-hover:text-white">
+              +
+            </span>
+          )}
+        </button>
 
-                      </>
-                    )}
-                  </button>
+        {isConfigured && (
+          <div className="absolute -right-1 -top-2 z-20 flex gap-1 opacity-100 transition md:-right-2 md:opacity-0 md:group-hover:opacity-100">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                editFavorite(index);
+              }}
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-xs font-black text-[#413b58] shadow-lg"
+              aria-label={`${favorite.name} 수정`}
+            >
+              ✎
+            </button>
 
-                  {isConfigured && (
-                    <div className="absolute -right-2 -top-2 z-20 flex gap-1 opacity-0 transition group-hover:opacity-100">
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          editFavorite(index);
-                        }}
-                        className="flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-xs font-black text-[#413b58] shadow-lg"
-                        aria-label={`${favorite.name} 수정`}
-                      >
-                        ✎
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          clearFavorite(index);
-                        }}
-                        className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-500/95 text-sm font-black text-white shadow-lg"
-                        aria-label={`${favorite.name} 삭제`}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                clearFavorite(index);
+              }}
+              className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-500/95 text-sm font-black text-white shadow-lg"
+              aria-label={`${favorite.name} 삭제`}
+            >
+              ×
+            </button>
           </div>
+        )}
+      </div>
+    );
+  })}
+</div>
+            
 
-         <button
+     <button
   type="button"
   onClick={() => {
     if (!morningBriefing) {
@@ -10920,7 +10923,7 @@ setSecretPinInput("");
     setIsBriefingModalOpen(true);
   }}
   disabled={!morningBriefing}
-  className={`group mt-5 flex w-full max-w-xl items-center justify-between rounded-2xl border px-5 py-3.5 text-left text-white shadow-[0_12px_35px_rgba(0,0,0,0.18)] backdrop-blur-md transition duration-300 ${
+  className={`group mt-4 flex min-h-16 w-full max-w-xl items-center justify-between gap-2 rounded-2xl border px-3 py-3 text-left text-white shadow-[0_12px_35px_rgba(0,0,0,0.18)] backdrop-blur-md transition duration-300 sm:mt-5 sm:px-5 sm:py-3.5 ${
     morningBriefing
       ? "cursor-pointer border-white/45 bg-white/[0.10] hover:-translate-y-0.5 hover:border-white/80 hover:bg-white/[0.18]"
       : "cursor-default border-white/30 bg-white/[0.07]"
@@ -10955,7 +10958,7 @@ setSecretPinInput("");
     </span>
   </div>
 
-  <span className="shrink-0 text-xs font-semibold text-white/75 [text-shadow:none]">
+  <span className="shrink-0 text-[11px] font-semibold text-white/75 [text-shadow:none] sm:text-xs">
     {morningBriefing
       ? "다시 보기 →"
       : "새벽 4시 공개"}
@@ -11006,7 +11009,7 @@ setSecretPinInput("");
   </button>
 )}
 
-<div className="mt-6 flex flex-col items-center gap-2 text-xs font-black tracking-[0.18em] text-white/75">
+<div className="mt-5 flex flex-col items-center gap-1 text-[10px] font-black tracking-[0.14em] text-white/75 sm:mt-6 sm:gap-2 sm:text-xs sm:tracking-[0.18em]">
   <span>SCROLL TO EXPLORE</span>
   <span className="animate-bounce text-xl">↓</span>
 </div>
@@ -11039,19 +11042,19 @@ setSecretPinInput("");
 
           {/* 왼쪽 패널: 투두리스트 */}
 
-<section className="flex h-screen w-screen shrink-0 items-center overflow-hidden px-4 py-16 md:px-7">
+<section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
   <div className="mx-auto w-full max-w-[1380px]">
-    <section className="grid min-h-[630px] overflow-hidden rounded-[34px] border border-white/55 bg-white/90 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl xl:grid-cols-[1.3fr_0.7fr]">
-      <article className="border-b border-[#dedaf0] p-6 md:p-8 xl:border-b-0 xl:border-r">
+   <section className="grid w-full overflow-hidden rounded-[24px] border border-white/55 bg-white/90 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl sm:rounded-[34px] md:min-h-[630px] xl:grid-cols-[1.3fr_0.7fr]">
+     <article className="min-w-0 border-b border-[#dedaf0] p-4 sm:p-6 md:p-8 xl:border-b-0 xl:border-r">
       
         <header>
   <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
     HOO TO DO
   </p>
 
-  <h2 className="mt-1 text-3xl font-black text-[#332f45]">
-    오늘의 할 일
-  </h2>
+  <h2 className="mt-1 text-2xl font-black text-[#332f45] sm:text-3xl">
+  오늘의 할 일
+</h2>
 
   <p className="mt-2 text-sm font-bold text-[#8b849d]">
     작은 목표부터 하나씩 완료해보세요.
@@ -11075,7 +11078,7 @@ setSecretPinInput("");
 
           <button
             type="submit"
-            className="shrink-0 rounded-2xl bg-[#7467d8] px-6 py-3 text-sm font-black text-white transition hover:bg-[#6255c7]"
+           className="min-h-12 shrink-0 rounded-2xl bg-[#7467d8] px-4 py-3 text-sm font-black text-white transition active:scale-[0.98] sm:px-6 md:hover:bg-[#6255c7]"
           >
             추가
           </button>
@@ -11389,7 +11392,7 @@ setSecretPinInput("");
 
 
             {/* 첫 번째 패널: 캘린더 */}
-           <section className="flex h-screen w-screen shrink-0 items-center overflow-hidden px-4 py-16 md:px-7">
+        <section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
               <div className="mx-auto w-full max-w-[1380px]">
                 <section className="grid overflow-hidden rounded-[34px] border border-white/55 bg-white/88 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl xl:grid-cols-[1.15fr_0.85fr]">
                   <article className="border-b border-[#dedaf0] xl:border-b-0 xl:border-r">
@@ -12086,7 +12089,7 @@ setSecretPinInput("");
 
             {/* 두 번째 패널: 메모 + 타이머 */}
 
-           <section className="flex h-screen w-screen shrink-0 items-center overflow-hidden px-4 py-16 md:px-7">
+        <section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
              <div className="mx-auto grid w-full max-w-[1380px] items-stretch gap-7 xl:grid-cols-[1.35fr_0.65fr]">
                 <article className="overflow-hidden rounded-[30px] border border-white/55 bg-white/88 shadow-[0_25px_80px_rgba(5,35,26,0.3)] backdrop-blur-xl">
                  
@@ -12428,7 +12431,7 @@ setSecretPinInput("");
             </section>
 
                    {/* 세 번째 패널: 미니게임 */}
-<section className="flex h-screen w-screen shrink-0 items-center overflow-hidden px-4 py-16 md:px-7">
+<section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
   <div className="mx-auto w-full max-w-[1380px]">
     {minigameScreen === "menu" && (
       <section className="grid h-[625px] items-stretch gap-7 xl:grid-cols-[1.35fr_0.65fr]">
@@ -13714,9 +13717,8 @@ const messageDesign =
         : morningBriefing.morningGeneratedAt;
 
     return (
-      <div
-        className="fixed inset-0 z-[12000] flex items-center justify-center bg-[#080713]/75 px-4 py-8 backdrop-blur-[6px]"
-        onMouseDown={(event) => {
+     <div
+  className="fixed inset-0 z-[12000] flex items-center justify-center bg-[#080713]/75 p-0 backdrop-blur-[6px] sm:px-4 sm:py-6 md:py-8"       onMouseDown={(event) => {
           if (
             event.target ===
             event.currentTarget
@@ -13728,11 +13730,11 @@ const messageDesign =
         }}
         role="presentation"
       >
-      <section
+     <section
   role="dialog"
   aria-modal="true"
   aria-labelledby="hoo-briefing-modal-title"
-  className="relative flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[32px] border border-white/70 bg-[#fbfaff] shadow-[0_35px_120px_rgba(0,0,0,0.55)] [&_*]:[text-shadow:none] [&_*]:[-webkit-text-stroke:0px]"
+  className="relative flex h-[100dvh] max-h-[100dvh] w-full max-w-3xl flex-col overflow-hidden border-0 border-white/70 bg-[#fbfaff] shadow-[0_35px_120px_rgba(0,0,0,0.55)] [&_*]:[text-shadow:none] [&_*]:[-webkit-text-stroke:0px] sm:h-auto sm:max-h-[92dvh] sm:rounded-[28px] sm:border md:max-h-[88dvh] md:rounded-[32px]"
   style={{
     fontFamily:
       '"Pretendard Variable", Pretendard, "Noto Sans KR", "Malgun Gothic", sans-serif',
@@ -13746,14 +13748,14 @@ const messageDesign =
   onClick={() => {
     setIsBriefingModalOpen(false);
   }}
-  className="absolute right-5 top-5 z-10 flex h-10 w-10 items-center justify-center rounded-full border border-[#ded8ef] bg-white text-xl font-medium text-[#625b75] shadow-sm transition hover:bg-[#eeeaff] hover:text-[#5144b8]"
+ className="absolute right-3 top-[calc(12px+var(--hoo-safe-top))] z-20 flex h-11 w-11 items-center justify-center rounded-full border border-[#ded8ef] bg-white text-xl font-medium text-[#625b75] shadow-sm transition active:scale-95 sm:right-5 sm:top-5 md:hover:bg-[#eeeaff] md:hover:text-[#5144b8]"
   aria-label="브리핑 닫기"
 >
   ×
 </button>
 
-         <header
-  className={`shrink-0 rounded-t-[32px] px-7 pb-7 pt-8 md:px-10 md:pb-9 md:pt-10 ${
+        <header
+  className={`shrink-0 px-4 pb-5 pt-[calc(18px+var(--hoo-safe-top))] sm:rounded-t-[28px] sm:px-7 sm:pb-7 sm:pt-8 md:rounded-t-[32px] md:px-10 md:pb-9 md:pt-10 ${
     isEveningBriefing
       ? "bg-gradient-to-br from-[#393359] via-[#4f467f] to-[#665a98] text-white"
       : "bg-gradient-to-br from-[#ede9ff] via-[#f7f5ff] to-white text-[#332d48]"
@@ -13761,7 +13763,7 @@ const messageDesign =
 >
             <div className="flex items-center gap-4">
               <div
-                className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-[22px] text-3xl ${
+               className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-[17px] text-2xl sm:h-16 sm:w-16 sm:rounded-[22px] sm:text-3xl ${
                   isEveningBriefing
                     ? "bg-white/15 text-white shadow-[0_12px_35px_rgba(0,0,0,0.22)]"
                     : "bg-[#7467d8] text-white shadow-[0_12px_35px_rgba(116,103,216,0.32)]"
@@ -13809,7 +13811,7 @@ const messageDesign =
 
                 <h2
                   id="hoo-briefing-modal-title"
-                  className="mt-3 break-keep pr-10 text-2xl font-bold tracking-[-0.03em] md:text-3xl"
+                 className="mt-2 break-keep pr-10 text-xl font-bold leading-[1.35] tracking-[-0.03em] sm:mt-3 sm:text-2xl md:text-3xl"
                 >
                   {briefingTitle}
                 </h2>
@@ -13817,8 +13819,8 @@ const messageDesign =
             </div>
           </header>
 
-          <div
-  className="min-h-0 flex-1 overflow-y-auto px-7 py-8 overscroll-contain md:px-10 md:py-10 [&::-webkit-scrollbar]:hidden"
+         <div
+  className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-[calc(18px+var(--hoo-safe-bottom))] pt-5 sm:px-7 sm:py-8 md:px-10 md:py-10 [&::-webkit-scrollbar]:hidden"
   style={{
     scrollbarWidth: "none",
     msOverflowStyle: "none",
@@ -14066,48 +14068,47 @@ const messageDesign =
               </div>
             )}
 
-            <div className="mt-8 border-t border-[#e7e2ef] pt-6">
-              <p className="text-right text-[13px] font-semibold text-[#746d88]">
-                {isEveningBriefing
-                  ? "오늘의 기록은 내일을 더 잘 이해하는 데 사용할게요. — HOO"
-                  : "오늘도 조용히 함께할게요. — HOO"}
-              </p>
+         <div className="sticky bottom-[calc(-18px-var(--hoo-safe-bottom))] z-10 -mx-4 mt-8 border-t border-[#e7e2ef] bg-[#fbfaff]/95 px-4 pb-[calc(18px+var(--hoo-safe-bottom))] pt-4 shadow-[0_-12px_30px_rgba(51,47,69,0.08)] backdrop-blur-xl sm:static sm:mx-0 sm:bg-transparent sm:px-0 sm:pb-0 sm:pt-6 sm:shadow-none sm:backdrop-blur-none">
+  <p className="text-right text-[13px] font-semibold text-[#746d88]">
+    {isEveningBriefing
+      ? "오늘의 기록은 내일을 더 잘 이해하는 데 사용할게요. — HOO"
+      : "오늘도 조용히 함께할게요. — HOO"}
+  </p>
 
-              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                <button
-                  type="button"
-                 onClick={() => {
-  void handleBriefingRead();
-}}
+  <div className="mt-4 grid grid-cols-2 gap-2 sm:mt-5 sm:flex sm:flex-row sm:justify-end">
+    <button
+      type="button"
+      onClick={() => {
+        void handleBriefingRead();
+      }}
+      className="min-h-12 rounded-2xl border border-[#d8d0e6] bg-white px-3 py-3 text-[13px] font-semibold text-[#625b75] transition active:scale-[0.98] sm:px-5 sm:text-sm md:hover:bg-[#f4f1fa]"
+    >
+      오늘 다시 보지 않기
+    </button>
 
+    <button
+      type="button"
+      onClick={() => {
+        void handleBriefingRead();
+      }}
+      className="min-h-12 rounded-2xl bg-[#7467d8] px-3 py-3 text-[13px] font-bold text-white shadow-[0_10px_25px_rgba(116,103,216,0.28)] transition active:scale-[0.98] sm:px-6 sm:text-sm md:hover:bg-[#6255c7]"
+    >
+      브리핑 닫기
+       </button>
+  </div>
+</div>
+</div>
+</section>
+</div>
+);
+})()}
 
-                  className="rounded-2xl border border-[#d8d0e6] bg-white px-5 py-3 text-sm font-semibold text-[#625b75] transition hover:bg-[#f4f1fa]"
-                >
-                  오늘 다시 보지 않기
-                </button>
-
-               <button
-  type="button"
-  onClick={() => {
-    void handleBriefingRead();
-  }}
-  className="rounded-2xl bg-[#7467d8] px-6 py-3 text-sm font-bold text-white shadow-[0_10px_25px_rgba(116,103,216,0.28)] transition hover:bg-[#6255c7]"
->
-  브리핑 닫기
-</button>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-    );
-  })()}
 
 
       {/* 왼쪽 하단 전달사항 */}
 <div
   ref={noticeRef}
-className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
+className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] flex items-end gap-3 sm:bottom-6 sm:left-6"
 >
  <button
   type="button"
@@ -14154,9 +14155,10 @@ className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
     💬
   </button>
 
-  {isFeedbackOpen && (
-    <div className="absolute bottom-20 left-0 z-[9990] w-[340px] rounded-3xl border border-white/20 bg-black/60 p-5 text-white shadow-2xl backdrop-blur-xl">
-      <header className="flex items-start justify-between gap-4">
+
+   {isFeedbackOpen && (
+  <div className="fixed left-1/2 top-1/2 z-[10020] max-h-[calc(100dvh-32px)] w-[calc(100vw-32px)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-3xl border border-white/20 bg-black/80 p-5 text-white shadow-2xl backdrop-blur-2xl">
+    <header className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-black">
             피드백 보내기
@@ -14204,7 +14206,7 @@ className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
 </div>
 
   {isNoticeOpen && (
-    <section className="absolute bottom-20 left-0 w-[400px] overflow-hidden rounded-3xl border border-white/20 bg-black/55 text-white shadow-2xl backdrop-blur-2xl">
+   <section className="fixed left-1/2 top-1/2 z-[10020] flex max-h-[calc(100dvh-32px)] w-[calc(100vw-32px)] max-w-[520px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-3xl border border-white/20 bg-black/80 text-white shadow-2xl backdrop-blur-2xl">
       <header className="flex items-center justify-between border-b border-white/10 px-5 py-4">
         <h3 className="text-xl font-black">
           📢 전달사항
@@ -14220,7 +14222,7 @@ className="fixed bottom-6 left-6 z-[9980] flex items-end gap-3"
         </button>
       </header>
 
-      <div className="max-h-[460px] overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {isNoticesLoading ? (
           <p className="text-base font-bold text-white/60">
             불러오는 중...

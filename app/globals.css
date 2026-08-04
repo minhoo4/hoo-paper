@@ -3,6 +3,10 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --hoo-safe-top: env(safe-area-inset-top, 0px);
+  --hoo-safe-right: env(safe-area-inset-right, 0px);
+  --hoo-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --hoo-safe-left: env(safe-area-inset-left, 0px);
 }
 
 @theme inline {
@@ -19,10 +23,61 @@
   }
 }
 
+html,
 body {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  overscroll-behavior-x: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+button,
+a {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+select,
+textarea {
+  max-width: 100%;
+  font: inherit;
+}
+
+/*
+ * iPhone에서 입력창 선택 시 화면이 자동 확대되는 현상을 방지합니다.
+ * 데스크톱과 태블릿의 기존 크기에는 영향을 주지 않습니다.
+ */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 @keyframes hoo-mission-complete {
