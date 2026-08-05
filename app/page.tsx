@@ -1174,7 +1174,7 @@ const [scheduleTitle, setScheduleTitle] = useState("");
   useState(false);
 
 const [isSecretLayerOn, setIsSecretLayerOn] =
-  useState(false);
+  useState(true);
 
   const [secretPin, setSecretPin] =
   useState("1234");
@@ -11168,42 +11168,53 @@ setSecretPinInput("");
           </div>
         )}
 
-        <p
-          className={`break-words text-sm font-black ${
-            todo.completed
-              ? "text-[#aaa4b8] line-through"
-              : "text-[#423c55]"
-          }`}
-          title={
-            isHooScheduleTodo
-              ? todo.generationReason ??
-                "캘린더에 등록된 오늘의 일정"
-              : undefined
-          }
-        >
-          {index + 1}.{" "}
-          {todo.content}
-        </p>
+      <p
+  className={`break-words text-sm font-black ${
+    todo.completed
+      ? "line-through"
+      : ""
+  }`}
+  style={{
+    color: todo.completed
+      ? isHooScheduleTodo
+        ? "#8f899d"
+        : "#aaa6b5"
+      : isHooScheduleTodo
+        ? "#17141f"
+        : "#ffffff",
+  }}
+  title={
+    isHooScheduleTodo
+      ? todo.generationReason ??
+        "캘린더에 등록된 오늘의 일정"
+      : undefined
+  }
+>
+  {index + 1}.{" "}
+  {todo.content}
+</p>
+
       </div>
 
       {isHooScheduleTodo ? (
-        <span
-          className="shrink-0 rounded-full border border-[#d8d0ff] bg-white px-3 py-1.5 text-[10px] font-black text-[#7467d8]"
-          title="이 투두는 캘린더 일정과 연결되어 있습니다."
-        >
-          캘린더
-        </span>
-      ) : (
-        <button
-          type="button"
-          onClick={() =>
-            deleteTodo(todo.id)
-          }
-          className="shrink-0 rounded-full bg-[#ffe2e8] px-3 py-1.5 text-xs font-black text-[#d94f6b]"
-        >
-          삭제
-        </button>
-      )}
+  <span
+    className="shrink-0 rounded-full border border-white/20 bg-[#77777d] px-3 py-1.5 text-[10px] font-black text-white"
+    title="이 투두는 캘린더 일정과 연결되어 있습니다."
+  >
+    캘린더
+  </span>
+) : (
+  <button
+    type="button"
+    onClick={() =>
+      deleteTodo(todo.id)
+    }
+    className="shrink-0 rounded-full border border-white/20 bg-[#77777d] px-3 py-1.5 text-xs font-black text-white transition hover:bg-[#626268]"
+  >
+    삭제
+  </button>
+)}
+
     </article>
   );
 })

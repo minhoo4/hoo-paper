@@ -239,11 +239,13 @@ export default function ProfileModal({
 )}
 
           {activeTab ===
-            "achievements" && (
-            <ProfileAchievements
-              statistics={statistics}
-            />
-          )}
+  "achievements" && (
+ <ProfileAchievements
+  statistics={statistics}
+  streak={streak}
+  history={history}
+/>
+)}
         </div>
       </section>
     </div>

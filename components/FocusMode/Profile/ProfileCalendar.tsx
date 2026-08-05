@@ -1089,89 +1089,90 @@ function CircularDaySchedule({
           )}
         </div>
 
-        {scheduleSessions.length === 0 ? (
-          <div className="mt-2 rounded-2xl border border-dashed border-white/10 px-4 py-5 text-center">
-            <p className="text-sm font-black text-white/45">
-              표시할 포커스 시간이 없어요.
-            </p>
+      {scheduleSessions.length === 0 ? (
+  <div className="mt-2 rounded-2xl border border-dashed border-white/10 px-4 py-5 text-center">
+    <p className="text-sm font-black text-white/45">
+      표시할 포커스 시간이 없어요.
+    </p>
 
-            <p className="mt-1 text-xs font-bold leading-5 text-white/28">
-              포커스 모드를 완료하면
-              연보라색 원형 바에 자동으로
-              기록됩니다.
-            </p>
-          </div>
-        ) : (
-          <div className="mt-3 overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.018]">
-            {scheduleSessions.map(
-              (session, index) => {
-                const isHovered =
-                  hoveredSessionId ===
-                  session.id;
+    <p className="mt-1 text-xs font-bold leading-5 text-white/28">
+      포커스 모드를 완료하면
+      연보라색 원형 바에 자동으로
+      기록됩니다.
+    </p>
+  </div>
+) : (
+  <div className="mt-3 max-h-[168px] overflow-y-auto overscroll-contain rounded-2xl border border-white/[0.07] bg-white/[0.018] [scrollbar-color:rgba(169,156,255,0.45)_rgba(255,255,255,0.04)] [scrollbar-width:thin]">
+    {scheduleSessions.map(
+      (session, index) => {
+        const isHovered =
+          hoveredSessionId ===
+          session.id;
 
-                return (
-                  <button
-                    type="button"
-                    key={session.id}
-                    onMouseEnter={() =>
-                      setHoveredSessionId(
-                        session.id,
-                      )
-                    }
-                    onMouseLeave={() =>
-                      setHoveredSessionId(
-                        null,
-                      )
-                    }
-                    onFocus={() =>
-                      setHoveredSessionId(
-                        session.id,
-                      )
-                    }
-                    onBlur={() =>
-                      setHoveredSessionId(
-                        null,
-                      )
-                    }
-                    className={`flex w-full items-center gap-3 px-3 py-3 text-left transition ${
-                      index > 0
-                        ? "border-t border-white/[0.06]"
-                        : ""
-                    } ${
-                      isHovered
-                        ? "bg-[#8f7fff]/10"
-                        : "hover:bg-white/[0.035]"
-                    }`}
-                  >
-                    <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[#aa9cff] shadow-[0_0_12px_rgba(170,156,255,0.72)]" />
+        return (
+          <button
+            type="button"
+            key={session.id}
+            onMouseEnter={() =>
+              setHoveredSessionId(
+                session.id,
+              )
+            }
+            onMouseLeave={() =>
+              setHoveredSessionId(
+                null,
+              )
+            }
+            onFocus={() =>
+              setHoveredSessionId(
+                session.id,
+              )
+            }
+            onBlur={() =>
+              setHoveredSessionId(
+                null,
+              )
+            }
+            className={`flex min-h-14 w-full items-center gap-3 px-3 py-3 text-left transition ${
+              index > 0
+                ? "border-t border-white/[0.06]"
+                : ""
+            } ${
+              isHovered
+                ? "bg-[#8f7fff]/10"
+                : "hover:bg-white/[0.035]"
+            }`}
+          >
+            <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-[#aa9cff] shadow-[0_0_12px_rgba(170,156,255,0.72)]" />
 
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-black text-white/80">
-                        {formatTimelineTime(
-                          session.startedAt,
-                        )}
-                        {" — "}
-                        {formatTimelineTime(
-                          session.completedAt,
-                        )}
-                      </p>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-black text-white/80">
+                {formatTimelineTime(
+                  session.startedAt,
+                )}
+                {" — "}
+                {formatTimelineTime(
+                  session.completedAt,
+                )}
+              </p>
 
-                      <p className="mt-1 truncate text-[11px] font-bold text-white/34">
-                        {session.goal}
-                      </p>
-                    </div>
+              <p className="mt-1 truncate text-[11px] font-bold text-white/34">
+                {session.goal}
+              </p>
+            </div>
 
-                    <span className="shrink-0 rounded-full bg-[#8575ee]/12 px-2.5 py-1 text-[11px] font-black text-[#bdb4ff]">
-                      {formatProfileDuration(
-                        session.actualSeconds,
-                      )}
-                    </span>
-                  </button>
-                );
-              },
-            )}
-          </div>
-        )}
+            <span className="shrink-0 rounded-full bg-[#8575ee]/12 px-2.5 py-1 text-[11px] font-black text-[#bdb4ff]">
+              {formatProfileDuration(
+                session.actualSeconds,
+              )}
+            </span>
+          </button>
+        );
+      },
+    )}
+  </div>
+)}
+
 
         <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/[0.06] pt-3">
           <div className="flex items-center gap-2">

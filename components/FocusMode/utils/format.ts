@@ -3,58 +3,9 @@ import type { FocusView } from "../types/focus";
 export function formatFocusTime(
   totalSeconds: number,
 ) {
-  const safeSeconds = Math.max(0, totalSeconds);
-  const hours = Math.floor(safeSeconds / 3600);
-  const minutes = Math.floor(
-    (safeSeconds % 3600) / 60,
-  );
-  const seconds = safeSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(
-      2,
-      "0",
-    )}:${String(seconds).padStart(2, "0")}`;
-  }
-
-  return `${String(minutes).padStart(
-    2,
-    "0",
-  )}:${String(seconds).padStart(2, "0")}`;
-}
-
-export function formatDurationLabel(
-  totalSeconds: number,
-) {
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor(
-    (totalSeconds % 3600) / 60,
-  );
-  const seconds = totalSeconds % 60;
-
-  const parts: string[] = [];
-
-  if (hours > 0) {
-    parts.push(`${hours}시간`);
-  }
-
-  if (minutes > 0) {
-    parts.push(`${minutes}분`);
-  }
-
-  if (seconds > 0 || parts.length === 0) {
-    parts.push(`${seconds}초`);
-  }
-
-  return parts.join(" ");
-}
-
-export function formatProfileDuration(
-  totalSeconds: number,
-) {
   const safeSeconds = Math.max(
     0,
-    Math.floor(totalSeconds),
+    totalSeconds,
   );
 
   const hours = Math.floor(
@@ -67,6 +18,41 @@ export function formatProfileDuration(
 
   const seconds =
     safeSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(
+      minutes,
+    ).padStart(
+      2,
+      "0",
+    )}:${String(seconds).padStart(
+      2,
+      "0",
+    )}`;
+  }
+
+  return `${String(minutes).padStart(
+    2,
+    "0",
+  )}:${String(seconds).padStart(
+    2,
+    "0",
+  )}`;
+}
+
+export function formatDurationLabel(
+  totalSeconds: number,
+) {
+  const hours = Math.floor(
+    totalSeconds / 3600,
+  );
+
+  const minutes = Math.floor(
+    (totalSeconds % 3600) / 60,
+  );
+
+  const seconds =
+    totalSeconds % 60;
 
   const parts: string[] = [];
 
@@ -83,6 +69,49 @@ export function formatProfileDuration(
     parts.length === 0
   ) {
     parts.push(`${seconds}초`);
+  }
+
+  return parts.join(" ");
+}
+
+export function formatProfileDuration(
+  totalSeconds: number,
+) {
+  const safeSeconds = Math.max(
+    0,
+    Math.floor(totalSeconds),
+  );
+
+  const totalMinutes = Math.floor(
+    safeSeconds / 60,
+  );
+
+  if (
+    safeSeconds > 0 &&
+    totalMinutes === 0
+  ) {
+    return "1분 미만";
+  }
+
+  if (totalMinutes === 0) {
+    return "0분";
+  }
+
+  const hours = Math.floor(
+    totalMinutes / 60,
+  );
+
+  const minutes =
+    totalMinutes % 60;
+
+  const parts: string[] = [];
+
+  if (hours > 0) {
+    parts.push(`${hours}시간`);
+  }
+
+  if (minutes > 0) {
+    parts.push(`${minutes}분`);
   }
 
   return parts.join(" ");

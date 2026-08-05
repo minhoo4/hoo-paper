@@ -34,7 +34,7 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
-  ],
+, "public/새텍스트"  ],
   "exclude": [
     "node_modules"
   ]
