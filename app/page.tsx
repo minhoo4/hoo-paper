@@ -4192,34 +4192,23 @@ useEffect(() => {
 ───────────────────────────── */
 
 useEffect(() => {
-  /*
-   * 저장된 설정을 아직 불러오는 중이면
-   * 위치 권한이나 날씨를 요청하지 않는다.
-   */
-  if (
-    isWeatherPreferenceLoading
-  ) {
+  if (isWeatherPreferenceLoading) {
     return;
   }
 
-  /*
-   * 이용자가 날씨 사용에 동의하지 않았다면
-   * 위치를 확인하지 않는다.
-   */
-  if (
-    !weatherPreference
-      ?.weatherEnabled
-  ) {
+  if (!weatherPreference?.weatherEnabled) {
     return;
   }
 
-  /*
-   * 정확한 좌표를 저장하지 않는
-   * 기기 임시 위치 방식에서만 실행한다.
-   */
+  const supportedLocationSources = [
+    "device_ephemeral",
+    "device_coarse",
+  ];
+
   if (
-    weatherPreference.locationSource !==
-      "device_ephemeral"
+    !supportedLocationSources.includes(
+      weatherPreference.locationSource,
+    )
   ) {
     return;
   }
@@ -4227,7 +4216,7 @@ useEffect(() => {
   let isEffectActive = true;
   let isRefreshInFlight = false;
 
-  async function refreshWeatherForCurrentDate() {
+  async function refreshCurrentWeather() {
     if (
       !isEffectActive ||
       isRefreshInFlight
@@ -4235,94 +4224,60 @@ useEffect(() => {
       return;
     }
 
-    const currentWeatherDate =
-      getTodayStorageDate();
-
-    /*
-     * 실제 날씨 저장까지 성공한 날짜라면
-     * 같은 날짜에는 위치를 다시 확인하지 않는다.
-     */
-    if (
-      weatherRefreshDateRef.current ===
-        currentWeatherDate
-    ) {
-      return;
-    }
-
     isRefreshInFlight = true;
-
-    /*
-     * 이전 날짜의 날씨와 요청 제한을 초기화한다.
-     * DB에 저장된 과거 날씨 기록은 삭제하지 않는다.
-     */
-    setCurrentWeather(null);
-
-    lastWeatherRefreshAtRef.current =
-      0;
 
     try {
       /*
-       * 현재 위치를 단 한 번 확인한다.
-       *
-       * 정확한 좌표는 즉시 약 1km 단위로 축소되고,
-       * 축소된 좌표도 최대 60초 후 메모리에서 폐기된다.
+       * 기존 화면의 날씨는 유지하면서
+       * 현재 위치와 날씨만 새로 갱신한다.
        */
       await enableHooWeatherWithCurrentLocation();
 
-      if (!isEffectActive) {
-        return;
-      }
-
-      /*
-       * fetchHooWeatherForLocation에서 실제 날씨 저장에
-       * 성공했을 때만 이 값이 0보다 크게 변경된다.
-       *
-       * 성공하기 전에는 날짜를 기록하지 않으므로
-       * 일시적인 실패가 발생하면 다음 검사에서 재시도한다.
-       */
       if (
-        lastWeatherRefreshAtRef.current >
-          0
+        isEffectActive &&
+        lastWeatherRefreshAtRef.current > 0
       ) {
         weatherRefreshDateRef.current =
-          currentWeatherDate;
+          getTodayStorageDate();
       }
+    } catch (error) {
+      console.error(
+        "HOO 최신 날씨 자동 갱신 실패:",
+        error,
+      );
     } finally {
       isRefreshInFlight = false;
     }
   }
 
   /*
-   * 다른 초기 데이터 로딩과 겹치지 않도록
-   * 사이트 진입 1초 후 오늘 날씨를 확인한다.
+   * 사이트 진입 1초 후 즉시 갱신한다.
    */
   const initialRefreshTimer =
     window.setTimeout(() => {
-      void refreshWeatherForCurrentDate();
+      void refreshCurrentWeather();
     }, 1_000);
 
-  /*
-   * 사이트를 계속 열어 둔 경우
-   * 날짜 변경 또는 앞선 실패 여부만 확인한다.
-   *
-   * 성공한 날짜에는 이 함수가 즉시 종료되므로
-   * 1분마다 위치를 수집하지 않는다.
-   */
-  const dateCheckInterval =
-    window.setInterval(() => {
-      void refreshWeatherForCurrentDate();
-    }, 60_000);
+ /*
+ * HOO를 실행 중인 동안 5분마다
+ * 날씨·기온·체감온도를 갱신한다.
+ */
+ const weatherRefreshInterval =
+  window.setInterval(() => {
+    void refreshCurrentWeather();
+  }, 5 * 60 * 1000);
 
   /*
-   * 백그라운드에서 돌아왔을 때도
-   * 날짜 변경이나 실패 여부를 다시 확인한다.
+   * 다른 화면에서 HOO로 돌아왔을 때도
+   * 최신 날씨를 다시 확인한다.
    */
+  
   function handleVisibilityChange() {
     if (
       document.visibilityState ===
-        "visible"
+      "visible"
     ) {
-      void refreshWeatherForCurrentDate();
+      void refreshCurrentWeather();
     }
   }
 
@@ -4339,7 +4294,7 @@ useEffect(() => {
     );
 
     window.clearInterval(
-      dateCheckInterval,
+      weatherRefreshInterval,
     );
 
     document.removeEventListener(
@@ -4347,18 +4302,12 @@ useEffect(() => {
       handleVisibilityChange,
     );
   };
-
-  /*
-   * 날씨 설정이 변경됐을 때만
-   * 자동 갱신 효과를 다시 구성한다.
-   */
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [
   isWeatherPreferenceLoading,
   weatherPreference?.weatherEnabled,
   weatherPreference?.locationSource,
 ]);
-
 
 /* ─────────────────────────────
    HOO 반복 생활 확인 후보 불러오기
@@ -4884,16 +4833,15 @@ async function enableHooWeatherWithCurrentLocation() {
               );
             },
             reject,
-            {
-              enableHighAccuracy:
-                false,
-
-              timeout:
-                10_000,
-
-              maximumAge:
-                5 * 60 * 1000,
-            },
+          {
+  /*
+   * 오래된 네트워크 위치를 사용하지 않고
+   * 기기에서 받을 수 있는 가장 정확한 위치를 요청한다.
+   */
+  enableHighAccuracy: true,
+  timeout: 15_000,
+  maximumAge: 0,
+},
           );
         },
       );
@@ -14304,6 +14252,32 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
 <FocusMode
   isLoggedIn={
     isLoggedIn
+  }
+
+  showWeather={
+    Boolean(
+      weatherPreference?.weatherEnabled,
+    )
+  }
+
+  weatherCode={
+    currentWeather?.weatherCode
+  }
+
+  temperatureCelsius={
+    currentWeather?.temperatureCelsius
+  }
+
+  apparentTemperatureCelsius={
+    currentWeather?.apparentTemperatureCelsius
+  }
+
+  weatherIsDay={
+    currentWeather?.isDay
+  }
+
+  isWeatherLoading={
+    isWeatherLoading
   }
 
   loggedInNickname={

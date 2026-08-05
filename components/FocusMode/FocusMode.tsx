@@ -66,6 +66,13 @@ import {
 type FocusModeProps = {
   isLoggedIn: boolean;
 
+  showWeather: boolean;
+  weatherCode?: number;
+  temperatureCelsius?: number;
+  apparentTemperatureCelsius?: number;
+  weatherIsDay?: boolean;
+  isWeatherLoading: boolean;
+
   loggedInNickname:
     string | null;
 
@@ -114,6 +121,12 @@ function formatJournalDate(
 
 export default function FocusMode({
   isLoggedIn,
+  showWeather,
+  weatherCode,
+  temperatureCelsius,
+  apparentTemperatureCelsius,
+  weatherIsDay,
+  isWeatherLoading,
   loggedInNickname,
   onNicknameUpdated,
   profileImageUrl:
@@ -1699,6 +1712,18 @@ useEffect(() => {
 <FocusLaunchers
   isLoggedIn={isLoggedIn}
   nickname={loggedInNickname}
+  showWeather={showWeather}
+  weatherCode={weatherCode}
+  temperatureCelsius={
+    temperatureCelsius
+  }
+  apparentTemperatureCelsius={
+    apparentTemperatureCelsius
+  }
+  weatherIsDay={weatherIsDay}
+  isWeatherLoading={
+    isWeatherLoading
+  }
   onOpenProfile={
     handleProfileLauncherClick
   }
