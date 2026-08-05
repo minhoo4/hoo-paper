@@ -10880,8 +10880,8 @@ setSecretPinInput("");
           )}
         </button>
 
-        {isConfigured && (
-          <div className="absolute -right-1 -top-2 z-20 flex gap-1 opacity-100 transition md:-right-2 md:opacity-0 md:group-hover:opacity-100">
+       {isConfigured && (
+  <div className="absolute -right-2 -top-2 z-20 hidden gap-1 opacity-0 transition md:flex md:group-hover:opacity-100">
             <button
               type="button"
               onClick={(event) => {
