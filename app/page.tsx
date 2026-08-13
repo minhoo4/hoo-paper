@@ -37,6 +37,13 @@ import {
    타입
 ───────────────────────────── */
 
+type ScheduleStickerColor =
+  | "yellow"
+  | "green"
+  | "pink"
+  | "blue"
+  | "purple"
+  | "orange";
 
 type Schedule = {
   id: string;
@@ -47,6 +54,13 @@ type Schedule = {
   repeatType: ScheduleRepeatType;
   createdAt: string;
   isSecret: boolean;
+
+  /*
+   * 기존에 저장된 일정에는 색상값이 없으므로
+   * 마이그레이션 전까지 선택값으로 처리한다.
+   */
+  stickerColor?:
+    ScheduleStickerColor;
 };
 
 type ScheduleMap = Record<string, Schedule[]>;
@@ -310,11 +324,17 @@ type Hoo2048BestScores = Record<
 
 const WEEK_DAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
-const SCHEDULE_STORAGE_KEY = "hoo-calendar-schedules";
-const MEMO_STORAGE_KEY = "hoo-memos";
+const SCHEDULE_STORAGE_KEY =
+  "hoo-calendar-schedules";
+
+const MEMO_STORAGE_KEY =
+  "hoo-memos";
 
 const UI_OPACITY_STORAGE_KEY =
   "hoo-ui-opacity";
+
+const FOCUS_ALARM_VOLUME_STORAGE_KEY =
+  "hoo-focus-alarm-volume";
 
 const SECRET_PIN_STORAGE_KEY =
   "hoo-secret-pin";
@@ -450,52 +470,196 @@ function formatTimer(totalSeconds: number) {
     .join(":");
 }
 
-function getStickerClass(index: number) {
-  const stickerClasses = [
-    "bg-[#ffe48c] -rotate-1",
-    "bg-[#bdecc8] rotate-1",
-    "bg-[#ffc4d8] -rotate-[0.5deg]",
-    "bg-[#cbd9ff] rotate-[0.5deg]",
+const SCHEDULE_STICKER_COLORS: Array<{
+  value: ScheduleStickerColor;
+  label: string;
+  previewClassName: string;
+}> = [
+  {
+    value: "yellow",
+    label: "노란색",
+    previewClassName:
+      "bg-[#ffe48c]",
+  },
+  {
+    value: "green",
+    label: "초록색",
+    previewClassName:
+      "bg-[#bdecc8]",
+  },
+  {
+    value: "pink",
+    label: "분홍색",
+    previewClassName:
+      "bg-[#ffc4d8]",
+  },
+  {
+    value: "blue",
+    label: "파란색",
+    previewClassName:
+      "bg-[#cbd9ff]",
+  },
+  {
+    value: "purple",
+    label: "보라색",
+    previewClassName:
+      "bg-[#d8c7ff]",
+  },
+  {
+    value: "orange",
+    label: "주황색",
+    previewClassName:
+      "bg-[#ffc98f]",
+  },
+];
+
+function getStickerClass(
+  stickerColorOrIndex:
+    | ScheduleStickerColor
+    | number = "yellow",
+  index = 0,
+) {
+  const rotationClasses = [
+    "-rotate-1",
+    "rotate-1",
+    "-rotate-[0.5deg]",
+    "rotate-[0.5deg]",
   ];
 
-  return stickerClasses[index % stickerClasses.length];
+  const colorClasses: Record<
+    ScheduleStickerColor,
+    string
+  > = {
+    yellow:
+      "bg-[#ffe48c]",
+    green:
+      "bg-[#bdecc8]",
+    pink:
+      "bg-[#ffc4d8]",
+    blue:
+      "bg-[#cbd9ff]",
+    purple:
+      "bg-[#d8c7ff]",
+    orange:
+      "bg-[#ffc98f]",
+  };
+
+  /*
+   * 기존 호출:
+   * getStickerClass(index)
+   *
+   * 새 호출:
+   * getStickerClass(
+   *   schedule.stickerColor,
+   *   index,
+   * )
+   */
+  const isLegacyCall =
+    typeof stickerColorOrIndex ===
+    "number";
+
+  const resolvedIndex =
+    isLegacyCall
+      ? stickerColorOrIndex
+      : index;
+
+  const legacyColors:
+    ScheduleStickerColor[] = [
+      "yellow",
+      "green",
+      "pink",
+      "blue",
+    ];
+
+  const resolvedColor:
+    ScheduleStickerColor =
+      isLegacyCall
+        ? legacyColors[
+            resolvedIndex %
+              legacyColors.length
+          ]
+        : stickerColorOrIndex;
+
+  return [
+    colorClasses[
+      resolvedColor
+    ],
+    rotationClasses[
+      resolvedIndex %
+        rotationClasses.length
+    ],
+  ].join(" ");
 }
 
-function getScheduleVisual(schedule: Schedule) {
-  switch (schedule.repeatType) {
+function getScheduleVisual(
+  schedule: Schedule,
+) {
+  const colorClasses: Record<
+    ScheduleStickerColor,
+    string
+  > = {
+    yellow:
+      "border-[#e2c45d] bg-[#ffe48c] text-[#66531d]",
+
+    green:
+      "border-[#83c99a] bg-[#bdecc8] text-[#285f3b]",
+
+    pink:
+      "border-[#e89ab6] bg-[#ffc4d8] text-[#7a3550]",
+
+    blue:
+      "border-[#96addf] bg-[#cbd9ff] text-[#304d83]",
+
+    purple:
+      "border-[#ad91df] bg-[#d8c7ff] text-[#533c82]",
+
+    orange:
+      "border-[#e9a966] bg-[#ffc98f] text-[#75441d]",
+  };
+
+  const stickerColor =
+    schedule.stickerColor ??
+    "yellow";
+
+  const className =
+    colorClasses[
+      stickerColor
+    ] ??
+    colorClasses.yellow;
+
+  switch (
+    schedule.repeatType
+  ) {
     case "dailyRange":
       return {
         icon: "━",
         label: "연속 일정",
-        className:
-          "border-[#c8bdf7] bg-[#eee9ff] text-[#5c4fb5]",
+        className,
       };
 
     case "weekly":
       return {
         icon: "↻",
         label: "매주 반복",
-        className:
-          "border-[#b9d8f7] bg-[#eaf5ff] text-[#3473a8]",
+        className,
       };
 
     case "monthly":
       return {
         icon: "▣",
         label: "매달 반복",
-        className:
-          "border-[#d9c3f2] bg-[#f3eaff] text-[#7951a8]",
+        className,
       };
 
     default:
       return {
         icon: "",
         label: "하루 일정",
-        className:
-          "border-[#f0d590] bg-[#fff4c9] text-[#776021]",
+        className,
       };
   }
 }
+
 
 function createDefaultFavorites(): Favorite[] {
   return Array.from({ length: 8 }, (_, index) => ({
@@ -823,20 +987,32 @@ const [showFloatingButtons, setShowFloatingButtons] =
      const [backgroundUrl, setBackgroundUrl] =
     useState<string | null>(null);
 
-  /* UI 불투명도 */
+  /* UI 및 포커스 알람 설정 */
 
-  const [isUiOpacityOpen, setIsUiOpacityOpen] =
-    useState(false);
+const [
+  isUiOpacityOpen,
+  setIsUiOpacityOpen,
+] = useState(false);
 
-  const [uiOpacity, setUiOpacity] =
-    useState(100);
+const [
+  uiOpacity,
+  setUiOpacity,
+] = useState(100);
 
-  const uiOpacityPanelRef =
-    useRef<HTMLDivElement | null>(null);
+const [
+  focusAlarmVolume,
+  setFocusAlarmVolume,
+] = useState(100);
 
-  const uiOpacityButtonRef =
-    useRef<HTMLButtonElement | null>(null);
+const uiOpacityPanelRef =
+  useRef<HTMLDivElement | null>(
+    null,
+  );
 
+const uiOpacityButtonRef =
+  useRef<HTMLButtonElement | null>(
+    null,
+  );
 
   /* 즐겨찾기 */
 
@@ -1165,13 +1341,29 @@ const [previousSchedule, setPreviousSchedule] =
 const [isScheduleSliding, setIsScheduleSliding] =
   useState(false);
 
-const [scheduleTitle, setScheduleTitle] = useState("");
+const [
+  scheduleTitle,
+  setScheduleTitle,
+] = useState("");
 
-  const [scheduleContent, setScheduleContent] =
-    useState("");
+const [
+  scheduleContent,
+  setScheduleContent,
+] = useState("");
 
-    const [isScheduleSecret, setIsScheduleSecret] =
-  useState(false);
+const [
+  scheduleStickerColor,
+  setScheduleStickerColor,
+] =
+  useState<ScheduleStickerColor>(
+    "yellow",
+  );
+
+const [
+  isScheduleSecret,
+  setIsScheduleSecret,
+] = useState(false);
+
 
 const [isSecretLayerOn, setIsSecretLayerOn] =
   useState(true);
@@ -1821,15 +2013,21 @@ useEffect(() => {
         MEMO_STORAGE_KEY,
       );
 
-      const savedUiOpacity =
-        window.localStorage.getItem(
-          UI_OPACITY_STORAGE_KEY,
-        );
+     const savedUiOpacity =
+  window.localStorage.getItem(
+    UI_OPACITY_STORAGE_KEY,
+  );
 
-      const savedSecretPin =
+const savedFocusAlarmVolume =
+  window.localStorage.getItem(
+    FOCUS_ALARM_VOLUME_STORAGE_KEY,
+  );
+
+const savedSecretPin =
   window.localStorage.getItem(
     SECRET_PIN_STORAGE_KEY,
   );
+
 
       const savedFavorites = window.localStorage.getItem(
         FAVORITE_STORAGE_KEY,
@@ -1920,26 +2118,61 @@ const savedRecommendedTodo =
         setMemos(JSON.parse(savedMemos));
       }
 
-      if (savedUiOpacity !== null) {
-        const parsedUiOpacity =
-          Number(savedUiOpacity);
+     if (savedUiOpacity !== null) {
+  const parsedUiOpacity =
+    Number(savedUiOpacity);
 
-        if (Number.isFinite(parsedUiOpacity)) {
-          setUiOpacity(
-            Math.max(
-              0,
-              Math.min(100, parsedUiOpacity),
-            ),
-          );
-        }
-      }
+  if (
+    Number.isFinite(
+      parsedUiOpacity,
+    )
+  ) {
+    setUiOpacity(
+      Math.max(
+        0,
+        Math.min(
+          100,
+          parsedUiOpacity,
+        ),
+      ),
+    );
+  }
+}
 
-      if (
+if (
+  savedFocusAlarmVolume !== null
+) {
+  const parsedFocusAlarmVolume =
+    Number(
+      savedFocusAlarmVolume,
+    );
+
+  if (
+    Number.isFinite(
+      parsedFocusAlarmVolume,
+    )
+  ) {
+    setFocusAlarmVolume(
+      Math.max(
+        0,
+        Math.min(
+          100,
+          parsedFocusAlarmVolume,
+        ),
+      ),
+    );
+  }
+}
+
+if (
   savedSecretPin &&
   /^\d{4}$/.test(savedSecretPin)
 ) {
-  setSecretPin(savedSecretPin);
+  setSecretPin(
+    savedSecretPin,
+  );
 }
+
 
       if (savedFavorites) {
         setFavorites(
@@ -1998,58 +2231,87 @@ if (savedMinigameCompletionDate === todayStorageDate) {
    기존 localStorage 기록 자동 이전
 ───────────────────────────── */
 
+
 useEffect(() => {
   let cancelled = false;
 
+  function normalizeStickerColor(
+    value: unknown,
+  ): ScheduleStickerColor {
+    if (
+      value === "yellow" ||
+      value === "green" ||
+      value === "pink" ||
+      value === "blue" ||
+      value === "purple" ||
+      value === "orange"
+    ) {
+      return value;
+    }
+
+    return "yellow";
+  }
+
   async function loadCloudSchedules() {
     try {
-     const {
-  data: {
-    session,
-  },
-  error: sessionError,
-} =
-  await supabase.auth.getSession();
+      const {
+        data: {
+          session,
+        },
+        error: sessionError,
+      } =
+        await supabase.auth.getSession();
 
-if (sessionError) {
-  throw sessionError;
-}
+      if (sessionError) {
+        throw sessionError;
+      }
 
-const user =
-  session?.user ?? null;
+      const user =
+        session?.user ?? null;
 
-/*
- * 비로그인 상태에서는
- * 기존 localStorage 일정을 그대로 사용한다.
- */
-if (!user) {
-  return;
-}
+      /*
+       * 비로그인 상태에서는
+       * 기존 localStorage 일정을 사용한다.
+       */
+      if (!user) {
+        return;
+      }
 
       const {
         data: cloudSchedules,
         error: cloudScheduleError,
-      } = await supabase
-        .from("schedules")
-        .select(
-          `
-            id,
-            group_id,
-            title,
-            content,
-            schedule_date,
-            repeat_type,
-            is_secret,
-            created_at
-          `,
-        )
-        .eq("user_id", user.id)
-        .order("schedule_date", {
-          ascending: true,
-        })
-        .order("created_at", {
-          ascending: true,
-        });
+      } =
+        await supabase
+          .from("schedules")
+          .select(
+            `
+              id,
+              group_id,
+              title,
+              content,
+              schedule_date,
+              repeat_type,
+              sticker_color,
+              is_secret,
+              created_at
+            `,
+          )
+          .eq(
+            "user_id",
+            user.id,
+          )
+          .order(
+            "schedule_date",
+            {
+              ascending: true,
+            },
+          )
+          .order(
+            "created_at",
+            {
+              ascending: true,
+            },
+          );
 
       if (cloudScheduleError) {
         throw cloudScheduleError;
@@ -2060,65 +2322,96 @@ if (!user) {
        * 서버 데이터를 최우선으로 사용한다.
        */
       if (
-        Array.isArray(cloudSchedules) &&
+        Array.isArray(
+          cloudSchedules,
+        ) &&
         cloudSchedules.length > 0
       ) {
         const normalizedSchedules =
-          cloudSchedules.reduce<ScheduleMap>(
-            (result, schedule) => {
+          cloudSchedules.reduce<
+            ScheduleMap
+          >(
+            (
+              result,
+              schedule,
+            ) => {
               const date =
-                typeof schedule.schedule_date ===
+                typeof schedule
+                  .schedule_date ===
                 "string"
-                  ? schedule.schedule_date
+                  ? schedule
+                      .schedule_date
                   : "";
 
               if (!date) {
                 return result;
               }
 
-              const normalizedSchedule: Schedule = {
-                id: schedule.id,
+              const normalizedSchedule:
+                Schedule = {
+                  id:
+                    schedule.id,
 
-                groupId:
-                  typeof schedule.group_id ===
+                  groupId:
+                    typeof schedule
+                      .group_id ===
                     "string"
-                    ? schedule.group_id
-                    : schedule.id,
+                      ? schedule
+                          .group_id
+                      : schedule.id,
 
-                title:
-                  typeof schedule.title ===
+                  title:
+                    typeof schedule
+                      .title ===
                     "string"
-                    ? schedule.title
-                    : "제목 없는 일정",
+                      ? schedule.title
+                      : "제목 없는 일정",
 
-                content:
-                  typeof schedule.content ===
+                  content:
+                    typeof schedule
+                      .content ===
                     "string"
-                    ? schedule.content
-                    : "",
+                      ? schedule.content
+                      : "",
 
-                date,
+                  date,
 
-                repeatType:
-                  schedule.repeat_type ===
-                    "dailyRange" ||
-                  schedule.repeat_type ===
-                    "weekly" ||
-                  schedule.repeat_type ===
-                    "monthly"
-                    ? schedule.repeat_type
-                    : "none",
+                  repeatType:
+                    schedule
+                      .repeat_type ===
+                        "dailyRange" ||
+                    schedule
+                      .repeat_type ===
+                        "weekly" ||
+                    schedule
+                      .repeat_type ===
+                        "monthly"
+                      ? schedule
+                          .repeat_type
+                      : "none",
 
-                createdAt:
-                  schedule.created_at ??
-                  new Date().toISOString(),
+                  stickerColor:
+                    normalizeStickerColor(
+                      schedule
+                        .sticker_color,
+                    ),
 
-                isSecret:
-                  schedule.is_secret === true,
-              };
+                  createdAt:
+                    schedule
+                      .created_at ??
+                    new Date()
+                      .toISOString(),
+
+                  isSecret:
+                    schedule
+                      .is_secret ===
+                    true,
+                };
 
               result[date] = [
-                ...(result[date] ?? []),
+                ...(result[
+                  date
+                ] ?? []),
                 normalizedSchedule,
               ];
 
@@ -2163,12 +2456,17 @@ if (!user) {
       }
 
       const parsedValue: unknown =
-        JSON.parse(savedSchedules);
+        JSON.parse(
+          savedSchedules,
+        );
 
       if (
         !parsedValue ||
-        typeof parsedValue !== "object" ||
-        Array.isArray(parsedValue)
+        typeof parsedValue !==
+          "object" ||
+        Array.isArray(
+          parsedValue,
+        )
       ) {
         if (!cancelled) {
           setSchedules({});
@@ -2183,19 +2481,28 @@ if (!user) {
           unknown
         >;
 
-      const normalizedSchedules: ScheduleMap =
-        {};
+      const normalizedSchedules:
+        ScheduleMap = {};
 
       Object.entries(
         localScheduleMap,
       ).forEach(
-        ([dateKey, value]) => {
-          if (!Array.isArray(value)) {
+        ([
+          dateKey,
+          value,
+        ]) => {
+          if (
+            !Array.isArray(
+              value,
+            )
+          ) {
             return;
           }
 
           const dateSchedules =
-            value.reduce<Schedule[]>(
+            value.reduce<
+              Schedule[]
+            >(
               (
                 result,
                 scheduleValue,
@@ -2209,64 +2516,90 @@ if (!user) {
                 }
 
                 const schedule =
-                  scheduleValue as Partial<Schedule>;
+                  scheduleValue as
+                    Partial<Schedule>;
 
                 const title =
-                  typeof schedule.title ===
-                    "string"
-                    ? schedule.title.trim()
+                  typeof schedule
+                    .title ===
+                  "string"
+                    ? schedule
+                        .title
+                        .trim()
                     : "";
 
                 if (!title) {
                   return result;
                 }
 
-                const normalizedSchedule: Schedule = {
-                  id:
-                    typeof schedule.id ===
+                const normalizedSchedule:
+                  Schedule = {
+                    id:
+                      typeof schedule
+                        .id ===
                       "string"
-                      ? schedule.id
-                      : createId(),
+                        ? schedule.id
+                        : createId(),
 
-                  groupId:
-                    typeof schedule.groupId ===
+                    groupId:
+                      typeof schedule
+                        .groupId ===
                       "string"
-                      ? schedule.groupId
-                      : createId(),
+                        ? schedule
+                            .groupId
+                        : createId(),
 
-                  title,
+                    title,
 
-                  content:
-                    typeof schedule.content ===
+                    content:
+                      typeof schedule
+                        .content ===
                       "string"
-                      ? schedule.content
-                      : "",
+                        ? schedule
+                            .content
+                        : "",
 
-                  date:
-                    typeof schedule.date ===
+                    date:
+                      typeof schedule
+                        .date ===
                       "string"
-                      ? schedule.date
-                      : dateKey,
+                        ? schedule.date
+                        : dateKey,
 
-                  repeatType:
-                    schedule.repeatType ===
-                      "dailyRange" ||
-                    schedule.repeatType ===
-                      "weekly" ||
-                    schedule.repeatType ===
-                      "monthly"
-                      ? schedule.repeatType
-                      : "none",
+                    repeatType:
+                      schedule
+                        .repeatType ===
+                          "dailyRange" ||
+                      schedule
+                        .repeatType ===
+                          "weekly" ||
+                      schedule
+                        .repeatType ===
+                          "monthly"
+                        ? schedule
+                            .repeatType
+                        : "none",
 
-                  createdAt:
-                    typeof schedule.createdAt ===
+                    stickerColor:
+                      normalizeStickerColor(
+                        schedule
+                          .stickerColor,
+                      ),
+
+                    createdAt:
+                      typeof schedule
+                        .createdAt ===
                       "string"
-                      ? schedule.createdAt
-                      : new Date().toISOString(),
+                        ? schedule
+                            .createdAt
+                        : new Date()
+                            .toISOString(),
 
-                  isSecret:
-                    schedule.isSecret === true,
-                };
+                    isSecret:
+                      schedule
+                        .isSecret ===
+                      true,
+                  };
 
                 result.push(
                   normalizedSchedule,
@@ -2278,7 +2611,8 @@ if (!user) {
             );
 
           if (
-            dateSchedules.length > 0
+            dateSchedules.length >
+            0
           ) {
             normalizedSchedules[
               dateKey
@@ -2292,7 +2626,10 @@ if (!user) {
           normalizedSchedules,
         ).flat();
 
-      if (localSchedules.length === 0) {
+      if (
+        localSchedules.length ===
+        0
+      ) {
         if (!cancelled) {
           setSchedules({});
         }
@@ -2303,28 +2640,46 @@ if (!user) {
       const migrationRows =
         localSchedules.map(
           (schedule) => ({
-            id: schedule.id,
-            user_id: user.id,
+            id:
+              schedule.id,
+
+            user_id:
+              user.id,
+
             group_id:
               schedule.groupId,
+
             title:
               schedule.title,
+
             content:
               schedule.content,
+
             schedule_date:
               schedule.date,
+
             repeat_type:
               schedule.repeatType,
+
+            sticker_color:
+              schedule
+                .stickerColor ??
+              "yellow",
+
             is_secret:
               schedule.isSecret,
+
             created_at:
               schedule.createdAt,
+
             updated_at:
               schedule.createdAt,
           }),
         );
 
-      const { error: migrationError } =
+      const {
+        error: migrationError,
+      } =
         await supabase
           .from("schedules")
           .insert(
@@ -2351,7 +2706,9 @@ if (!user) {
       );
     } finally {
       if (!cancelled) {
-        setIsScheduleCloudReady(true);
+        setIsScheduleCloudReady(
+          true,
+        );
       }
     }
   }
@@ -2362,6 +2719,7 @@ if (!user) {
     cancelled = true;
   };
 }, [supabase]);
+
 
 /* ─────────────────────────────
    일정 로컬 캐시 저장
@@ -2658,7 +3016,7 @@ useEffect(() => {
 ]);
 
 /* ─────────────────────────────
-   UI 불투명도 자동 저장
+   UI 및 알람 설정 자동 저장
 ───────────────────────────── */
 
 useEffect(() => {
@@ -2670,8 +3028,24 @@ useEffect(() => {
     UI_OPACITY_STORAGE_KEY,
     String(uiOpacity),
   );
-}, [uiOpacity, isLoaded]);
+}, [
+  uiOpacity,
+  isLoaded,
+]);
 
+useEffect(() => {
+  if (!isLoaded) {
+    return;
+  }
+
+  window.localStorage.setItem(
+    FOCUS_ALARM_VOLUME_STORAGE_KEY,
+    String(focusAlarmVolume),
+  );
+}, [
+  focusAlarmVolume,
+  isLoaded,
+]);
 
 /* ─────────────────────────────
    시크릿 PIN 자동 저장
@@ -7776,6 +8150,11 @@ function startScheduleEditing(
     schedule.content,
   );
 
+  setScheduleStickerColor(
+    schedule.stickerColor ??
+      "yellow",
+  );
+
   setScheduleRepeatType(
     schedule.repeatType,
   );
@@ -7794,11 +8173,17 @@ function cancelScheduleEditing() {
 
   setScheduleTitle("");
   setScheduleContent("");
+
+  setScheduleStickerColor(
+    "yellow",
+  );
+
   setScheduleRepeatType("none");
   setScheduleEndDate("");
   setScheduleRepeatUntil("");
   setIsScheduleSecret(false);
 }
+
 
   /* ─────────────────────────────
      캘린더 이동
@@ -7857,8 +8242,11 @@ async function addSchedule(
 ) {
   event?.preventDefault();
 
-  const title = scheduleTitle.trim();
-  const content = scheduleContent.trim();
+  const title =
+    scheduleTitle.trim();
+
+  const content =
+    scheduleContent.trim();
 
   if (!title) {
     return;
@@ -7886,6 +8274,10 @@ async function addSchedule(
       ...targetSchedule,
       title,
       content,
+
+      stickerColor:
+        scheduleStickerColor,
+
       isSecret:
         isScheduleSecret,
     };
@@ -7895,8 +8287,8 @@ async function addSchedule(
      */
     setSchedules(
       (previousSchedules) => {
-        const nextSchedules: ScheduleMap =
-          {};
+        const nextSchedules:
+          ScheduleMap = {};
 
         Object.entries(
           previousSchedules,
@@ -7941,7 +8333,9 @@ async function addSchedule(
         return;
       }
 
-      const { error: updateError } =
+      const {
+        error: updateError,
+      } =
         await supabase
           .from("schedules")
           .update({
@@ -7950,6 +8344,11 @@ async function addSchedule(
 
             content:
               updatedSchedule.content,
+
+            sticker_color:
+              updatedSchedule
+                .stickerColor ??
+              "yellow",
 
             is_secret:
               updatedSchedule.isSecret,
@@ -7981,8 +8380,8 @@ async function addSchedule(
        */
       setSchedules(
         (previousSchedules) => {
-          const nextSchedules: ScheduleMap =
-            {};
+          const nextSchedules:
+            ScheduleMap = {};
 
           Object.entries(
             previousSchedules,
@@ -8070,7 +8469,8 @@ async function addSchedule(
     );
   }
 
-  const groupId = createId();
+  const groupId =
+    createId();
 
   const createdAt =
     new Date().toISOString();
@@ -8078,7 +8478,8 @@ async function addSchedule(
   const newSchedules =
     scheduleDates.map(
       (date): Schedule => ({
-        id: createId(),
+        id:
+          createId(),
 
         groupId,
 
@@ -8092,6 +8493,9 @@ async function addSchedule(
           activeRepeatType,
 
         createdAt,
+
+        stickerColor:
+          scheduleStickerColor,
 
         isSecret:
           isScheduleSecret,
@@ -8142,6 +8546,11 @@ async function addSchedule(
 
   setScheduleTitle("");
   setScheduleContent("");
+
+  setScheduleStickerColor(
+    "yellow",
+  );
+
   setScheduleRepeatType("none");
   setScheduleEndDate("");
   setScheduleRepeatUntil("");
@@ -8193,6 +8602,10 @@ async function addSchedule(
           repeat_type:
             schedule.repeatType,
 
+          sticker_color:
+            schedule.stickerColor ??
+            "yellow",
+
           is_secret:
             schedule.isSecret,
 
@@ -8204,7 +8617,9 @@ async function addSchedule(
         }),
       );
 
-    const { error: insertError } =
+    const {
+      error: insertError,
+    } =
       await supabase
         .from("schedules")
         .insert(rows);
@@ -8232,8 +8647,8 @@ async function addSchedule(
 
     setSchedules(
       (previousSchedules) => {
-        const nextSchedules: ScheduleMap =
-          {};
+        const nextSchedules:
+          ScheduleMap = {};
 
         Object.entries(
           previousSchedules,
@@ -8271,7 +8686,6 @@ async function addSchedule(
     );
   }
 }
-
 
 async function deleteSchedule(
   scheduleId: string,
@@ -10353,16 +10767,82 @@ setSecretPinInput("");
       일정 내용
     </label>
 
-    <textarea
-      value={scheduleContent}
-      maxLength={300}
-      onChange={(event) =>
-        setScheduleContent(event.target.value)
+   <textarea
+  value={scheduleContent}
+  maxLength={300}
+  onChange={(event) =>
+    setScheduleContent(
+      event.target.value,
+    )
+  }
+  placeholder="일정 내용을 입력하세요."
+  rows={4}
+  className="w-full resize-none rounded-2xl border border-[#ded8ef] bg-[#faf9ff] px-5 py-3 text-sm font-bold leading-6 outline-none transition focus:border-[#7467d8]"
+/>
+
+<div className="mt-4 rounded-2xl border border-[#ded8ef] bg-[#faf9ff] p-4">
+  <div className="flex items-center justify-between gap-3">
+    <div>
+      <p className="text-sm font-black text-[#423c55]">
+        스티커 색상
+      </p>
+
+      <p className="mt-1 text-[11px] font-bold text-[#8b849d]">
+        반복 일정 전체에 같은 색상이 적용됩니다.
+      </p>
+    </div>
+
+    <span className="text-[11px] font-black text-[#7467d8]">
+      {
+        SCHEDULE_STICKER_COLORS.find(
+          (color) =>
+            color.value ===
+            scheduleStickerColor,
+        )?.label
       }
-      placeholder="일정 내용을 입력하세요."
-      rows={4}
-      className="w-full resize-none rounded-2xl border border-[#ded8ef] bg-[#faf9ff] px-5 py-3 text-sm font-bold leading-6 outline-none transition focus:border-[#7467d8]"
-    />
+    </span>
+  </div>
+
+  <div className="mt-4 grid grid-cols-6 gap-2">
+    {SCHEDULE_STICKER_COLORS.map(
+      (color) => {
+        const isSelected =
+          scheduleStickerColor ===
+          color.value;
+
+        return (
+          <button
+            key={color.value}
+            type="button"
+            onClick={() =>
+              setScheduleStickerColor(
+                color.value,
+              )
+            }
+            title={color.label}
+            aria-label={`${color.label} 스티커 선택`}
+            aria-pressed={
+              isSelected
+            }
+            className={`relative flex aspect-square min-h-9 items-center justify-center rounded-xl border-2 transition ${
+              color.previewClassName
+            } ${
+              isSelected
+                ? "scale-110 border-[#5c4fb5] shadow-[0_5px_14px_rgba(92,79,181,0.3)]"
+                : "border-transparent hover:scale-105 hover:border-white"
+            }`}
+          >
+            {isSelected && (
+              <span className="text-base font-black text-[#403761]">
+                ✓
+              </span>
+            )}
+          </button>
+        );
+      },
+    )}
+  </div>
+</div>
   </div>
 
   <div className="grid gap-4 sm:grid-cols-2">
@@ -10639,10 +11119,11 @@ setSecretPinInput("");
       </header>
 
       {isUiOpacityOpen && (
-        <div
-          ref={uiOpacityPanelRef}
-          className="fixed right-[5.2%] top-[74px] z-[10020] w-[190px] rounded-[26px] border border-[#8f7cff]/80 bg-[#111522]/95 px-5 pb-6 pt-5 text-white shadow-[0_24px_70px_rgba(0,0,0,0.5),0_0_28px_rgba(116,103,216,0.25)] backdrop-blur-2xl"
-        >
+  <div
+    ref={uiOpacityPanelRef}
+    className="fixed right-[5.2%] top-[74px] z-[10020] max-h-[calc(100dvh-90px)] w-[210px] overflow-y-auto overscroll-contain rounded-[26px] border border-[#8f7cff]/80 bg-[#111522]/95 px-5 pb-6 pt-5 text-white shadow-[0_24px_70px_rgba(0,0,0,0.5),0_0_28px_rgba(116,103,216,0.25)] backdrop-blur-2xl [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+  >
+
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[10px] font-black tracking-[0.18em] text-white/45">
@@ -10722,11 +11203,65 @@ setSecretPinInput("");
             </div>
           </div>
 
-          <p className="mt-3 text-center text-[11px] font-bold leading-5 text-white/45">
-            어두운 패널 배경만 조절되며
-            <br />
-            글자와 버튼은 선명하게 유지됩니다.
-          </p>
+         <p className="mt-3 text-center text-[11px] font-bold leading-5 text-white/45">
+  어두운 패널 배경만 조절되며
+  <br />
+  글자와 버튼은 선명하게 유지됩니다.
+</p>
+
+<div className="mt-6 border-t border-white/10 pt-5">
+  <div className="flex items-center justify-between gap-3">
+    <div>
+      <p className="text-[10px] font-black tracking-[0.16em] text-white/40">
+        FOCUS ALARM
+      </p>
+
+      <h3 className="mt-1 text-sm font-black">
+        종료 알람 음량
+      </h3>
+    </div>
+
+    <span className="shrink-0 rounded-xl bg-[#7467d8] px-3 py-1.5 text-xs font-black">
+      {focusAlarmVolume === 0
+        ? "무음"
+        : `${focusAlarmVolume}%`}
+    </span>
+  </div>
+
+  <input
+    type="range"
+    min={0}
+    max={100}
+    step={1}
+    value={focusAlarmVolume}
+    onChange={(event) =>
+      setFocusAlarmVolume(
+        Number(
+          event.target.value,
+        ),
+      )
+    }
+    aria-label="포커스 종료 알람 음량"
+    aria-valuetext={
+      focusAlarmVolume === 0
+        ? "무음"
+        : `${focusAlarmVolume}%`
+    }
+    className="mt-5 h-2 w-full cursor-pointer accent-[#8f7cff]"
+  />
+
+  <div className="mt-2 flex items-center justify-between text-[10px] font-black text-white/35">
+    <span>무음</span>
+    <span>최대</span>
+  </div>
+
+  <p className="mt-3 text-center text-[11px] font-bold leading-5 text-white/40">
+    포커스 시간이 끝날 때 울리는
+    <br />
+    알람의 크기를 조절합니다.
+  </p>
+</div>
+
         </div>
       )}
 
@@ -11353,7 +11888,7 @@ setSecretPinInput("");
             {/* 첫 번째 패널: 캘린더 */}
         <section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
               <div className="mx-auto w-full max-w-[1380px]">
-                <section className="grid overflow-hidden rounded-[34px] border border-white/55 bg-white/88 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl xl:grid-cols-[1.15fr_0.85fr]">
+               <section className="grid overflow-hidden rounded-[34px] border border-white/55 bg-white/88 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl xl:max-h-[calc(100dvh-128px)] xl:grid-cols-[1.15fr_0.85fr]">
                   <article className="border-b border-[#dedaf0] xl:border-b-0 xl:border-r">
                     <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[#dedaf0] px-5 py-4 md:px-7">
                       <div>
@@ -11526,7 +12061,7 @@ setSecretPinInput("");
                     </div>
                   </article>
 
-                  <aside className="flex min-h-[600px] flex-col bg-[#fbfaff]">
+                <aside className="flex min-h-[600px] flex-col bg-[#fbfaff] xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:[scrollbar-color:rgba(116,103,216,0.55)_rgba(255,255,255,0.08)] xl:[scrollbar-width:thin]">
                     <header className="border-b border-[#dedaf0] px-6 py-5">
                       <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
                         SELECTED DATE
@@ -11875,20 +12410,84 @@ setSecretPinInput("");
                       className="mt-3 w-full rounded-2xl border border-[#ded8ef] bg-white px-4 py-2.5 text-sm font-bold text-[#ECECEC] placeholder:text-white/55 outline-none focus:border-[#7467d8]"
                       />
 
-                      <textarea
-                        value={scheduleContent}
-                        maxLength={1000}
-                        rows={2}
-                        onChange={(event) =>
-                          setScheduleContent(
-                            event.target.value,
-                          )
-                        }
-                        placeholder="일정 내용을 적어주세요."
-                      className="mt-2 w-full resize-none rounded-2xl border border-[#ded8ef] bg-white px-4 py-3 text-sm font-bold leading-6 text-[#ECECEC] placeholder:text-white/55 outline-none focus:border-[#7467d8]"
-                      />
+                    <textarea
+  value={scheduleContent}
+  maxLength={1000}
+  rows={2}
+  onChange={(event) =>
+    setScheduleContent(
+      event.target.value,
+    )
+  }
+  placeholder="일정 내용을 적어주세요."
+  className="mt-2 w-full resize-none rounded-2xl border border-[#ded8ef] bg-white px-4 py-3 text-sm font-bold leading-6 text-[#ECECEC] placeholder:text-white/55 outline-none focus:border-[#7467d8]"
+/>
 
-                      <button
+<section className="mt-3 rounded-2xl border border-[#ded8ef] bg-white px-4 py-4">
+  <div className="flex items-center justify-between gap-3">
+    <div>
+      <p className="text-sm font-black text-[#423c55]">
+        스티커 색상
+      </p>
+
+      <p className="mt-1 text-[11px] font-bold text-[#8b849d]">
+        캘린더에 표시할 색상을 선택하세요.
+      </p>
+    </div>
+
+    <span className="shrink-0 rounded-full bg-[#eeeaff] px-3 py-1 text-[11px] font-black text-[#5c4fb5]">
+      {
+        SCHEDULE_STICKER_COLORS.find(
+          (color) =>
+            color.value ===
+            scheduleStickerColor,
+        )?.label ?? "노란색"
+      }
+    </span>
+  </div>
+
+  <div className="mt-4 grid grid-cols-6 gap-2">
+    {SCHEDULE_STICKER_COLORS.map(
+      (color) => {
+        const isSelected =
+          scheduleStickerColor ===
+          color.value;
+
+        return (
+          <button
+            key={color.value}
+            type="button"
+            onClick={() =>
+              setScheduleStickerColor(
+                color.value,
+              )
+            }
+            title={color.label}
+            aria-label={`${color.label} 스티커 선택`}
+            aria-pressed={
+              isSelected
+            }
+            className={`flex h-10 w-full items-center justify-center rounded-xl border-2 transition ${
+              color.previewClassName
+            } ${
+              isSelected
+                ? "scale-105 border-[#5c4fb5] shadow-[0_5px_14px_rgba(92,79,181,0.32)]"
+                : "border-black/5 hover:scale-105 hover:border-[#8f7cff]"
+            }`}
+          >
+            {isSelected && (
+              <span className="text-base font-black text-[#403761]">
+                ✓
+              </span>
+            )}
+          </button>
+        );
+      },
+    )}
+  </div>
+</section>
+
+<button
   type="button"
   onClick={() =>
     setIsScheduleSecret(
@@ -11921,6 +12520,8 @@ setSecretPinInput("");
     <span className="h-4 w-4 rounded-full bg-white shadow-sm" />
   </span>
 </button>
+
+
 
                       <div className="mt-5 space-y-4">
 
@@ -14252,6 +14853,10 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
 <FocusMode
   isLoggedIn={
     isLoggedIn
+  }
+
+  focusAlarmVolume={
+    focusAlarmVolume
   }
 
   showWeather={

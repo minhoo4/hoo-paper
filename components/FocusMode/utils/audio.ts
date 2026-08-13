@@ -1,9 +1,22 @@
-export function playTimerAlarm() {
+export function playTimerAlarm(
+  volume = 100,
+) {
+  const normalizedVolume =
+    Math.max(
+      0,
+      Math.min(100, volume),
+    ) / 100;
+
+  if (normalizedVolume === 0) {
+    return;
+  }
+
   const AudioContextClass =
     window.AudioContext ||
     (
       window as typeof window & {
-        webkitAudioContext?: typeof AudioContext;
+        webkitAudioContext?:
+          typeof AudioContext;
       }
     ).webkitAudioContext;
 
@@ -11,7 +24,8 @@ export function playTimerAlarm() {
     return;
   }
 
-  const audioContext = new AudioContextClass();
+  const audioContext =
+    new AudioContextClass();
 
   function beep(
     startTime: number,
@@ -20,32 +34,46 @@ export function playTimerAlarm() {
   ) {
     const oscillator =
       audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
+
+    const gainNode =
+      audioContext.createGain();
 
     oscillator.type = "sine";
+
     oscillator.frequency.setValueAtTime(
       frequency,
       startTime,
     );
 
-    gainNode.gain.setValueAtTime(0, startTime);
+    gainNode.gain.setValueAtTime(
+      0,
+      startTime,
+    );
+
     gainNode.gain.linearRampToValueAtTime(
-      0.18,
+      0.18 * normalizedVolume,
       startTime + 0.01,
     );
+
     gainNode.gain.linearRampToValueAtTime(
       0,
       startTime + duration,
     );
 
     oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
+    gainNode.connect(
+      audioContext.destination,
+    );
 
     oscillator.start(startTime);
-    oscillator.stop(startTime + duration);
+
+    oscillator.stop(
+      startTime + duration,
+    );
   }
 
-  const now = audioContext.currentTime;
+  const now =
+    audioContext.currentTime;
 
   beep(now, 880, 0.13);
   beep(now + 0.18, 1100, 0.16);

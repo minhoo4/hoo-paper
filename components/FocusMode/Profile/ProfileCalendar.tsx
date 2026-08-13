@@ -121,10 +121,22 @@ function getMinuteOfDay(
   );
 }
 
+type DailyJournalBookEntry = {
+  journalDate: string;
+  content: string;
+  updatedAt: string;
+};
+
 type ProfileCalendarProps = {
   history: FocusHistory[];
 
   dailyJournal: string;
+
+  dailyJournalEntries:
+    DailyJournalBookEntry[];
+
+  journalBookLoading: boolean;
+
   journalLoading: boolean;
   journalSaving: boolean;
   journalSaved: boolean;
@@ -141,9 +153,12 @@ type ProfileCalendarProps = {
   ) => void;
 };
 
+
 export default function ProfileCalendar({
   history,
   dailyJournal,
+  dailyJournalEntries,
+  journalBookLoading,
   journalLoading,
   journalSaving,
   journalSaved,
@@ -152,15 +167,30 @@ export default function ProfileCalendar({
   onChangeDailyJournal,
 }: ProfileCalendarProps) {
 
-  const [visibleMonth, setVisibleMonth] =
-    useState(() =>
-      createMonthAnchor(),
-    );
+
+  const [
+  isCalendarMounted,
+  setIsCalendarMounted,
+] = useState(false);
+
+const [
+  visibleMonth,
+  setVisibleMonth,
+] = useState(() =>
+  createMonthAnchor(),
+);
+
 
   const [
     selectedDateKey,
     setSelectedDateKey,
   ] = useState<string | null>(null);
+
+
+  useEffect(() => {
+  setIsCalendarMounted(true);
+}, []);
+
 
   const calendarDays = useMemo(
     () =>
@@ -243,12 +273,31 @@ export default function ProfileCalendar({
     setSelectedDateKey(null);
   }
 
-  function returnToToday() {
-    setVisibleMonth(
-      createMonthAnchor(),
-    );
-    setSelectedDateKey(null);
-  }
+ function returnToToday() {
+  setVisibleMonth(
+    createMonthAnchor(),
+  );
+
+  setSelectedDateKey(
+    null,
+  );
+}
+
+if (!isCalendarMounted) {
+  return (
+    <div className="mt-5">
+      <div className="flex min-h-[420px] items-center justify-center rounded-[28px] border border-white/10 bg-white/[0.04]">
+        <div className="text-center">
+          <span className="mx-auto block h-9 w-9 animate-spin rounded-full border-4 border-white/10 border-t-[#9688ff]" />
+
+          <p className="mt-5 text-sm font-black text-white/45">
+            캘린더를 불러오고 있어요.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
 
   return (
     <div className="mt-5 space-y-4">
@@ -265,7 +314,8 @@ export default function ProfileCalendar({
         }
       />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.4fr)_380px]">
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.4fr)_380px]">
+        <div className="min-w-0 space-y-4">
         <section className="rounded-[28px] border border-white/10 bg-white/[0.04] p-4 md:p-6">
           <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -421,6 +471,27 @@ export default function ProfileCalendar({
           </footer>
         </section>
 
+        <DailyJournalBook
+          entries={dailyJournalEntries}
+          isLoading={journalBookLoading}
+          onOpenEntry={(entry) => {
+            const entryDate = new Date(
+              `${entry.journalDate}T12:00:00`,
+            );
+
+            if (Number.isNaN(entryDate.getTime())) {
+              return;
+            }
+
+            setVisibleMonth(
+              createMonthAnchor(entryDate),
+            );
+            setSelectedDateKey(entry.journalDate);
+            void onLoadDailyJournal(entryDate);
+          }}
+        />
+        </div>
+
         <SelectedDayTimeline
           selectedDay={selectedDay}
           dailyJournal={dailyJournal}
@@ -428,15 +499,557 @@ export default function ProfileCalendar({
           journalSaving={journalSaving}
           journalSaved={journalSaved}
           journalExists={journalExists}
-          onChangeDailyJournal={
-            onChangeDailyJournal
-          }
+          onChangeDailyJournal={onChangeDailyJournal}
         />
-
       </div>
     </div>
   );
 }
+
+
+type DailyJournalBookProps = {
+  entries:
+    DailyJournalBookEntry[];
+
+  isLoading: boolean;
+
+  onOpenEntry: (
+    entry:
+      DailyJournalBookEntry,
+  ) => void;
+};
+
+function DailyJournalBook({
+  entries,
+  isLoading,
+  onOpenEntry,
+}: DailyJournalBookProps) {
+  const [
+    currentPage,
+    setCurrentPage,
+  ] = useState(0);
+
+  const [
+    pageDirection,
+    setPageDirection,
+  ] = useState<
+    "previous" |
+    "next" |
+    null
+  >(null);
+
+  const safePage =
+    entries.length === 0
+      ? 0
+      : Math.min(
+          currentPage,
+          entries.length - 1,
+        );
+
+  const currentEntry =
+    entries[
+      safePage
+    ] ?? null;
+
+  useEffect(() => {
+    if (
+      entries.length === 0
+    ) {
+      setCurrentPage(0);
+      return;
+    }
+
+    setCurrentPage(
+      (previous) =>
+        Math.min(
+          previous,
+          entries.length - 1,
+        ),
+    );
+  }, [
+    entries.length,
+  ]);
+
+  function movePage(
+    direction:
+      | "previous"
+      | "next",
+  ) {
+    if (
+      entries.length <= 1
+    ) {
+      return;
+    }
+
+    setPageDirection(
+      direction,
+    );
+
+    setCurrentPage(
+      (previous) => {
+        if (
+          direction ===
+          "previous"
+        ) {
+          return previous === 0
+            ? entries.length - 1
+            : previous - 1;
+        }
+
+        return (
+          previous ===
+          entries.length - 1
+            ? 0
+            : previous + 1
+        );
+      },
+    );
+
+    window.setTimeout(
+      () => {
+        setPageDirection(
+          null,
+        );
+      },
+      650,
+    );
+  }
+
+  function formatBookDate(
+    journalDate: string,
+  ) {
+    const date =
+      new Date(
+        `${journalDate}T12:00:00`,
+      );
+
+    if (
+      Number.isNaN(
+        date.getTime(),
+      )
+    ) {
+      return journalDate;
+    }
+
+    return date.toLocaleDateString(
+      "ko-KR",
+      {
+        year:
+          "numeric",
+        month:
+          "long",
+        day:
+          "numeric",
+        weekday:
+          "long",
+      },
+    );
+  }
+
+  return (
+    <section className="overflow-hidden rounded-[28px] border border-[#8f7cff]/20 bg-[linear-gradient(145deg,rgba(84,63,45,0.34),rgba(20,18,29,0.96))] p-4 shadow-[0_25px_70px_rgba(0,0,0,0.34)] sm:p-6">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-black tracking-[0.2em] text-[#c9b18d]">
+            DAILY JOURNAL BOOK
+          </p>
+
+          <h3 className="mt-2 text-2xl font-black text-white md:text-3xl">
+            한줄일기 모아보기
+          </h3>
+
+          <p className="mt-2 text-sm font-bold leading-6 text-white/42">
+            날짜별 기록을 책장처럼 넘겨보세요.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="rounded-full border border-white/10 bg-black/20 px-4 py-2 text-xs font-black text-white/60">
+            총 {entries.length}페이지
+          </span>
+
+          {entries.length > 0 && (
+            <span className="rounded-full bg-[#8b75e9]/15 px-4 py-2 text-xs font-black text-[#c5bbff]">
+              {safePage + 1}
+              {" / "}
+              {entries.length}
+            </span>
+          )}
+        </div>
+      </header>
+
+      {isLoading ? (
+        <div className="mt-6 flex min-h-[330px] items-center justify-center rounded-[26px] border border-white/10 bg-black/20">
+          <p className="text-sm font-black text-white/45">
+            일기장을 펼치고 있어요.
+          </p>
+        </div>
+      ) : !currentEntry ? (
+        <div className="mt-6 flex min-h-[330px] flex-col items-center justify-center rounded-[26px] border border-dashed border-white/10 bg-black/15 px-6 text-center">
+          <span className="text-5xl">
+            📖
+          </span>
+
+          <p className="mt-5 text-lg font-black text-white/65">
+            아직 작성된 일기가 없어요.
+          </p>
+
+          <p className="mt-2 text-sm font-bold leading-6 text-white/35">
+            캘린더에서 날짜를 선택하고
+            <br />
+            첫 기록을 남겨보세요.
+          </p>
+        </div>
+      ) : (
+        <div className="relative mt-5">
+          <div
+            className={`hoo-journal-book-page relative mx-auto min-h-[520px] max-w-[520px] overflow-hidden rounded-[24px] border border-[#d2b98d]/45 bg-[#eee1c3] shadow-[0_24px_55px_rgba(0,0,0,0.38)] ${
+              pageDirection ===
+              "next"
+                ? "hoo-journal-page-next"
+                : pageDirection ===
+                    "previous"
+                  ? "hoo-journal-page-previous"
+                  : ""
+            }`}
+          >
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 top-[178px] z-10 h-px bg-[#8e734d]/25 shadow-[0_0_18px_rgba(70,50,24,0.24)]"
+            />
+
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 bg-[repeating-linear-gradient(0deg,transparent_0px,transparent_31px,rgba(103,80,46,0.09)_32px)]"
+            />
+
+            {pageDirection && (
+              <div
+                aria-hidden="true"
+                className={`hoo-journal-turning-sheet pointer-events-none absolute inset-0 z-30 overflow-hidden bg-[#eee1c3] ${
+                  pageDirection === "next"
+                    ? "hoo-journal-turn-next"
+                    : "hoo-journal-turn-previous"
+                }`}
+              >
+                <div className="absolute inset-0 bg-[repeating-linear-gradient(0deg,transparent_0px,transparent_31px,rgba(103,80,46,0.10)_32px)]" />
+                <div className="hoo-journal-sheet-light absolute inset-y-0 w-[42%]" />
+                <div className="hoo-journal-sheet-shadow absolute inset-y-0 w-[28%]" />
+                <div className="absolute inset-x-0 top-[178px] h-px bg-[#8e734d]/20" />
+              </div>
+            )}
+
+            <div className="relative z-10 flex min-h-[520px] flex-col">
+              <article className="border-b border-[#9e8258]/20 px-7 py-6 text-[#4d402f] sm:px-8">
+                <p className="text-xs font-black tracking-[0.18em] text-[#8f7550]">
+                  HOO DAILY JOURNAL
+                </p>
+
+                <div className="mt-5 flex items-end justify-between gap-4">
+                <div>
+                <p className="text-5xl font-black leading-none text-[#5d4a31]">
+                  {String(
+                    new Date(
+                      `${currentEntry.journalDate}T12:00:00`,
+                    ).getDate(),
+                  ).padStart(
+                    2,
+                    "0",
+                  )}
+                </p>
+
+                <p className="mt-3 text-sm font-black leading-6 sm:text-base">
+                  {formatBookDate(
+                    currentEntry.journalDate,
+                  )}
+                </p>
+
+                </div>
+
+                <div>
+                  <span className="inline-flex rounded-full border border-[#987c51]/25 bg-white/25 px-4 py-2 text-xs font-black text-[#715b3c]">
+                    PAGE {safePage + 1}
+                  </span>
+                </div>
+                </div>
+              </article>
+
+              <article className="flex min-h-[340px] flex-1 flex-col p-7 text-[#453a2b] sm:p-8">
+                <p className="text-xs font-black tracking-[0.16em] text-[#937852]">
+                  TODAY&apos;S STORY
+                </p>
+
+                <p className="mt-6 max-h-[230px] flex-1 overflow-y-auto whitespace-pre-wrap break-words pr-1 text-base font-bold leading-8 [scrollbar-width:thin] sm:text-lg">
+                  {currentEntry.content}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenEntry(
+                      currentEntry,
+                    )
+                  }
+                  className="mt-7 self-end rounded-full border border-[#826943]/25 bg-white/30 px-5 py-2.5 text-xs font-black text-[#665137] transition hover:bg-white/50"
+                >
+                  이 날짜 열기
+                </button>
+              </article>
+            </div>
+          </div>
+
+          {entries.length > 1 && (
+            <div className="mt-5 flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  movePage(
+                    "previous",
+                  )
+                }
+                className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-2xl font-black text-white/70 transition hover:border-[#9b8cff]/40 hover:bg-[#806fe8]/15 hover:text-white"
+                aria-label="이전 일기"
+              >
+                ‹
+              </button>
+
+              <div className="flex max-w-[240px] gap-1.5 overflow-hidden">
+                {entries
+                  .slice(
+                    Math.max(
+                      0,
+                      safePage - 2,
+                    ),
+                    Math.max(
+                      5,
+                      safePage + 3,
+                    ),
+                  )
+                  .map(
+                    (
+                      entry,
+                    ) => {
+                      const index =
+                        entries.findIndex(
+                          (
+                            candidate,
+                          ) =>
+                            candidate
+                              .journalDate ===
+                            entry
+                              .journalDate,
+                        );
+
+                      return (
+                        <button
+                          key={
+                            entry.journalDate
+                          }
+                          type="button"
+                          onClick={() =>
+                            setCurrentPage(
+                              index,
+                            )
+                          }
+                          className={`h-2.5 rounded-full transition-all ${
+                            index ===
+                            safePage
+                              ? "w-7 bg-[#9d8dff]"
+                              : "w-2.5 bg-white/20 hover:bg-white/40"
+                          }`}
+                          aria-label={`${formatBookDate(
+                            entry.journalDate,
+                          )} 일기 열기`}
+                        />
+                      );
+                    },
+                  )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() =>
+                  movePage(
+                    "next",
+                  )
+                }
+                className="flex h-12 w-12 items-center justify-center rounded-full border border-white/10 bg-white/[0.06] text-2xl font-black text-white/70 transition hover:border-[#9b8cff]/40 hover:bg-[#806fe8]/15 hover:text-white"
+                aria-label="다음 일기"
+              >
+                ›
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      <style jsx>{`
+        .hoo-journal-book-page {
+          perspective: 1500px;
+          transform-style: preserve-3d;
+        }
+
+        @keyframes journal-content-next {
+          0%, 42% {
+            opacity: 0.36;
+            filter: brightness(0.86);
+          }
+
+          100% {
+            opacity: 1;
+            filter: brightness(1);
+          }
+        }
+
+        @keyframes journal-content-previous {
+          0%, 42% {
+            opacity: 0.4;
+            filter: brightness(0.88);
+          }
+
+          100% {
+            opacity: 1;
+            filter: brightness(1);
+          }
+        }
+
+        @keyframes journal-sheet-next {
+          0% {
+            opacity: 1;
+            transform: rotateY(0deg) skewY(0deg);
+            box-shadow: -4px 0 12px rgba(45, 31, 16, 0.12);
+          }
+
+          45% {
+            opacity: 1;
+            transform: rotateY(-58deg) skewY(0.6deg);
+            box-shadow: -28px 7px 38px rgba(45, 31, 16, 0.38);
+          }
+
+          82% {
+            opacity: 0.96;
+            transform: rotateY(-94deg) skewY(0.25deg);
+            box-shadow: -10px 2px 24px rgba(45, 31, 16, 0.28);
+          }
+
+          100% {
+            opacity: 0;
+            transform: rotateY(-108deg) skewY(0deg);
+            box-shadow: none;
+          }
+        }
+
+        @keyframes journal-sheet-previous {
+          0% {
+            opacity: 1;
+            transform: rotateY(0deg) skewY(0deg);
+            box-shadow: 4px 0 12px rgba(45, 31, 16, 0.12);
+          }
+
+          45% {
+            opacity: 1;
+            transform: rotateY(58deg) skewY(-0.6deg);
+            box-shadow: 28px 7px 38px rgba(45, 31, 16, 0.38);
+          }
+
+          82% {
+            opacity: 0.96;
+            transform: rotateY(94deg) skewY(-0.25deg);
+            box-shadow: 10px 2px 24px rgba(45, 31, 16, 0.28);
+          }
+
+          100% {
+            opacity: 0;
+            transform: rotateY(108deg) skewY(0deg);
+            box-shadow: none;
+          }
+        }
+
+        @keyframes journal-sheet-glint {
+          0% {
+            opacity: 0;
+            transform: translateX(-45%);
+          }
+
+          38% {
+            opacity: 0.7;
+          }
+
+          100% {
+            opacity: 0;
+            transform: translateX(185%);
+          }
+        }
+
+        @keyframes journal-sheet-shadow {
+          0% {
+            opacity: 0.08;
+          }
+
+          52% {
+            opacity: 0.48;
+          }
+
+          100% {
+            opacity: 0;
+          }
+        }
+
+        .hoo-journal-page-next {
+          animation: journal-content-next 620ms ease-out;
+        }
+
+        .hoo-journal-page-previous {
+          animation: journal-content-previous 620ms ease-out;
+        }
+
+        .hoo-journal-turning-sheet {
+          backface-visibility: hidden;
+          transform-style: preserve-3d;
+          will-change: transform, opacity, box-shadow;
+        }
+
+        .hoo-journal-turn-next {
+          left: 0;
+          transform-origin: left center;
+          animation: journal-sheet-next 620ms cubic-bezier(0.42, 0, 0.18, 1) forwards;
+        }
+
+        .hoo-journal-turn-previous {
+          right: 0;
+          transform-origin: right center;
+          animation: journal-sheet-previous 620ms cubic-bezier(0.42, 0, 0.18, 1) forwards;
+        }
+
+        .hoo-journal-sheet-light {
+          left: 3%;
+          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+          animation: journal-sheet-glint 620ms ease-in-out forwards;
+        }
+
+        .hoo-journal-sheet-shadow {
+          right: 0;
+          background: linear-gradient(90deg, transparent, rgba(72, 49, 24, 0.4));
+          animation: journal-sheet-shadow 620ms ease-in-out forwards;
+        }
+
+        @media (
+          prefers-reduced-motion:
+            reduce
+        ) {
+          .hoo-journal-page-next,
+          .hoo-journal-page-previous,
+          .hoo-journal-turning-sheet,
+          .hoo-journal-sheet-light,
+          .hoo-journal-sheet-shadow {
+            animation: none;
+          }
+        }
+      `}</style>
+    </section>
+  );
+}
+
 
 type InsightCardProps = {
   message: string;

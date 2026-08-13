@@ -12,11 +12,19 @@ import type {
   FocusStreak,
   ProfileTab,
 } from "../types/focus";
+
 import ProfileAchievements from "./ProfileAchievements";
 import ProfileCalendar from "./ProfileCalendar";
 import ProfileHeader from "./ProfileHeader";
 import ProfileNavigation from "./ProfileNavigation";
 import ProfileOverview from "./ProfileOverview";
+
+export type DailyJournalBookEntry = {
+  journalDate: string;
+  content: string;
+  updatedAt: string;
+};
+
 type ProfileModalProps = {
   isOpen: boolean;
   activeTab: ProfileTab;
@@ -27,18 +35,35 @@ type ProfileModalProps = {
   nicknameError: string | null;
   maxNicknameLength: number;
 
-  statistics: FocusStatistics | null;
-  streak: FocusStreak | null;
-  history: FocusHistory[];
+  statistics:
+    FocusStatistics | null;
 
-  profileImageUrl: string | null;
-  isProfileImageLoading: boolean;
-  profileImageError: string | null;
+  streak:
+    FocusStreak | null;
+
+  history:
+    FocusHistory[];
+
+  profileImageUrl:
+    string | null;
+
+  isProfileImageLoading:
+    boolean;
+
+  profileImageError:
+    string | null;
 
   profileImageInputRef:
-    RefObject<HTMLInputElement | null>;
+    RefObject<
+      HTMLInputElement | null
+    >;
 
   dailyJournal: string;
+
+  dailyJournalEntries:
+    DailyJournalBookEntry[];
+
+  journalBookLoading: boolean;
   journalLoading: boolean;
   journalSaving: boolean;
   journalSaved: boolean;
@@ -46,70 +71,91 @@ type ProfileModalProps = {
 
   onClose: () => void;
 
-  onStartNicknameEditing: () => void;
-  onCancelNicknameEditing: () => void;
+  onStartNicknameEditing:
+    () => void;
+
+  onCancelNicknameEditing:
+    () => void;
 
   onChangeNickname:
-    ChangeEventHandler<HTMLInputElement>;
+    ChangeEventHandler<
+      HTMLInputElement
+    >;
 
-  onSaveNickname: () => void;
+  onSaveNickname:
+    () => void;
 
-  onTabChange:
-    (tab: ProfileTab) => void;
+  onTabChange: (
+    tab: ProfileTab,
+  ) => void;
 
-  onOpenImagePicker: () => void;
+  onOpenImagePicker:
+    () => void;
 
   onChangeImage:
-    ChangeEventHandler<HTMLInputElement>;
+    ChangeEventHandler<
+      HTMLInputElement
+    >;
 
-  onRemoveImage: () => void;
+  onRemoveImage:
+    () => void;
 
-  onLoadDailyJournal:
-    (targetDate: Date) =>
-      void | Promise<void>;
+  onLoadDailyJournal: (
+    targetDate: Date,
+  ) => void | Promise<void>;
 
   onChangeDailyJournal: (
     event:
-      ChangeEvent<HTMLTextAreaElement>,
+      ChangeEvent<
+        HTMLTextAreaElement
+      >,
     targetDate: Date,
   ) => void;
 };
 
-
 export default function ProfileModal({
   isOpen,
   activeTab,
+
   nickname,
   nicknameDraft,
   isNicknameEditing,
   nicknameError,
   maxNicknameLength,
+
   statistics,
   streak,
   history,
+
   profileImageUrl,
   isProfileImageLoading,
   profileImageError,
   profileImageInputRef,
+
   dailyJournal,
+  dailyJournalEntries,
+  journalBookLoading,
   journalLoading,
   journalSaving,
   journalSaved,
   journalExists,
+
   onClose,
+
   onStartNicknameEditing,
   onCancelNicknameEditing,
   onChangeNickname,
   onSaveNickname,
+
   onTabChange,
+
   onOpenImagePicker,
   onChangeImage,
   onRemoveImage,
+
   onLoadDailyJournal,
   onChangeDailyJournal,
 }: ProfileModalProps) {
-
-
   if (!isOpen) {
     return null;
   }
@@ -129,11 +175,12 @@ export default function ProfileModal({
         }
       }}
     >
-      <section className="relative my-auto max-h-[calc(100vh-32px)] w-full max-w-[1080px] overflow-y-auto rounded-[32px] border border-white/15 bg-[linear-gradient(145deg,rgba(13,19,32,0.98),rgba(6,10,19,0.98))] p-5 text-white shadow-[0_35px_120px_rgba(0,0,0,0.72)] [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:p-8">
+      <section className="relative my-auto max-h-[calc(100dvh-32px)] w-full max-w-[1080px] overflow-y-auto rounded-[32px] border border-white/15 bg-[linear-gradient(145deg,rgba(13,19,32,0.98),rgba(6,10,19,0.98))] p-5 text-white shadow-[0_35px_120px_rgba(0,0,0,0.72)] [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:p-8">
         <div
           aria-hidden="true"
           className="pointer-events-none absolute -left-28 -top-28 h-72 w-72 rounded-full bg-[#6d5ee7]/20 blur-[100px]"
         />
+
         <div
           aria-hidden="true"
           className="pointer-events-none absolute -bottom-32 -right-28 h-80 w-80 rounded-full bg-[#294a96]/20 blur-[110px]"
@@ -150,7 +197,9 @@ export default function ProfileModal({
 
         <div className="relative z-10">
           <ProfileHeader
-            nickname={nickname}
+            nickname={
+              nickname
+            }
             nicknameDraft={
               nicknameDraft
             }
@@ -199,53 +248,79 @@ export default function ProfileModal({
           />
 
           <ProfileNavigation
-            activeTab={activeTab}
-            onChange={onTabChange}
+            activeTab={
+              activeTab
+            }
+            onChange={
+              onTabChange
+            }
           />
 
-          {activeTab === "overview" && (
+          {activeTab ===
+            "overview" && (
             <ProfileOverview
-              statistics={statistics}
-              streak={streak}
-              history={history}
+              statistics={
+                statistics
+              }
+              streak={
+                streak
+              }
+              history={
+                history
+              }
             />
           )}
 
-        {activeTab === "calendar" && (
-  <ProfileCalendar
-    history={history}
-    dailyJournal={
-      dailyJournal
-    }
-    journalLoading={
-      journalLoading
-    }
-    journalSaving={
-      journalSaving
-    }
-    journalSaved={
-      journalSaved
-    }
-    journalExists={
-      journalExists
-    }
-    onLoadDailyJournal={
-      onLoadDailyJournal
-    }
-    onChangeDailyJournal={
-      onChangeDailyJournal
-    }
-  />
-)}
+          {activeTab ===
+            "calendar" && (
+            <ProfileCalendar
+              history={
+                history
+              }
+              dailyJournal={
+                dailyJournal
+              }
+              dailyJournalEntries={
+                dailyJournalEntries
+              }
+              journalBookLoading={
+                journalBookLoading
+              }
+              journalLoading={
+                journalLoading
+              }
+              journalSaving={
+                journalSaving
+              }
+              journalSaved={
+                journalSaved
+              }
+              journalExists={
+                journalExists
+              }
+              onLoadDailyJournal={
+                onLoadDailyJournal
+              }
+              onChangeDailyJournal={
+                onChangeDailyJournal
+              }
+            />
+          )}
 
           {activeTab ===
-  "achievements" && (
- <ProfileAchievements
-  statistics={statistics}
-  streak={streak}
-  history={history}
-/>
-)}
+            "achievements" && (
+            <ProfileAchievements
+              statistics={
+                statistics
+              }
+              streak={
+                streak
+              }
+              history={
+                history
+              }
+            />
+          )}
         </div>
       </section>
     </div>

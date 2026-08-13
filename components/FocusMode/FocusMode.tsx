@@ -66,6 +66,8 @@ import {
 type FocusModeProps = {
   isLoggedIn: boolean;
 
+  focusAlarmVolume: number;
+
   showWeather: boolean;
   weatherCode?: number;
   temperatureCelsius?: number;
@@ -100,6 +102,7 @@ type FocusModeProps = {
   };
 };
 
+
 function formatJournalDate(
   date: Date,
 ) {
@@ -121,6 +124,7 @@ function formatJournalDate(
 
 export default function FocusMode({
   isLoggedIn,
+  focusAlarmVolume,
   showWeather,
   weatherCode,
   temperatureCelsius,
@@ -136,6 +140,7 @@ export default function FocusMode({
   showFloatingButtons,
   floatingButtonsTarget,
 }: FocusModeProps) {
+
 
   const supabase = useMemo(
     () => createClient(),
@@ -174,10 +179,28 @@ export default function FocusMode({
     setProfileHistory,
   ] = useState<FocusHistory[]>([]);
 
-  const [
+ type DailyJournalBookEntry = {
+  journalDate: string;
+  content: string;
+  updatedAt: string;
+};
+
+const [
   dailyJournal,
   setDailyJournal,
 ] = useState("");
+
+const [
+  dailyJournalEntries,
+  setDailyJournalEntries,
+] = useState<
+  DailyJournalBookEntry[]
+>([]);
+
+const [
+  journalBookLoading,
+  setJournalBookLoading,
+] = useState(false);
 
 const [
   journalLoading,
@@ -198,6 +221,7 @@ const [
   journalExists,
   setJournalExists,
 ] = useState(false);
+
 
 const journalSaveTimerRef =
   useRef<
@@ -373,155 +397,355 @@ const {
   ]);
 
 
-  const saveDailyJournal =
-    useCallback(
-      async (
-        targetDate: Date,
-        content: string,
-      ) => {
-        const journalDate =
-          formatJournalDate(
-            targetDate,
-          );
+  const loadDailyJournalEntries =
+  useCallback(async () => {
+    setJournalBookLoading(true);
 
-        const trimmedContent =
-          content.trim();
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } =
+        await supabase.auth.getUser();
 
-        const isActiveDate = () =>
-          activeJournalDateRef.current ===
-          journalDate;
+      if (userError) {
+        throw userError;
+      }
 
-        if (isActiveDate()) {
-          setJournalSaving(true);
-          setJournalSaved(false);
+      /*
+       * 비로그인 상태:
+       * 날짜별 localStorage 일기를 모은다.
+       */
+      if (!user) {
+        const entries:
+          DailyJournalBookEntry[] = [];
+
+        for (
+          let index = 0;
+          index <
+          window.localStorage.length;
+          index += 1
+        ) {
+          const key =
+            window.localStorage.key(
+              index,
+            );
+
+          if (
+            !key?.startsWith(
+              "hoo-daily-journal-",
+            )
+          ) {
+            continue;
+          }
+
+          const journalDate =
+            key.replace(
+              "hoo-daily-journal-",
+              "",
+            );
+
+          const content =
+            window.localStorage.getItem(
+              key,
+            ) ?? "";
+
+          if (!content.trim()) {
+            continue;
+          }
+
+          entries.push({
+            journalDate,
+            content,
+            updatedAt:
+              new Date(
+                `${journalDate}T00:00:00`,
+              ).toISOString(),
+          });
         }
 
-        try {
-          const {
-            data: { user },
-            error: userError,
-          } =
-            await supabase.auth.getUser();
+        entries.sort(
+          (a, b) =>
+            b.journalDate.localeCompare(
+              a.journalDate,
+            ),
+        );
 
-          if (userError) {
-            throw userError;
-          }
+        setDailyJournalEntries(
+          entries,
+        );
 
-          /*
-           * 비로그인 상태에서는
-           * 날짜별 localStorage에 저장한다.
-           */
-          if (!user) {
-            const storageKey =
-              `hoo-daily-journal-${journalDate}`;
+        return;
+      }
 
-            if (!trimmedContent) {
-              window.localStorage.removeItem(
-                storageKey,
-              );
+      /*
+       * 로그인 상태:
+       * Supabase에서 일기 전체를 불러온다.
+       */
+      const {
+        data,
+        error,
+      } =
+        await supabase
+          .from("daily_journals")
+          .select(
+            `
+              journal_date,
+              content,
+              updated_at
+            `,
+          )
+          .eq(
+            "user_id",
+            user.id,
+          )
+          .order(
+            "journal_date",
+            {
+              ascending: false,
+            },
+          );
 
-              if (isActiveDate()) {
-                setJournalExists(false);
-              }
-            } else {
-              window.localStorage.setItem(
-                storageKey,
-                content,
-              );
+      if (error) {
+        throw error;
+      }
 
-              if (isActiveDate()) {
-                setJournalExists(true);
-              }
-            }
+      const entries:
+        DailyJournalBookEntry[] =
+          Array.isArray(data)
+            ? data.reduce<
+                DailyJournalBookEntry[]
+              >(
+                (
+                  result,
+                  journal,
+                ) => {
+                  const journalDate =
+                    typeof journal
+                      .journal_date ===
+                    "string"
+                      ? journal
+                          .journal_date
+                      : "";
 
-            if (isActiveDate()) {
-              setJournalSaved(true);
-            }
+                  const content =
+                    typeof journal
+                      .content ===
+                    "string"
+                      ? journal.content
+                      : "";
 
-            return;
-          }
+                  if (
+                    !journalDate ||
+                    !content.trim()
+                  ) {
+                    return result;
+                  }
 
-          /*
-           * 내용이 비어 있으면
-           * 해당 날짜의 일지를 삭제한다.
-           */
+                  result.push({
+                    journalDate,
+                    content,
+
+                    updatedAt:
+                      typeof journal
+                        .updated_at ===
+                      "string"
+                        ? journal
+                            .updated_at
+                        : new Date()
+                            .toISOString(),
+                  });
+
+                  return result;
+                },
+                [],
+              )
+            : [];
+
+      setDailyJournalEntries(
+        entries,
+      );
+    } catch (error) {
+      console.error(
+        "한줄일기 목록을 불러오지 못했습니다.",
+        error,
+      );
+
+      setDailyJournalEntries(
+        [],
+      );
+    } finally {
+      setJournalBookLoading(false);
+    }
+  }, [supabase]);
+
+
+
+ const saveDailyJournal =
+  useCallback(
+    async (
+      targetDate: Date,
+      content: string,
+    ) => {
+      const journalDate =
+        formatJournalDate(
+          targetDate,
+        );
+
+      const trimmedContent =
+        content.trim();
+
+      const isActiveDate = () =>
+        activeJournalDateRef.current ===
+        journalDate;
+
+      if (isActiveDate()) {
+        setJournalSaving(true);
+        setJournalSaved(false);
+      }
+
+      try {
+        const {
+          data: { user },
+          error: userError,
+        } =
+          await supabase.auth.getUser();
+
+        if (userError) {
+          throw userError;
+        }
+
+        /*
+         * 비로그인 상태에서는
+         * 날짜별 localStorage에 저장한다.
+         */
+        if (!user) {
+          const storageKey =
+            `hoo-daily-journal-${journalDate}`;
+
           if (!trimmedContent) {
-            const {
-              error: deleteError,
-            } =
-              await supabase
-                .from("daily_journals")
-                .delete()
-                .eq(
-                  "user_id",
-                  user.id,
-                )
-                .eq(
-                  "journal_date",
-                  journalDate,
-                );
-
-            if (deleteError) {
-              throw deleteError;
-            }
+            window.localStorage.removeItem(
+              storageKey,
+            );
 
             if (isActiveDate()) {
               setJournalExists(false);
-              setJournalSaved(true);
             }
+          } else {
+            window.localStorage.setItem(
+              storageKey,
+              content,
+            );
 
-            return;
+            if (isActiveDate()) {
+              setJournalExists(true);
+            }
           }
 
-          /*
-           * 같은 사용자·같은 날짜의 일지는
-           * 한 개만 유지한다.
-           */
+          if (isActiveDate()) {
+            setJournalSaved(true);
+          }
+
+          await loadDailyJournalEntries();
+
+          return;
+        }
+
+        /*
+         * 내용이 비어 있으면
+         * 해당 날짜의 일지를 삭제한다.
+         */
+        if (!trimmedContent) {
           const {
-            error: upsertError,
+            error: deleteError,
           } =
             await supabase
               .from("daily_journals")
-              .upsert(
-                {
-                  user_id: user.id,
-                  journal_date:
-                    journalDate,
-                  content,
-                  updated_at:
-                    new Date().toISOString(),
-                },
-                {
-                  onConflict:
-                    "user_id,journal_date",
-                },
+              .delete()
+              .eq(
+                "user_id",
+                user.id,
+              )
+              .eq(
+                "journal_date",
+                journalDate,
               );
 
-          if (upsertError) {
-            throw upsertError;
+          if (deleteError) {
+            throw deleteError;
           }
 
           if (isActiveDate()) {
-            setJournalExists(true);
+            setJournalExists(false);
             setJournalSaved(true);
           }
-        } catch (error) {
-          console.error(
-            "오늘의 일지를 저장하지 못했습니다.",
-            error,
-          );
 
-          if (isActiveDate()) {
-            setJournalSaved(false);
-          }
-        } finally {
-          if (isActiveDate()) {
-            setJournalSaving(false);
-          }
+          await loadDailyJournalEntries();
+
+          return;
         }
-      },
-      [supabase],
-    );
+
+        /*
+         * 같은 사용자·같은 날짜의 일지는
+         * 한 개만 유지한다.
+         */
+        const {
+          error: upsertError,
+        } =
+          await supabase
+            .from("daily_journals")
+            .upsert(
+              {
+                user_id:
+                  user.id,
+
+                journal_date:
+                  journalDate,
+
+                content,
+
+                updated_at:
+                  new Date()
+                    .toISOString(),
+              },
+              {
+                onConflict:
+                  "user_id,journal_date",
+              },
+            );
+
+        if (upsertError) {
+          throw upsertError;
+        }
+
+        if (isActiveDate()) {
+          setJournalExists(true);
+          setJournalSaved(true);
+        }
+
+        await loadDailyJournalEntries();
+      } catch (error) {
+        console.error(
+          "오늘의 일지를 저장하지 못했습니다.",
+          error,
+        );
+
+        if (isActiveDate()) {
+          setJournalSaved(false);
+        }
+      } finally {
+        if (isActiveDate()) {
+          setJournalSaving(false);
+        }
+      }
+    },
+    [
+      supabase,
+      loadDailyJournalEntries,
+    ],
+  );
+
+
 
   const flushPendingDailyJournal =
     useCallback(async () => {
@@ -1518,14 +1742,25 @@ useEffect(() => {
   isLoggedIn,
 ]);
 
-  useEffect(() => {
-    if (isProfileOpen) {
-      void loadProfileImage();
-    }
-  }, [
-    isProfileOpen,
-    loadProfileImage,
-  ]);
+ useEffect(() => {
+  if (!isProfileOpen) {
+    return;
+  }
+
+  void loadProfileImage();
+
+  if (
+    profileTab === "calendar"
+  ) {
+    void loadDailyJournalEntries();
+  }
+}, [
+  isProfileOpen,
+  profileTab,
+  loadProfileImage,
+  loadDailyJournalEntries,
+]);
+
 
   useEffect(() => {
     if (
@@ -1591,8 +1826,7 @@ useEffect(() => {
     view,
     wasRunningBeforeExitConfirm,
   ]);
-
-  useEffect(() => {
+useEffect(() => {
   if (
     !isOpen ||
     view !== "timer" ||
@@ -1625,7 +1859,9 @@ useEffect(() => {
       nextRemainingSeconds,
     );
 
-    if (nextRemainingSeconds > 0) {
+    if (
+      nextRemainingSeconds > 0
+    ) {
       return;
     }
 
@@ -1634,7 +1870,9 @@ useEffect(() => {
     setIsRunning(false);
     setFocusEndsAt(null);
 
-    playTimerAlarm();
+    playTimerAlarm(
+      focusAlarmVolume,
+    );
 
     saveFocusHistory(
       initialSeconds,
@@ -1661,22 +1899,14 @@ useEffect(() => {
     }
   }
 
-  window.addEventListener(
-    "focus",
-    syncFocusTimer,
-  );
-
   document.addEventListener(
     "visibilitychange",
     handleVisibilityChange,
   );
 
   return () => {
-    window.clearInterval(interval);
-
-    window.removeEventListener(
-      "focus",
-      syncFocusTimer,
+    window.clearInterval(
+      interval,
     );
 
     document.removeEventListener(
@@ -1686,12 +1916,12 @@ useEffect(() => {
   };
 }, [
   isOpen,
-  isRunning,
   view,
+  isRunning,
   focusEndsAt,
   initialSeconds,
+  focusAlarmVolume,
 ]);
-
 
 
   useEffect(() => {
@@ -1742,86 +1972,136 @@ useEffect(() => {
 />
 
 
-      <ProfileModal
-        isOpen={isProfileOpen}
-        activeTab={profileTab}
-        nickname={nickname}
-        nicknameDraft={
-          nicknameDraft
-        }
-        isNicknameEditing={
-          isNicknameEditing
-        }
-        nicknameError={
-          nicknameError
-        }
-        maxNicknameLength={
-          maxNicknameLength
-        }
-        statistics={
-          profileStatistics
-        }
-        streak={profileStreak}
-        history={profileHistory}
-        dailyJournal={
-          dailyJournal
-        }
-        journalLoading={
-          journalLoading
-        }
-        journalSaving={
-          journalSaving
-        }
-        journalSaved={
-          journalSaved
-        }
-        journalExists={
-          journalExists
-        }
-        profileImageUrl={
-          profileImageUrl
-        }
-        isProfileImageLoading={
-          isProfileImageLoading
-        }
-        profileImageError={
-          profileImageError
-        }
-        profileImageInputRef={
-          profileImageInputRef
-        }
-        onClose={closeProfile}
-        onStartNicknameEditing={
-          startNicknameEditing
-        }
-        onCancelNicknameEditing={
-          cancelNicknameEditing
-        }
-        onChangeNickname={
-          changeNicknameDraft
-        }
-        onSaveNickname={
-          saveNickname
-        }
-        onTabChange={
-          setProfileTab
-        }
-        onOpenImagePicker={
-          openProfileImagePicker
-        }
-        onChangeImage={
-          changeProfileImage
-        }
-        onRemoveImage={
-          removeProfileImage
-        }
-        onLoadDailyJournal={
-          loadDailyJournal
-        }
-        onChangeDailyJournal={
-          changeDailyJournal
-        }
-      />
+    <ProfileModal
+  isOpen={
+    isProfileOpen
+  }
+
+  activeTab={
+    profileTab
+  }
+
+  nickname={
+    nickname
+  }
+
+  nicknameDraft={
+    nicknameDraft
+  }
+
+  isNicknameEditing={
+    isNicknameEditing
+  }
+
+  nicknameError={
+    nicknameError
+  }
+
+  maxNicknameLength={
+    maxNicknameLength
+  }
+
+  statistics={
+    profileStatistics
+  }
+
+  streak={
+    profileStreak
+  }
+
+  history={
+    profileHistory
+  }
+
+  dailyJournal={
+    dailyJournal
+  }
+
+  dailyJournalEntries={
+    dailyJournalEntries
+  }
+
+  journalBookLoading={
+    journalBookLoading
+  }
+
+  journalLoading={
+    journalLoading
+  }
+
+  journalSaving={
+    journalSaving
+  }
+
+  journalSaved={
+    journalSaved
+  }
+
+  journalExists={
+    journalExists
+  }
+
+  profileImageUrl={
+    profileImageUrl
+  }
+
+  isProfileImageLoading={
+    isProfileImageLoading
+  }
+
+  profileImageError={
+    profileImageError
+  }
+
+  profileImageInputRef={
+    profileImageInputRef
+  }
+
+  onClose={
+    closeProfile
+  }
+
+  onStartNicknameEditing={
+    startNicknameEditing
+  }
+
+  onCancelNicknameEditing={
+    cancelNicknameEditing
+  }
+
+  onChangeNickname={
+    changeNicknameDraft
+  }
+
+  onSaveNickname={
+    saveNickname
+  }
+
+  onTabChange={
+    setProfileTab
+  }
+
+  onOpenImagePicker={
+    openProfileImagePicker
+  }
+
+  onChangeImage={
+    changeProfileImage
+  }
+
+  onRemoveImage={
+    removeProfileImage
+  }
+
+  onLoadDailyJournal={
+    loadDailyJournal
+  }
+
+  onChangeDailyJournal={
+    changeDailyJournal
+  }
+/>
+
 
       <TimerModal
         isOpen={isOpen}
