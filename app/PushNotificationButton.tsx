@@ -207,37 +207,51 @@ export default function PushNotificationButton() {
   }
 
   return (
-    <div className="fixed right-4 top-20 z-[10000] flex flex-col items-end gap-2">
-      {!isSubscribed ? (
-        <button
-          type="button"
-          onClick={() => {
-            void subscribeToPush();
-          }}
-          disabled={isLoading}
-          className="min-h-12 rounded-xl bg-[#7467d8] px-4 py-3 text-sm font-black text-white shadow-lg transition hover:bg-[#6558ca] disabled:cursor-wait disabled:opacity-60"
-        >
-          {isLoading
-            ? "연결 중..."
-            : "HOO 알림 켜기"}
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={() => {
+    <div>
+      <button
+        type="button"
+        onClick={() => {
+          if (isSubscribed) {
             void sendTestPush();
-          }}
-          disabled={isLoading}
-          className="min-h-12 rounded-xl bg-[#7467d8] px-4 py-3 text-sm font-black text-white shadow-lg transition hover:bg-[#6558ca] disabled:cursor-wait disabled:opacity-60"
-        >
-          {isLoading
-            ? "발송 중..."
-            : "테스트 알림 보내기"}
-        </button>
-      )}
+            return;
+          }
+
+          void subscribeToPush();
+        }}
+        disabled={isLoading}
+        className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition active:scale-[0.98] disabled:cursor-wait disabled:opacity-60"
+      >
+        <span className="flex min-w-0 items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#7467d8]/25 text-lg">
+            🔔
+          </span>
+
+          <span className="min-w-0">
+            <span className="block text-sm font-black text-white">
+              {isLoading
+                ? isSubscribed
+                  ? "발송 중..."
+                  : "연결 중..."
+                : isSubscribed
+                  ? "테스트 알림 보내기"
+                  : "HOO 알림 켜기"}
+            </span>
+
+            <span className="mt-0.5 block text-[10px] font-bold text-white/45">
+              {isSubscribed
+                ? "연결된 기기로 테스트 알림을 발송합니다."
+                : "이 기기에서 HOO 알림을 받습니다."}
+            </span>
+          </span>
+        </span>
+
+        <span className="shrink-0 text-base font-black text-white/35">
+          ›
+        </span>
+      </button>
 
       {message && (
-        <p className="max-w-64 rounded-lg bg-black/80 px-3 py-2 text-xs font-bold text-white">
+        <p className="mt-2 rounded-xl bg-black/35 px-3 py-2 text-[10px] font-bold leading-4 text-white/75">
           {message}
         </p>
       )}

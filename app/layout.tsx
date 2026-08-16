@@ -9,10 +9,7 @@ import {
 import "./globals.css";
 
 import PwaRegister from "./PwaRegister";
-
 import PwaInstallButton from "./PwaInstallButton";
-
-import PushNotificationButton from "./PushNotificationButton";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -79,16 +76,11 @@ export default function RootLayout({
       lang="ko"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-    <body className="flex min-h-full flex-col">
- 
- <PwaRegister />
-<PwaInstallButton />
-<PushNotificationButton />
-{children}
-
-</body>
-
-
+      <body className="flex min-h-full flex-col">
+        <PwaRegister />
+        <PwaInstallButton />
+        {children}
+      </body>
     </html>
   );
 }

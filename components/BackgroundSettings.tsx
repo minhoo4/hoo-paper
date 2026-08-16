@@ -10,23 +10,42 @@ export default function BackgroundSettings({
   onReset,
 }: BackgroundSettingsProps) {
   return (
-    <div className="fixed left-3 top-[calc(12px+var(--hoo-safe-top))] z-[9999] flex flex-col items-stretch gap-2 sm:left-6 sm:top-6 sm:flex-row sm:items-center">
-      <label className="flex min-h-10 cursor-pointer items-center justify-center whitespace-nowrap rounded-lg bg-white px-3 py-2 text-xs font-bold text-[#332f45] shadow transition active:scale-[0.98] sm:text-sm md:hover:bg-gray-100">
-        배경사진 변경
+    <div className="space-y-2">
+      <label className="flex min-h-12 w-full cursor-pointer items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition active:scale-[0.98]">
+        <span className="flex min-w-0 items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#7467d8]/25 text-lg">
+            🖼️
+          </span>
+
+          <span className="min-w-0">
+            <span className="block text-sm font-black text-white">
+              배경사진 변경
+            </span>
+
+            <span className="mt-0.5 block text-[10px] font-bold text-white/45">
+              기기에 저장된 사진을 선택합니다.
+            </span>
+          </span>
+        </span>
+
+        <span className="shrink-0 text-base font-black text-white/35">
+          ›
+        </span>
 
         <input
           type="file"
           accept="image/png,image/jpeg,image/webp"
           className="hidden"
           onChange={(event) => {
-            const file =
-              event.target.files?.[0];
+            const file = event.target.files?.[0];
 
             if (!file) {
               return;
             }
 
             onUpload(file);
+
+            event.currentTarget.value = "";
           }}
         />
       </label>
@@ -34,9 +53,27 @@ export default function BackgroundSettings({
       <button
         type="button"
         onClick={onReset}
-        className="min-h-10 whitespace-nowrap rounded-lg bg-gray-200 px-3 py-2 text-xs font-bold text-[#332f45] shadow transition active:scale-[0.98] sm:text-sm md:hover:bg-gray-300"
+        className="flex min-h-12 w-full items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition active:scale-[0.98]"
       >
-        기본 배경
+        <span className="flex min-w-0 items-center gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#7467d8]/25 text-lg">
+            ↺
+          </span>
+
+          <span className="min-w-0">
+            <span className="block text-sm font-black text-white">
+              기본 배경으로 복원
+            </span>
+
+            <span className="mt-0.5 block text-[10px] font-bold text-white/45">
+              HOO의 기본 배경을 적용합니다.
+            </span>
+          </span>
+        </span>
+
+        <span className="shrink-0 text-base font-black text-white/35">
+          ›
+        </span>
       </button>
     </div>
   );

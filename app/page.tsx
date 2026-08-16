@@ -7,10 +7,12 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import FocusMode from "@/components/FocusMode/FocusMode";
 import HooCommunityPanel from "@/components/HooCommunityPanel";
 
 import BackgroundSettings from "@/components/BackgroundSettings";
+import PushNotificationButton from "./PushNotificationButton";
 
 import Hoo2048Game from "@/components/Hoo2048Game";
 import {
@@ -1558,6 +1560,27 @@ useEffect(() => {
 
 const [minigameScreen, setMinigameScreen] =
   useState<MinigameScreen>("menu");
+
+useEffect(() => {
+  if (minigameScreen !== "sudoku") {
+    return;
+  }
+
+  const previousBodyOverflow =
+    document.body.style.overflow;
+  const previousHtmlOverflow =
+    document.documentElement.style.overflow;
+
+  document.body.style.overflow = "hidden";
+  document.documentElement.style.overflow = "hidden";
+
+  return () => {
+    document.body.style.overflow =
+      previousBodyOverflow;
+    document.documentElement.style.overflow =
+      previousHtmlOverflow;
+  };
+}, [minigameScreen]);
 
 const [hoo2048Difficulty, setHoo2048Difficulty] =
   useState<Hoo2048Difficulty>("easy");
@@ -9785,6 +9808,8 @@ function toggleSearchBar() {
   }
 
   if (!isSearchBarCollapsed) {
+    setIsUiOpacityOpen(false);
+
     setFloatingButtonsDirection(
       "toSearch",
     );
@@ -10484,11 +10509,6 @@ return (
       backgroundAttachment: "fixed",
     }}
   >
-    <BackgroundSettings
-      onUpload={handleBackgroundUpload}
-      onReset={handleBackgroundReset}
-    />
-
 {isSecretPinModalOpen && (
   <div className="fixed inset-0 z-[11000] flex items-center justify-center bg-black/50 px-5 backdrop-blur-sm">
     <div className="w-full max-w-sm rounded-[28px] bg-white p-7 shadow-2xl">
@@ -11013,7 +11033,7 @@ setSecretPinInput("");
      <div
   className={`relative mt-3 flex max-w-7xl items-center gap-4 rounded-2xl border border-white/20 bg-slate-900/80 px-5 py-3 shadow-2xl backdrop-blur-xl transition-[left,width,transform] duration-500 ease-in-out ${
     isSearchBarCollapsed
-      ? "left-3 w-[300px] translate-x-0"
+      ? "left-3 w-[calc(100%_-_24px)] -translate-x-[calc(100%_+_24px)] md:w-[300px] md:translate-x-0"
       : "left-1/2 w-[95%] -translate-x-1/2"
   }`}
 >
@@ -11088,7 +11108,7 @@ setSecretPinInput("");
         ? "border-[#8f7cff] bg-[#7467d8] shadow-[0_0_22px_rgba(116,103,216,0.65)]"
         : "border-white/20 bg-slate-800 hover:border-[#8f7cff] hover:bg-slate-700"
     }`}
-    aria-label="UI 불투명도 설정"
+    aria-label="설정 열기"
     aria-expanded={isUiOpacityOpen}
   >
     <Settings
@@ -11116,22 +11136,34 @@ setSecretPinInput("");
 
 
         </div>
+
+        {isSearchBarCollapsed && (
+          <button
+            ref={searchToggleButtonRef}
+            type="button"
+            onClick={toggleSearchBar}
+            className="fixed left-0 top-[calc(18px+var(--hoo-safe-top))] z-[10001] flex h-12 w-11 items-center justify-center rounded-r-2xl border border-l-0 border-white/20 bg-slate-900/90 text-base font-black text-white shadow-2xl backdrop-blur-xl transition active:scale-95 md:hidden"
+            aria-label="상단 검색바 펼치기"
+          >
+            ▶
+          </button>
+        )}
       </header>
 
       {isUiOpacityOpen && (
   <div
     ref={uiOpacityPanelRef}
-    className="fixed right-[5.2%] top-[74px] z-[10020] max-h-[calc(100dvh-90px)] w-[210px] overflow-y-auto overscroll-contain rounded-[26px] border border-[#8f7cff]/80 bg-[#111522]/95 px-5 pb-6 pt-5 text-white shadow-[0_24px_70px_rgba(0,0,0,0.5),0_0_28px_rgba(116,103,216,0.25)] backdrop-blur-2xl [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+    className="fixed right-4 top-[74px] z-[10020] max-h-[calc(100dvh-90px)] w-[calc(100vw-32px)] max-w-[360px] overflow-y-auto overscroll-contain rounded-[26px] border border-[#8f7cff]/80 bg-[#111522]/95 px-5 pb-6 pt-5 text-white shadow-[0_24px_70px_rgba(0,0,0,0.5),0_0_28px_rgba(116,103,216,0.25)] backdrop-blur-2xl [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden md:right-[5.2%] md:w-[210px]"
   >
 
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[10px] font-black tracking-[0.18em] text-white/45">
-                UI APPEARANCE
+                SETTINGS
               </p>
 
               <h2 className="mt-1 text-base font-black">
-                UI 불투명도
+                설정
               </h2>
             </div>
 
@@ -11141,13 +11173,125 @@ setSecretPinInput("");
                 setIsUiOpacityOpen(false)
               }
               className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white/75 transition hover:bg-white/15 hover:text-white"
-              aria-label="UI 불투명도 패널 닫기"
+              aria-label="설정 닫기"
             >
               <X
                 size={17}
                 strokeWidth={2.5}
               />
             </button>
+          </div>
+
+          <div className="mt-5 border-t border-white/10 pt-5 md:hidden">
+            <p className="text-[10px] font-black tracking-[0.16em] text-white/40">
+              SERVICE
+            </p>
+
+            <div className="mt-3 space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const latestNotice = notices[0];
+
+                  if (latestNotice) {
+                    localStorage.setItem(
+                      "lastReadNoticeId",
+                      String(latestNotice.id),
+                    );
+                  }
+
+                  setHasUnreadNotice(false);
+                  setIsUiOpacityOpen(false);
+                  setIsFeedbackOpen(false);
+                  setIsNoticeOpen(true);
+                }}
+                className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition active:scale-[0.98]"
+              >
+                <span className="flex items-center gap-3">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#7467d8]/25 text-lg">
+                    📢
+                  </span>
+
+                  <span>
+                    <span className="block text-sm font-black">
+                      공지사항
+                    </span>
+                    <span className="mt-0.5 block text-[10px] font-bold text-white/45">
+                      HOO의 새로운 소식을 확인합니다.
+                    </span>
+                  </span>
+                </span>
+
+                <span className="flex items-center gap-2">
+                  {hasUnreadNotice && notices.length > 0 && (
+                    <span className="rounded-full bg-rose-500 px-2 py-1 text-[9px] font-black text-white">
+                      NEW
+                    </span>
+                  )}
+                  <ChevronRight size={16} className="text-white/35" />
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setIsUiOpacityOpen(false);
+                  setIsNoticeOpen(false);
+                  setIsFeedbackOpen(true);
+                }}
+                className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition active:scale-[0.98]"
+              >
+                <span className="flex items-center gap-3">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#7467d8]/25 text-lg">
+                    💬
+                  </span>
+
+                  <span>
+                    <span className="block text-sm font-black">
+                      피드백 보내기
+                    </span>
+                    <span className="mt-0.5 block text-[10px] font-bold text-white/45">
+                      문의사항이나 의견을 전달합니다.
+                    </span>
+                  </span>
+                </span>
+
+                <ChevronRight size={16} className="text-white/35" />
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 border-t border-white/10 pt-5">
+            <p className="text-[10px] font-black tracking-[0.16em] text-white/40">
+              NOTIFICATION
+            </p>
+
+            <div className="mt-3">
+              <PushNotificationButton />
+            </div>
+          </div>
+
+          <div className="mt-5 border-t border-white/10 pt-5">
+            <p className="text-[10px] font-black tracking-[0.16em] text-white/40">
+              BACKGROUND
+            </p>
+
+            <div className="mt-3">
+              <BackgroundSettings
+                onUpload={handleBackgroundUpload}
+                onReset={handleBackgroundReset}
+              />
+            </div>
+          </div>
+
+          <div className="mt-6 border-t border-white/10 pt-5">
+            <p className="text-[10px] font-black tracking-[0.16em] text-white/40">
+              UI APPEARANCE
+            </p>
+
+            <h3 className="mt-1 text-sm font-black">
+              UI 불투명도
+            </h3>
           </div>
 
           <div className="mt-5 flex justify-center">
@@ -12991,8 +13135,20 @@ setSecretPinInput("");
             </section>
 
                    {/* 세 번째 패널: 미니게임 */}
-<section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
-  <div className="mx-auto w-full max-w-[1380px]">
+<section
+  className={`flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto xl:items-center xl:overflow-hidden xl:py-16 ${
+    minigameScreen === "2048"
+      ? "px-0 pb-0 pt-0 sm:px-4 sm:pb-[calc(24px+var(--hoo-safe-bottom))] sm:pt-[calc(92px+var(--hoo-safe-top))] md:px-7"
+      : "px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7"
+  }`}
+>
+  <div
+    className={`mx-auto w-full max-w-[1380px] ${
+      minigameScreen === "2048"
+        ? "max-md:mx-0 max-md:max-w-none"
+        : ""
+    }`}
+  >
     {minigameScreen === "menu" && (
       <section className="grid h-[625px] items-stretch gap-7 xl:grid-cols-[1.35fr_0.65fr]">
 
@@ -13293,8 +13449,8 @@ setSecretPinInput("");
     )}
 
     {minigameScreen === "2048" && (
-      <section className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <article className="rounded-[34px] border border-white/55 bg-white/90 p-6 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl md:p-8">
+      <section className="grid min-h-[100dvh] items-start gap-0 md:min-h-0 md:gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <article className="min-h-[100dvh] w-full rounded-none border-0 bg-white/90 px-4 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(20px+var(--hoo-safe-top))] shadow-none backdrop-blur-xl sm:min-h-0 sm:rounded-[34px] sm:border sm:border-white/55 sm:p-6 sm:shadow-[0_30px_100px_rgba(5,35,26,0.4)] md:p-8">
           <header className="flex items-center justify-between gap-4">
             <div>
               <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
@@ -13367,15 +13523,17 @@ setSecretPinInput("");
       </section>
     )}
 
-    {minigameScreen === "sudoku" && (
-      <section className="rounded-[34px] border border-white/55 bg-white/90 p-8 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl">
-        <header className="flex items-center justify-between gap-4">
+    {minigameScreen === "sudoku" &&
+      createPortal(
+      <section className="fixed inset-0 z-[999999] h-[100dvh] w-[100dvw] overflow-y-auto overscroll-none bg-black text-white">
+        <div className="mx-auto min-h-full w-full max-w-[1100px] px-3 pb-[calc(20px+env(safe-area-inset-bottom))] pt-[calc(12px+env(safe-area-inset-top))] sm:px-6 sm:pb-8 sm:pt-5">
+        <header className="flex items-center justify-between gap-4 border-b border-white/10 pb-4 sm:pb-5">
           <div>
-            <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
+            <p className="text-[10px] font-black tracking-[0.2em] text-white/40 sm:text-xs">
               HOO MINI GAME
             </p>
 
-            <h2 className="mt-1 text-3xl font-black text-[#332f45]">
+            <h2 className="mt-1 text-2xl font-black tracking-[0.08em] text-white sm:text-4xl">
               스도쿠
             </h2>
           </div>
@@ -13386,13 +13544,17 @@ setSecretPinInput("");
               setIsSudokuRunning(false);
               setMinigameScreen("menu");
             }}
-            className="rounded-full bg-[#eeeafd] px-5 py-2.5 text-sm font-black text-[#665e82] transition hover:bg-[#ddd7fa]"
+            className="flex min-h-11 items-center gap-2 rounded-full border border-white/25 bg-black px-4 py-2 text-sm font-black text-white transition active:scale-[0.97] sm:px-6 sm:py-3 sm:text-base md:hover:border-white/60 md:hover:bg-white/5"
           >
-            ← 게임 선택
+            나가기
+
+            <span className="text-xl font-light leading-none sm:text-2xl">
+              ×
+            </span>
           </button>
         </header>
 
-      <div className="mt-7 grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="mt-4 grid gap-4 sm:mt-6 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
   {/* 왼쪽: 스도쿠 게임판 */}
   <article className="rounded-[28px] border border-[#ded8ef] bg-[#faf9ff] p-5 md:p-7">
     <div className="mx-auto grid w-full max-w-[540px] grid-cols-9 overflow-hidden rounded-2xl border-4 border-[#4f4965] bg-[#4f4965]">
@@ -13556,7 +13718,10 @@ setSecretPinInput("");
     )}
   </aside>
 </div>
+        </div>
       </section>
+      ,
+      document.body,
     )}
   </div>
 </section>
@@ -14686,7 +14851,7 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
 
   setHasUnreadNotice(false);
 }}
- className={`relative flex h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-black/45 text-3xl text-white shadow-2xl backdrop-blur-xl transition hover:scale-105 hover:bg-black/60 ${
+ className={`relative hidden h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-black/45 text-3xl text-white shadow-2xl backdrop-blur-xl transition hover:scale-105 hover:bg-black/60 md:flex ${
   hasUnreadNotice && notices.length > 0
     ? "animate-bounce"
     : ""
@@ -14709,7 +14874,7 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
     onClick={() =>
       setIsFeedbackOpen((previous) => !previous)
     }
-    className="flex h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-black/45 text-3xl text-white shadow-2xl backdrop-blur-xl transition hover:scale-105 hover:bg-black/60"
+    className="hidden h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-black/45 text-3xl text-white shadow-2xl backdrop-blur-xl transition hover:scale-105 hover:bg-black/60 md:flex"
     aria-label="피드백 열기"
   >
     💬

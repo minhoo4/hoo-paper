@@ -3127,6 +3127,41 @@ if (
     };
   }, []);
 
+  useEffect(() => {
+    const previousBodyOverflow =
+      document.body.style.overflow;
+    const previousHtmlOverflow =
+      document.documentElement.style.overflow;
+
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow =
+        previousBodyOverflow;
+      document.documentElement.style.overflow =
+        previousHtmlOverflow;
+    };
+  }, []);
+
+  function exitGameScreen() {
+    if (
+      document.fullscreenElement &&
+      document.exitFullscreen
+    ) {
+      void document
+        .exitFullscreen()
+        .catch((error) => {
+          console.warn(
+            "전체화면 종료에 실패했습니다:",
+            error,
+          );
+        });
+    }
+
+    onBackToMenu?.();
+  }
+
   function renderBuddhaGameLayout() {
     const buddhaBoardSize = 5;
 
@@ -4312,15 +4347,30 @@ if (
     return renderBuddhaGameLayout();
   }
 
-  return (
+  return createPortal(
     <section
-      className={
-        difficulty === "buddha" &&
-        isBuddhaFocusMode
-          ? "fixed inset-0 z-[9999] flex min-h-screen items-center justify-center overflow-hidden bg-black p-3 text-white sm:p-6"
-          : "mx-auto w-full max-w-xl"
-      }
+      className="fixed inset-0 z-[999999] h-[100dvh] w-[100dvw] overflow-y-auto overscroll-none bg-black text-white"
     >
+      <div className="mx-auto flex min-h-full w-full max-w-[960px] flex-col px-3 pb-[calc(20px+env(safe-area-inset-bottom))] pt-[calc(12px+env(safe-area-inset-top))] sm:px-6 sm:pb-8 sm:pt-5">
+        <header className="mb-4 flex shrink-0 items-center justify-between border-b border-white/10 pb-4 sm:mb-6 sm:pb-5">
+          <h1 className="text-2xl font-black tracking-[0.08em] text-white sm:text-4xl">
+            HOO 2048
+          </h1>
+
+          <button
+            type="button"
+            onClick={exitGameScreen}
+            className="flex min-h-11 items-center gap-2 rounded-full border border-white/25 bg-black px-4 py-2 text-sm font-black text-white transition active:scale-[0.97] sm:px-6 sm:py-3 sm:text-base md:hover:border-white/60 md:hover:bg-white/5"
+          >
+            나가기
+
+            <span className="text-xl font-light leading-none sm:text-2xl">
+              ×
+            </span>
+          </button>
+        </header>
+
+        <div className="mx-auto w-full max-w-[720px] flex-1">
       {difficulty === "buddha" &&
         isEnteringBuddhaMode && (
           <div className="buddha-entry-overlay fixed inset-0 z-[10020] flex items-center justify-center bg-black">
@@ -4987,6 +5037,10 @@ if (
       </div>
       </>
       )}
+        </div>
+      </div>
     </section>
+    ,
+    document.body,
   );
 }
