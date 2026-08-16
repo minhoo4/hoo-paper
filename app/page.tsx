@@ -15,6 +15,7 @@ import BackgroundSettings from "@/components/BackgroundSettings";
 import PushNotificationButton from "./PushNotificationButton";
 
 import Hoo2048Game from "@/components/Hoo2048Game";
+import HooShisenGame from "@/components/HooShisenGame";
 import {
   createPuzzleId,
   submitSudokuCompletion,
@@ -307,7 +308,7 @@ type SudokuBestTimes = Record<
   number | null
 >;
 
-type MinigameScreen = "menu" | "sudoku" | "2048";
+type MinigameScreen = "menu" | "sudoku" | "2048" | "shisen";
 
 type Hoo2048Difficulty =
   | "easy"
@@ -1915,6 +1916,32 @@ useEffect(() => {
 
 useEffect(() => {
   function handleWheel(event: WheelEvent) {
+    const eventTarget =
+      event.target instanceof Element
+        ? event.target
+        : null;
+
+    const verticalScrollArea =
+      eventTarget?.closest<HTMLElement>(
+        '[data-hoo-vertical-scroll="true"]',
+      );
+
+    if (verticalScrollArea) {
+      const canScrollUp =
+        verticalScrollArea.scrollTop > 1;
+      const canScrollDown =
+        verticalScrollArea.scrollTop +
+          verticalScrollArea.clientHeight <
+        verticalScrollArea.scrollHeight - 1;
+
+      if (
+        (event.deltaY < 0 && canScrollUp) ||
+        (event.deltaY > 0 && canScrollDown)
+      ) {
+        return;
+      }
+    }
+
     const section = horizontalSectionRef.current;
 
     if (!section) {
@@ -13150,28 +13177,31 @@ setSecretPinInput("");
     }`}
   >
     {minigameScreen === "menu" && (
-      <section className="grid h-[625px] items-stretch gap-7 xl:grid-cols-[1.35fr_0.65fr]">
+      <section className="grid h-[calc(100dvh_-_116px_-_var(--hoo-safe-top)_-_var(--hoo-safe-bottom))] min-h-[540px] items-stretch gap-4 sm:gap-7 xl:h-[625px] xl:grid-cols-[1.35fr_0.65fr]">
 
 
         {/* 왼쪽: 게임 선택 */}
-     <article className="h-full rounded-[34px] border border-white/55 bg-white/90 p-6 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl md:p-8">
-          <header>
+     <article className="flex h-full min-h-0 flex-col rounded-[26px] border border-white/55 bg-white/90 p-4 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl sm:rounded-[34px] sm:p-6 md:p-8">
+          <header className="shrink-0">
             <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
               HOO MINI GAME
             </p>
 
-            <h2 className="mt-1 text-3xl font-black text-[#332f45]">
+            <h2 className="mt-1 text-2xl font-black text-[#332f45] sm:text-3xl">
               게임 선택
             </h2>
 
-            <p className="mt-2 text-sm font-bold text-[#8b849d]">
+            <p className="mt-1 text-xs font-bold text-[#8b849d] sm:mt-2 sm:text-sm">
               원하는 게임과 난이도를 선택해 플레이하세요.
             </p>
           </header>
 
-          <div className="mt-7 grid gap-5 lg:grid-cols-2">
+          <div
+            data-hoo-vertical-scroll="true"
+            className="mt-4 grid h-0 min-h-0 flex-1 touch-pan-y gap-4 overflow-y-scroll overscroll-contain pb-8 pr-0.5 sm:mt-7 sm:gap-5 sm:pr-1 lg:grid-cols-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+          >
             {/* 스도쿠 카드 */}
-            <article className="rounded-[28px] border border-[#ded8ef] bg-[#faf9ff] p-6 shadow-sm">
+            <article className="rounded-[22px] border border-[#ded8ef] bg-[#faf9ff] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
               <div className="flex items-center gap-4">
                 <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#eeeafd] text-3xl">
                   🧩
@@ -13188,7 +13218,7 @@ setSecretPinInput("");
                 </div>
               </div>
 
-              <div className="mt-6 grid grid-cols-3 gap-2">
+              <div className="mt-4 grid grid-cols-3 gap-2 sm:mt-6">
                 {(["easy", "normal", "hard"] as SudokuDifficulty[]).map(
                   (difficulty) => (
                     <button
@@ -13209,7 +13239,7 @@ setSecretPinInput("");
                 )}
               </div>
 
-              <div className="mt-6 space-y-3 rounded-2xl bg-white p-4">
+              <div className="mt-4 space-y-3 rounded-2xl bg-white p-4 sm:mt-6">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-[#928ba8]">
                     최고기록
@@ -13242,7 +13272,7 @@ setSecretPinInput("");
                   startSudokuGame(sudokuDifficulty);
                   setMinigameScreen("sudoku");
                 }}
-                className="mt-6 w-full rounded-2xl bg-[#7467d8] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#6255c7]"
+                className="mt-4 w-full rounded-2xl bg-[#7467d8] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#6255c7] sm:mt-6"
               >
                 스도쿠 플레이
               </button>
@@ -13251,7 +13281,7 @@ setSecretPinInput("");
            {/* 2048 카드 */}
 
 <article
-  className={`rounded-[28px] p-6 shadow-sm transition-all duration-300 ${
+  className={`rounded-[22px] p-4 shadow-sm transition-all duration-300 sm:rounded-[28px] sm:p-6 ${
     hoo2048Difficulty === "buddha"
       ? "border border-white/10 bg-black text-white shadow-[0_24px_70px_rgba(0,0,0,0.35)]"
       : "border border-[#ded8ef] bg-[#faf9ff]"
@@ -13430,21 +13460,65 @@ setSecretPinInput("");
 </button>
 
 </article>
+
+            {/* 사천성 카드 */}
+            <article className="rounded-[22px] border border-[#ded8ef] bg-[#faf9ff] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
+              <div className="flex items-center gap-4">
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#efe8ff] text-3xl">
+                  🀄
+                </span>
+
+                <div>
+                  <p className="text-[11px] font-black tracking-[0.16em] text-[#928ba8]">
+                    TILE CONNECT
+                  </p>
+
+                  <h3 className="text-2xl font-black text-[#332f45]">
+                    HOO 사천성
+                  </h3>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-2xl bg-white p-4 sm:mt-6">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#928ba8]">
+                    전체 스테이지
+                  </span>
+
+                  <strong className="text-lg font-black text-[#332f45]">
+                    100
+                  </strong>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-xs font-bold text-[#928ba8]">
+                    시작 보드
+                  </span>
+
+                  <strong className="text-sm font-black text-[#7467d8]">
+                    4×4
+                  </strong>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setMinigameScreen("shisen")}
+                className="mt-4 w-full rounded-2xl bg-[#8b63dc] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#7650c9] sm:mt-6"
+              >
+                HOO 사천성 플레이
+              </button>
+            </article>
           </div>
         </article>
 
-      <div className="h-full">
-        
-  <div className="hoo-community-readable">
-<HooCommunityPanel
-    refreshKey={communityRefreshKey}
-  />
-</div>
-</div>
-
-              <p className="mt-1 text-2xl font-black text-[#332f45]">
-                -위
-              </p>
+      <div className="hidden h-full min-h-0 xl:block">
+        <div className="hoo-community-readable h-full">
+          <HooCommunityPanel
+            refreshKey={communityRefreshKey}
+          />
+        </div>
+      </div>
       </section>
     )}
 
@@ -13521,6 +13595,12 @@ setSecretPinInput("");
           />
         </div>
       </section>
+    )}
+
+    {minigameScreen === "shisen" && (
+      <HooShisenGame
+        onExit={() => setMinigameScreen("menu")}
+      />
     )}
 
     {minigameScreen === "sudoku" &&
