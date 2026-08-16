@@ -421,6 +421,7 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
   const [effectVariant, setEffectVariant] =
     useState<EffectVariant>(0);
   const [autoShuffleMessage, setAutoShuffleMessage] = useState(false);
+  const [isLiteEffectMode, setIsLiteEffectMode] = useState(false);
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [bestCombo, setBestCombo] = useState(0);
@@ -445,6 +446,14 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
       document.body.style.overflow = previousBodyOverflow;
       document.documentElement.style.overflow = previousHtmlOverflow;
     };
+  }, []);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 767px), (pointer: coarse)");
+    const updateEffectMode = () => setIsLiteEffectMode(mediaQuery.matches);
+    updateEffectMode();
+    mediaQuery.addEventListener?.("change", updateEffectMode);
+    return () => mediaQuery.removeEventListener?.("change", updateEffectMode);
   }, []);
 
   useEffect(() => {
@@ -647,7 +656,7 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
         setConnectionLine(null);
         setBreakingTileIds(new Set());
         setBreakEffects([]);
-      }, 1220);
+      }, isLiteEffectMode ? 760 : 1220);
       return;
     }
 
@@ -780,7 +789,7 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
                       ),
                     );
                     return (
-                      <button key={`${rowIndex}-${columnIndex}`} type="button" disabled={!tile || isPreviewing || isResolvingPair} onClick={() => selectTile({ row: rowIndex, column: columnIndex })} className={`relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-[5px] border-2 font-black transition-all duration-500 sm:rounded-xl ${tile ? isFaceUp ? `${getTilePalette(tile.symbol)} shadow-[inset_0_2px_0_rgba(255,255,255,0.55),0_3px_8px_rgba(0,0,0,0.2)] [transform:rotateY(0deg)]` : "border-violet-400/25 bg-gradient-to-br from-[#35275a] to-[#1c1633] shadow-[inset_0_0_18px_rgba(139,92,246,0.18)] [transform:rotateY(180deg)]" : "border-transparent bg-transparent"} ${isSelected ? "scale-90 ring-4 ring-white" : ""} ${isHint ? "animate-pulse ring-4 ring-yellow-200" : ""} ${isBreaking ? "hoo-tile-breaking" : ""} ${tileFontSize}`}>
+                      <button key={`${rowIndex}-${columnIndex}`} type="button" disabled={!tile || isPreviewing || isResolvingPair} onClick={() => selectTile({ row: rowIndex, column: columnIndex })} className={`hoo-tile-card relative flex min-h-0 min-w-0 items-center justify-center overflow-hidden rounded-[5px] border-2 font-black transition-[transform,box-shadow,border-color] duration-150 sm:rounded-xl ${tile ? isFaceUp ? `${getTilePalette(tile.symbol)} shadow-[inset_0_2px_0_rgba(255,255,255,0.55),0_3px_8px_rgba(0,0,0,0.2)] [transform:rotateY(0deg)]` : "border-violet-400/25 bg-gradient-to-br from-[#35275a] to-[#1c1633] shadow-[inset_0_0_18px_rgba(139,92,246,0.18)] [transform:rotateY(180deg)]" : "border-transparent bg-transparent"} ${isSelected ? "scale-90 ring-4 ring-white" : ""} ${isHint ? "animate-pulse ring-4 ring-yellow-200" : ""} ${isBreaking ? "hoo-tile-breaking" : ""} ${tileFontSize}`}>
                         {tile && (
                           isFaceUp ? (
                             <span className="drop-shadow-[0_2px_1px_rgba(0,0,0,0.2)] [transform:rotateY(0deg)_scale(1.12)]">
@@ -866,31 +875,31 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
                       {breakStyle.id === "glass" && (
                         <span className="hoo-glass-card-ghost absolute inset-[5%] z-10 items-center justify-center overflow-hidden rounded-xl text-[clamp(28px,5vw,58px)]">
                           <b className="relative z-10 font-normal">{effect.symbol}</b>
-                          {Array.from({ length: 8 }, (_, index) => <i key={`crack-${index}`} className={`hoo-glass-crack hoo-glass-crack-${index + 1} absolute left-1/2 top-1/2 h-[2px] origin-left`} />)}
+                          {Array.from({ length: isLiteEffectMode ? 5 : 8 }, (_, index) => <i key={`crack-${index}`} className={`hoo-glass-crack hoo-glass-crack-${index + 1} absolute left-1/2 top-1/2 h-[2px] origin-left`} />)}
                         </span>
                       )}
                       {breakStyle.id === "cyber" && (<>
                         <span className="hoo-cyber-card-ghost absolute inset-[5%] z-10 items-center justify-center overflow-hidden rounded-md text-[clamp(28px,5vw,58px)]"><b className="hoo-cyber-symbol relative z-10 font-normal">{effect.symbol}</b><i className="hoo-cyber-grid absolute inset-0" /><i className="hoo-cyber-scan absolute inset-x-0 top-0 h-[18%]" /></span>
-                        {Array.from({ length: 12 }, (_, index) => <span key={`cyber-pixel-${index}`} className={`hoo-cyber-pixel hoo-cyber-pixel-${index + 1} absolute left-1/2 top-1/2 z-20`} />)}
+                        {Array.from({ length: isLiteEffectMode ? 6 : 12 }, (_, index) => <span key={`cyber-pixel-${index}`} className={`hoo-cyber-pixel hoo-cyber-pixel-${index + 1} absolute left-1/2 top-1/2 z-20`} />)}
                       </>)}
                       {breakStyle.id === "steam" && (<>
                         <span className="hoo-steam-card-ghost absolute inset-[5%] z-10 items-center justify-center overflow-visible rounded-xl text-[clamp(28px,5vw,58px)]"><b className="relative z-10 font-normal">{effect.symbol}</b><i className="hoo-steam-gauge absolute right-[8%] top-[8%] h-[25%] w-[25%] rounded-full"><em className="hoo-steam-needle absolute bottom-1/2 left-1/2 h-[42%] w-[2px] origin-bottom" /></i>{Array.from({ length: 4 }, (_, index) => <i key={`rivet-${index}`} className={`hoo-steam-rivet hoo-steam-rivet-${index + 1} absolute h-[8%] w-[8%] rounded-full`} />)}</span>
-                        {Array.from({ length: 6 }, (_, index) => <span key={`steam-puff-${index}`} className={`hoo-steam-puff hoo-steam-puff-${index + 1} absolute left-1/2 top-1/2 z-20 rounded-full`} />)}
-                        {Array.from({ length: 4 }, (_, index) => <span key={`steam-gear-${index}`} className={`hoo-steam-gear hoo-steam-gear-${index + 1} absolute left-1/2 top-1/2 z-20 flex items-center justify-center font-black`}>⚙</span>)}
+                        {Array.from({ length: isLiteEffectMode ? 3 : 6 }, (_, index) => <span key={`steam-puff-${index}`} className={`hoo-steam-puff hoo-steam-puff-${index + 1} absolute left-1/2 top-1/2 z-20 rounded-full`} />)}
+                        {Array.from({ length: isLiteEffectMode ? 2 : 4 }, (_, index) => <span key={`steam-gear-${index}`} className={`hoo-steam-gear hoo-steam-gear-${index + 1} absolute left-1/2 top-1/2 z-20 flex items-center justify-center font-black`}>⚙</span>)}
                       </>)}
                       {breakStyle.id === "hell" && (<>
                         <span className="hoo-hell-card-ghost absolute inset-[5%] z-10 items-center justify-center overflow-visible rounded-xl text-[clamp(28px,5vw,58px)]"><b className="hoo-hell-symbol relative z-10 font-normal">{effect.symbol}</b><i className="hoo-hell-char absolute inset-0 rounded-xl" /></span>
                         <span className="hoo-hell-backglow absolute inset-[-14%] z-[5] rounded-[28%]" />
-                        {Array.from({ length: 18 }, (_, index) => <span key={`hell-ash-${index}`} className={`hoo-hell-ash hoo-hell-ash-${index + 1} absolute left-1/2 top-1/2 z-30`} />)}
-                        {Array.from({ length: 14 }, (_, index) => <span key={`hell-ember-${index}`} className={`hoo-hell-ember hoo-hell-ember-${index + 1} absolute left-1/2 top-1/2 z-30 rounded-full`} />)}
+                        {Array.from({ length: isLiteEffectMode ? 8 : 18 }, (_, index) => <span key={`hell-ash-${index}`} className={`hoo-hell-ash hoo-hell-ash-${index + 1} absolute left-1/2 top-1/2 z-30`} />)}
+                        {Array.from({ length: isLiteEffectMode ? 6 : 14 }, (_, index) => <span key={`hell-ember-${index}`} className={`hoo-hell-ember hoo-hell-ember-${index + 1} absolute left-1/2 top-1/2 z-30 rounded-full`} />)}
                       </>)}
                       {breakStyle.id === "dream" && (<>
                         <span className="hoo-dream-card-ghost absolute inset-[5%] z-10 items-center justify-center overflow-visible rounded-xl text-[clamp(28px,5vw,58px)]"><b className="hoo-dream-symbol relative z-20 font-normal">{effect.symbol}</b><i className="hoo-dream-portal absolute inset-[-16%] rounded-full" /><i className="hoo-dream-halo hoo-dream-halo-one absolute inset-[-8%] rounded-full" /><i className="hoo-dream-halo hoo-dream-halo-two absolute inset-[5%] rounded-full" /></span>
-                        {Array.from({ length: 6 }, (_, index) => <span key={`dream-wisp-${index}`} className={`hoo-dream-wisp hoo-dream-wisp-${index + 1} absolute left-1/2 top-1/2 z-20 rounded-full`} />)}
+                        {Array.from({ length: isLiteEffectMode ? 3 : 6 }, (_, index) => <span key={`dream-wisp-${index}`} className={`hoo-dream-wisp hoo-dream-wisp-${index + 1} absolute left-1/2 top-1/2 z-20 rounded-full`} />)}
                       </>)}
                       {breakStyle.id === "leaf" && (<>
                         <span className="hoo-leaf-green-burst absolute inset-[-8%] z-[5] rounded-full" />
-                        {Array.from({ length: 12 }, (_, index) => (
+                        {Array.from({ length: isLiteEffectMode ? 6 : 12 }, (_, index) => (
                           <span key={`leaf-fly-${index}`} className={`hoo-leaf-fly hoo-leaf-fly-${index + 1} absolute left-1/2 top-1/2 z-30`}><i /></span>
                         ))}
                       </>)}
@@ -898,14 +907,14 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
                         <span className="hoo-heaven-sanctum absolute inset-[-20%] z-[5] rounded-full"><i /><b /></span>
                         <span className="hoo-heaven-gate absolute inset-[-28%] z-[6]"><i /><b /></span>
                         <span className="hoo-heaven-card-ghost absolute inset-[5%] z-10 flex items-center justify-center rounded-xl text-[clamp(28px,5vw,58px)]"><i className="hoo-heaven-sigil absolute left-1/2 top-1/2" /><b className="relative z-20 font-normal">{effect.symbol}</b></span>
-                        {Array.from({ length: 8 }, (_, index) => <span key={`heaven-feather-${index}`} className={`hoo-heaven-feather hoo-heaven-feather-${index + 1} absolute left-1/2 top-1/2 z-30`}><i /></span>)}
+                        {Array.from({ length: isLiteEffectMode ? 4 : 8 }, (_, index) => <span key={`heaven-feather-${index}`} className={`hoo-heaven-feather hoo-heaven-feather-${index + 1} absolute left-1/2 top-1/2 z-30`}><i /></span>)}
                       </>)}
                       <span className="hoo-break-flash absolute left-1/2 top-1/2 h-[28%] w-[28%] -translate-x-1/2 -translate-y-1/2 rounded-full" />
                       <span className="hoo-break-ring absolute left-1/2 top-1/2 h-[34%] w-[34%] -translate-x-1/2 -translate-y-1/2 rounded-full border-2" />
                       <span className="hoo-break-ring hoo-break-ring-second absolute left-1/2 top-1/2 h-[52%] w-[52%] -translate-x-1/2 -translate-y-1/2 rounded-full border" />
                       <span className="hoo-theme-core absolute left-1/2 top-1/2 h-[70%] w-[70%] -translate-x-1/2 -translate-y-1/2" />
 
-                      {Array.from({ length: breakStyle.id === "dream" || breakStyle.id === "leaf" || breakStyle.id === "heaven" ? 4 : 6 }, (_, index) => (
+                      {Array.from({ length: isLiteEffectMode ? 2 : breakStyle.id === "dream" || breakStyle.id === "leaf" || breakStyle.id === "heaven" ? 4 : 6 }, (_, index) => (
                         <span
                           key={`motif-${index}`}
                           className={`hoo-theme-motif hoo-theme-motif-${index + 1} absolute left-1/2 top-1/2 flex items-center justify-center font-black`}
@@ -914,7 +923,7 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
                         </span>
                       ))}
 
-                      {Array.from({ length: breakStyle.id === "dream" || breakStyle.id === "leaf" || breakStyle.id === "heaven" ? 6 : 12 }, (_, index) => (
+                      {Array.from({ length: isLiteEffectMode ? 3 : breakStyle.id === "dream" || breakStyle.id === "leaf" || breakStyle.id === "heaven" ? 6 : 12 }, (_, index) => (
                         <span
                           key={`depth-${index}`}
                           className={`hoo-depth-fragment hoo-depth-fragment-${index + 1} absolute left-1/2 top-1/2`}
@@ -923,7 +932,7 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
                         </span>
                       ))}
 
-                      {Array.from({ length: breakStyle.id === "dream" ? 10 : breakStyle.id === "leaf" ? 6 : breakStyle.id === "heaven" ? 8 : 18 }, (_, index) => (
+                      {Array.from({ length: isLiteEffectMode ? 5 : breakStyle.id === "dream" ? 10 : breakStyle.id === "leaf" ? 6 : breakStyle.id === "heaven" ? 8 : 18 }, (_, index) => (
                         <span
                           key={index}
                           className={`hoo-break-particle hoo-break-particle-${index + 1} absolute left-1/2 top-1/2 h-[18%] w-[18%] rounded-[3px]`}
@@ -2184,6 +2193,91 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
                 100% {
                   stroke-dashoffset: 0;
                   opacity: 1;
+                }
+              }
+
+              @media (max-width: 767px), (pointer: coarse) {
+                .hoo-tile-card {
+                  contain:layout style;
+                  transition-duration:90ms !important;
+                }
+
+                .hoo-tile-card:not(.scale-90) {
+                  transform:none !important;
+                }
+
+                .hoo-tile-card:not(.ring-4) {
+                  box-shadow:inset 0 0 4px rgba(139,92,246,.12) !important;
+                }
+
+                .hoo-tile-card > span {
+                  transform:none !important;
+                  filter:none !important;
+                  text-shadow:none !important;
+                }
+
+                .hoo-tile-breaking {
+                  filter:none !important;
+                  transition-duration:120ms !important;
+                }
+
+                [class*="hoo-break-theme-"] svg polyline,
+                .hoo-connect-line-glow {
+                  filter:none !important;
+                }
+
+                .hoo-break-atmosphere {
+                  display:none !important;
+                }
+
+                .hoo-break-impact {
+                  filter:none !important;
+                  box-shadow:none !important;
+                  mix-blend-mode:normal !important;
+                  animation-duration:420ms !important;
+                }
+
+                .hoo-break-flash,
+                .hoo-break-ring,
+                .hoo-theme-core,
+                .hoo-depth-fragment,
+                .hoo-theme-motif,
+                .hoo-break-particle {
+                  filter:none !important;
+                  text-shadow:none !important;
+                }
+
+                .hoo-break-origin {
+                  perspective:none !important;
+                }
+
+                .hoo-break-origin * {
+                  mix-blend-mode:normal !important;
+                }
+
+                .hoo-break-theme-dream .hoo-dream-card-ghost,
+                .hoo-break-theme-heaven .hoo-heaven-card-ghost,
+                .hoo-break-theme-hell .hoo-hell-card-ghost,
+                .hoo-break-theme-steam .hoo-steam-card-ghost,
+                .hoo-break-theme-cyber .hoo-cyber-card-ghost {
+                  backdrop-filter:none !important;
+                  box-shadow:0 0 12px var(--hoo-break-accent) !important;
+                }
+
+                .hoo-break-theme-dream .hoo-dream-portal,
+                .hoo-break-theme-hell .hoo-hell-backglow,
+                .hoo-break-theme-heaven .hoo-heaven-sanctum {
+                  filter:blur(2px) !important;
+                  box-shadow:0 0 18px var(--hoo-break-accent) !important;
+                }
+
+                .hoo-break-theme-heaven .hoo-heaven-gate,
+                .hoo-break-theme-ocean .hoo-ocean-tile-ghost {
+                  filter:none !important;
+                }
+
+                .hoo-break-theme-glass .hoo-glass-card-ghost {
+                  backdrop-filter:none !important;
                 }
               }
 
