@@ -1903,12 +1903,12 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
   return createPortal(
     <section className="fixed inset-0 z-[20000] overflow-hidden bg-black text-white">
       <div className="flex h-[100dvh] w-full flex-col bg-[#090a09]">
-        <header className="flex h-16 shrink-0 items-center justify-between border-b border-white/15 px-4 sm:px-6">
+        <header className="hoo-bubble-game-header flex h-16 shrink-0 items-center justify-between border-b border-white/15 px-4 sm:px-6">
           <div><p className="font-mono text-[9px] font-black tracking-[.35em] text-[#89917c]">HOO ARCADE FILE 02 · WIDE STAGE</p><h1 className="font-mono text-xl font-black tracking-[.14em]">HOO BUBBLE</h1></div>
           <button type="button" onClick={onExit} className="rounded-full border border-white/25 px-4 py-2 text-sm font-black">나가기 ×</button>
         </header>
         <div className="relative min-h-0 flex-1 bg-black">
-          <canvas ref={canvasRef} width={W} height={H} className="h-full w-full object-contain [image-rendering:pixelated]" />
+          <canvas ref={canvasRef} width={W} height={H} className="hoo-bubble-game-canvas h-full w-full object-contain [image-rendering:pixelated]" />
           {!started && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/80 px-6 text-center backdrop-blur-[2px]">
               <div><div className="mx-auto mb-5 h-20 w-20 border-2 border-[#aab09e] bg-[#161816] [image-rendering:pixelated]"><span className="block pt-5 text-4xl">🦎</span></div>
@@ -1978,25 +1978,15 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
             </div>
           )}
 
-          <div className="hoo-bubble-rotate-notice absolute inset-0 z-50 flex-col items-center justify-center bg-black/95 px-8 text-center">
-            <div className="mb-4 rotate-90 text-5xl">📱</div>
-            <p className="font-mono text-xl font-black tracking-[.08em] text-[#edf3df]">
-              가로 화면으로 돌려주세요
-            </p>
-            <p className="mt-2 font-mono text-xs font-bold text-[#9da58f]">
-              HOO BUBBLE은 가로 모드에서 플레이할 수 있어요.
-            </p>
-          </div>
         </div>
       </div>
 
       <style jsx>{`
-        .hoo-bubble-mobile-controls,
-        .hoo-bubble-rotate-notice {
+        .hoo-bubble-mobile-controls {
           display: none;
         }
 
-        @media (hover: none) and (pointer: coarse) and (orientation: landscape) {
+        @media (hover: none) and (pointer: coarse) {
           .hoo-bubble-mobile-controls {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -2004,8 +1994,23 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         }
 
         @media (hover: none) and (pointer: coarse) and (orientation: portrait) {
-          .hoo-bubble-rotate-notice {
-            display: flex;
+          .hoo-bubble-game-header {
+            height: 52px;
+            padding-left: 12px;
+            padding-right: 12px;
+          }
+
+          .hoo-bubble-game-canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center center;
+          }
+
+          .hoo-bubble-mobile-controls {
+            padding-left: max(10px, env(safe-area-inset-left));
+            padding-right: max(10px, env(safe-area-inset-right));
+            padding-bottom: max(14px, env(safe-area-inset-bottom));
           }
         }
       `}</style>
