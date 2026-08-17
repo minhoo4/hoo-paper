@@ -625,6 +625,18 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
 
+    let mobileRenderScale = 1;
+    const updateMobileRenderScale = () => {
+      mobileRenderScale = window.matchMedia(
+        "(max-width: 1024px) and (orientation: portrait)",
+      ).matches
+        ? 0.82
+        : 1;
+    };
+    updateMobileRenderScale();
+    window.addEventListener("resize", updateMobileRenderScale);
+    window.addEventListener("orientationchange", updateMobileRenderScale);
+
     let saved: SavedGame | null = null;
     try {
       const raw = window.localStorage.getItem(SAVE_KEY);
@@ -1432,6 +1444,13 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       ctx.fillStyle = sky;
       ctx.fillRect(0, 0, W, H);
 
+      // 세로형 모바일에서는 전체 장면을 살짝 축소해 캐릭터 주변 지형과
+      // 상단 정보를 더 넓게 보여준다. 배경은 먼저 채워 검은 여백을 막는다.
+      ctx.save();
+      ctx.translate(W / 2, H / 2);
+      ctx.scale(mobileRenderScale, mobileRenderScale);
+      ctx.translate(-W / 2, -H / 2);
+
       // 멀리 보이는 달과 고정된 별빛
       ctx.beginPath();
       ctx.arc(W - 135, 120, 53, 0, Math.PI * 2);
@@ -1836,6 +1855,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         ctx.textAlign = "left";
       }
       ctx.restore();
+      ctx.restore();
       if (!gameOver) rafRef.current = requestAnimationFrame(frame);
     };
     rafRef.current = requestAnimationFrame(frame);
@@ -1843,6 +1863,8 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       persistGame(false);
       cancelAnimationFrame(rafRef.current); window.removeEventListener("keydown", down); window.removeEventListener("keyup", up);
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("resize", updateMobileRenderScale);
+      window.removeEventListener("orientationchange", updateMobileRenderScale);
       (Object.keys(keys) as Key[]).forEach((key) => { keys[key] = false; });
       dashInputRef.current.direction = 0;
       dashInputRef.current.highJumpRequested = false;
@@ -1901,17 +1923,18 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
 
   if (!mounted) return null;
   return createPortal(
-    <section className="fixed inset-0 z-[20000] overflow-hidden bg-black text-white">
-      <div className="flex h-[100dvh] w-full flex-col bg-[#090a09]">
+    <section className="hoo-bubble-shell fixed inset-0 z-[20000] overflow-hidden bg-black text-white">
+      <div className="hoo-bubble-root flex h-full min-h-0 w-full flex-col bg-[#090a09]">
         <header className="hoo-bubble-game-header flex h-16 shrink-0 items-center justify-between border-b border-white/15 px-4 sm:px-6">
           <div><p className="font-mono text-[9px] font-black tracking-[.35em] text-[#89917c]">HOO ARCADE FILE 02 · WIDE STAGE</p><h1 className="font-mono text-xl font-black tracking-[.14em]">HOO BUBBLE</h1></div>
           <button type="button" onClick={onExit} className="rounded-full border border-white/25 px-4 py-2 text-sm font-black">나가기 ×</button>
         </header>
-        <div className="relative min-h-0 flex-1 bg-black">
-          <canvas ref={canvasRef} width={W} height={H} className="hoo-bubble-game-canvas h-full w-full object-contain [image-rendering:pixelated]" />
+        <div className="hoo-bubble-game-stage flex min-h-0 flex-1 flex-col bg-black">
+          <div className="hoo-bubble-canvas-wrap relative min-h-0 flex-1 overflow-hidden bg-black">
+            <canvas ref={canvasRef} width={W} height={H} className="hoo-bubble-game-canvas h-full w-full object-contain [image-rendering:pixelated]" />
           {!started && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/80 px-6 text-center backdrop-blur-[2px]">
-              <div><div className="mx-auto mb-5 h-20 w-20 border-2 border-[#aab09e] bg-[#161816] [image-rendering:pixelated]"><span className="block pt-5 text-4xl">🦎</span></div>
+            <div className="hoo-bubble-start-overlay absolute inset-0 flex items-center justify-center overflow-y-auto bg-black/80 px-6 text-center backdrop-blur-[2px]">
+              <div className="hoo-bubble-start-content"><div className="mx-auto mb-5 h-20 w-20 border-2 border-[#aab09e] bg-[#161816] [image-rendering:pixelated]"><span className="block pt-5 text-4xl">🦎</span></div>
                 <p className="font-mono text-xs font-black tracking-[.3em] text-[#9da58f]">A VERY SMALL HERO</p>
                 <h2 className="mt-2 font-mono text-3xl font-black">하찮은 도마뱀 출동</h2>
                 {hud.life === 0 && <p className="mt-3 font-mono text-sm">FINAL SCORE {hud.score}</p>}
@@ -1958,8 +1981,10 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
             </div>
           )}
 
+          </div>
+
           {started && (
-            <div className="hoo-bubble-mobile-controls pointer-events-none absolute inset-x-0 bottom-0 z-30 items-end px-[max(14px,env(safe-area-inset-left))] pb-[max(12px,env(safe-area-inset-bottom))] pr-[max(14px,env(safe-area-inset-right))]">
+            <div className="hoo-bubble-mobile-controls pointer-events-none z-30 shrink-0 items-center px-[max(14px,env(safe-area-inset-left))] pb-[max(12px,env(safe-area-inset-bottom))] pr-[max(14px,env(safe-area-inset-right))]">
               <div className="hoo-bubble-round-console pointer-events-auto relative h-[116px] w-[116px] touch-none rounded-full border-2 border-white/25 bg-black/55 shadow-[0_10px_28px_rgba(0,0,0,.55),inset_0_0_22px_rgba(174,145,255,.16)] backdrop-blur-[3px]">
                 {button("up", "▲", "absolute left-1/2 top-[7px] h-[42px] w-[42px] -translate-x-1/2 rounded-full text-base shadow-[inset_0_0_9px_rgba(255,255,255,.12)]")}
                 {button("left", "◀", "absolute left-[7px] top-1/2 h-[42px] w-[42px] -translate-y-1/2 rounded-full text-base shadow-[inset_0_0_9px_rgba(255,255,255,.12)]")}
@@ -1968,7 +1993,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
                 <span className="pointer-events-none absolute left-1/2 top-1/2 h-[28px] w-[28px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-[#171421] shadow-[inset_0 0 10px_rgba(145,111,255,.4)]" />
               </div>
 
-              <div className="pointer-events-auto flex justify-end pr-1">
+              <div className="hoo-bubble-fire-wrap pointer-events-auto flex justify-end pr-1">
                 {button(
                   "fire",
                   "BUBBLE",
@@ -1982,22 +2007,67 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       </div>
 
       <style jsx>{`
+        .hoo-bubble-shell {
+          height: 100vh;
+          height: 100svh;
+          height: 100dvh;
+          overscroll-behavior: none;
+          touch-action: none;
+          -webkit-user-select: none;
+          user-select: none;
+        }
+
+        .hoo-bubble-game-canvas {
+          display: block;
+          min-width: 0;
+          min-height: 0;
+        }
+
         .hoo-bubble-mobile-controls {
           display: none;
         }
 
-        @media (hover: none) and (pointer: coarse) {
+        @media (max-width: 1024px), (any-hover: none) and (any-pointer: coarse) {
           .hoo-bubble-mobile-controls {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            align-items: end;
+            width: 100%;
+            height: 150px;
+            height: clamp(132px, 20svh, 168px);
+            padding-top: 12px;
+            background: #030303;
+            border-top: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow: 0 -12px 30px rgba(0, 0, 0, 0.5);
+          }
+
+          .hoo-bubble-round-console,
+          .hoo-bubble-fire-wrap {
+            -webkit-tap-highlight-color: transparent;
           }
         }
 
-        @media (hover: none) and (pointer: coarse) and (orientation: portrait) {
+        @media (max-width: 1024px) and (orientation: portrait),
+          (any-hover: none) and (any-pointer: coarse) and (orientation: portrait) {
           .hoo-bubble-game-header {
-            height: 52px;
-            padding-left: 12px;
-            padding-right: 12px;
+            height: max(48px, calc(44px + env(safe-area-inset-top)));
+            padding-top: env(safe-area-inset-top);
+            padding-left: max(10px, env(safe-area-inset-left));
+            padding-right: max(10px, env(safe-area-inset-right));
+          }
+
+          .hoo-bubble-game-header p {
+            display: none;
+          }
+
+          .hoo-bubble-game-header h1 {
+            font-size: 15px;
+            letter-spacing: 0.1em;
+          }
+
+          .hoo-bubble-game-header button {
+            padding: 7px 12px;
+            font-size: 12px;
           }
 
           .hoo-bubble-game-canvas {
@@ -2011,6 +2081,58 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
             padding-left: max(10px, env(safe-area-inset-left));
             padding-right: max(10px, env(safe-area-inset-right));
             padding-bottom: max(14px, env(safe-area-inset-bottom));
+          }
+
+          .hoo-bubble-start-overlay {
+            padding: 12px 18px max(18px, env(safe-area-inset-bottom));
+          }
+
+          .hoo-bubble-start-content {
+            width: min(100%, 420px);
+            transform: scale(0.92);
+          }
+        }
+
+        @media (max-width: 380px) and (orientation: portrait) {
+          .hoo-bubble-mobile-controls {
+            height: 132px;
+          }
+
+          .hoo-bubble-round-console {
+            transform: scale(0.86);
+            transform-origin: left bottom;
+          }
+
+          .hoo-bubble-fire-wrap {
+            transform: scale(0.86);
+            transform-origin: right bottom;
+          }
+        }
+
+        @media (max-height: 520px) and (orientation: landscape) {
+          .hoo-bubble-game-header {
+            height: max(42px, calc(38px + env(safe-area-inset-top)));
+            padding-top: env(safe-area-inset-top);
+          }
+
+          .hoo-bubble-game-header p {
+            display: none;
+          }
+
+          .hoo-bubble-round-console {
+            transform: scale(0.78);
+            transform-origin: left bottom;
+          }
+
+          .hoo-bubble-fire-wrap {
+            transform: scale(0.78);
+            transform-origin: right bottom;
+          }
+
+          .hoo-bubble-mobile-controls {
+            height: 104px;
+            padding-top: 6px;
+            padding-bottom: max(8px, env(safe-area-inset-bottom));
           }
         }
       `}</style>
