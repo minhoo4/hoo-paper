@@ -16,6 +16,7 @@ import PushNotificationButton from "./PushNotificationButton";
 
 import Hoo2048Game from "@/components/Hoo2048Game";
 import HooShisenGame from "@/components/HooShisenGame";
+import Hoo1952Game from "@/components/Hoo1952Game";
 import {
   createPuzzleId,
   submitSudokuCompletion,
@@ -308,7 +309,7 @@ type SudokuBestTimes = Record<
   number | null
 >;
 
-type MinigameScreen = "menu" | "sudoku" | "2048" | "shisen";
+type MinigameScreen = "menu" | "sudoku" | "2048" | "shisen" | "1952";
 
 type Hoo2048Difficulty =
   | "easy"
@@ -1655,6 +1656,16 @@ const [hoo2048BestScores, setHoo2048BestScores] =
 useEffect(() => {
   let cancelled = false;
 
+  const restoreDefaultBackground = () => {
+    window.localStorage.removeItem(
+      "hoo-background-url",
+    );
+
+    if (!cancelled) {
+      setBackgroundUrl(null);
+    }
+  };
+
   async function loadBackground() {
     const cachedBackgroundUrl =
       window.localStorage.getItem(
@@ -1684,10 +1695,11 @@ useEffect(() => {
           .single();
 
       if (error) {
-        console.error(
-          "배경 정보 불러오기 실패:",
+        console.warn(
+          "저장된 배경 정보를 불러오지 못해 기본 배경을 사용합니다.",
           error,
         );
+        restoreDefaultBackground();
         return;
       }
 
@@ -1720,10 +1732,11 @@ useEffect(() => {
         signedUrlError ||
         !signedUrlData?.signedUrl
       ) {
-        console.error(
-          "배경 이미지 URL 생성 실패:",
+        console.warn(
+          "배경 이미지 주소를 만들지 못해 기본 배경을 사용합니다.",
           signedUrlError,
         );
+        restoreDefaultBackground();
         return;
       }
 
@@ -1749,18 +1762,20 @@ useEffect(() => {
       };
 
       backgroundImage.onerror = () => {
-        console.error(
-          "배경 이미지 로딩에 실패했습니다.",
+        console.warn(
+          "저장된 배경 이미지가 만료되었거나 존재하지 않아 기본 배경으로 복구합니다.",
         );
+        restoreDefaultBackground();
       };
 
       backgroundImage.src =
         latestBackgroundUrl;
     } catch (error) {
-      console.error(
-        "배경 불러오기 실패:",
+      console.warn(
+        "배경을 불러오는 중 문제가 발생해 기본 배경으로 복구합니다.",
         error,
       );
+      restoreDefaultBackground();
     }
   }
 
@@ -5203,8 +5218,7 @@ async function enableHooWeatherWithCurrentLocation() {
   setWeatherErrorMessage("");
 
   if (
-    typeof navigator ===
-      "undefined" ||
+    typeof navigator === "undefined" ||
     !navigator.geolocation
   ) {
     setWeatherPermissionStatus(
@@ -5229,14 +5243,6 @@ async function enableHooWeatherWithCurrentLocation() {
   );
 
   try {
-    /*
-     * 브라우저에서 받은 정확한 위치는
-     * 콜백 안에서 즉시 소수점 둘째 자리,
-     * 약 1km 단위로 축소한다.
-     *
-     * 정확한 GeolocationPosition 객체는
-     * 상태, 로컬 저장소 또는 DB에 저장하지 않는다.
-     */
     const coarseLocation =
       await new Promise<HooSessionLocation>(
         (
@@ -5257,15 +5263,11 @@ async function enableHooWeatherWithCurrentLocation() {
               );
             },
             reject,
-          {
-  /*
-   * 오래된 네트워크 위치를 사용하지 않고
-   * 기기에서 받을 수 있는 가장 정확한 위치를 요청한다.
-   */
-  enableHighAccuracy: true,
-  timeout: 15_000,
-  maximumAge: 0,
-},
+            {
+              enableHighAccuracy: true,
+              timeout: 15_000,
+              maximumAge: 0,
+            },
           );
         },
       );
@@ -5298,10 +5300,6 @@ async function enableHooWeatherWithCurrentLocation() {
       HooWeatherPreference = {
         weatherEnabled: true,
 
-        /*
-         * 원본 GPS 좌표가 아니라 이미 축소된
-         * 소수점 둘째 자리 좌표만 사용한다.
-         */
         latitude:
           coarseLocation.latitude,
 
@@ -5316,20 +5314,12 @@ async function enableHooWeatherWithCurrentLocation() {
         locationSource:
           "device_coarse",
 
-        /*
-         * 저장된 대략적 위치를 이용해 서버가
-         * 앱 종료 후에도 날씨를 갱신할 수 있다.
-         */
         backgroundWeatherEnabled:
           true,
 
         locationProcessingMode:
           "persisted_coarse",
 
-        /*
-         * 정확한 원본 위치는 브라우저 메모리에서만
-         * 최대 60초 동안 처리한다.
-         */
         rawLocationRetentionSeconds:
           60,
 
@@ -5353,10 +5343,6 @@ async function enableHooWeatherWithCurrentLocation() {
           weather_enabled:
             true,
 
-          /*
-           * 정확한 원본 위치가 아닌
-           * 약 1km 단위 좌표만 저장한다.
-           */
           latitude:
             coarseLocation.latitude,
 
@@ -5407,21 +5393,12 @@ async function enableHooWeatherWithCurrentLocation() {
       "granted",
     );
 
-    /*
-     * 저장된 것과 동일한 대략적 위치로
-     * 현재 날씨를 즉시 한 번 갱신한다.
-     */
     await fetchHooWeatherForLocation(
       coarseLocation,
     );
 
     setIsWeatherConsentOpen(false);
-  } catch (error) {
-    console.error(
-      "HOO 현재 위치 사용 실패:",
-      error,
-    );
-
+  } catch {
     stopHooLiveLocation();
 
     setWeatherPermissionStatus(
@@ -13461,8 +13438,45 @@ setSecretPinInput("");
 
 </article>
 
+            {/* HOO 1952 카드 — 두 번째 줄 오른쪽 */}
+            <article className="order-4 relative flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#555] bg-[#111] p-4 text-white shadow-sm sm:rounded-[28px] sm:p-6">
+              <div className="pointer-events-none absolute inset-0 opacity-[0.08] [background-image:repeating-linear-gradient(0deg,transparent,transparent_4px,#fff_5px)]" />
+              <div className="relative flex items-center gap-4">
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/20 bg-white text-3xl grayscale">
+                  ✈️
+                </span>
+                <div>
+                  <p className="text-[11px] font-black tracking-[0.16em] text-white/40">
+                    CLASSIC AIR SHOOTER
+                  </p>
+                  <h3 className="text-2xl font-black tracking-[0.08em] text-white">
+                    HOO 1952
+                  </h3>
+                </div>
+              </div>
+
+              <div className="relative mt-4 space-y-3 rounded-2xl border border-white/10 bg-white/[0.06] p-4 sm:mt-6">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-white/45">조작 방식</span>
+                  <strong className="text-right text-sm font-black text-white">드래그 · 자동 사격</strong>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-white/45">작전 모드</span>
+                  <strong className="text-right text-sm font-black text-white">무한 웨이브</strong>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setMinigameScreen("1952")}
+                className="relative mt-auto w-full rounded-2xl border border-white/70 bg-white/10 py-3.5 text-sm font-black tracking-[0.08em] !text-white transition hover:scale-[1.02] hover:bg-white/20"
+              >
+                HOO 1952 출격
+              </button>
+            </article>
+
             {/* 사천성 카드 */}
-            <article className="rounded-[22px] border border-[#ded8ef] bg-[#faf9ff] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
+            <article className="order-3 rounded-[22px] border border-[#ded8ef] bg-[#faf9ff] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
               <div className="flex items-center gap-4">
                 <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#efe8ff] text-3xl">
                   🀄
@@ -13509,6 +13523,7 @@ setSecretPinInput("");
                 HOO 사천성 플레이
               </button>
             </article>
+
           </div>
         </article>
 
@@ -13601,6 +13616,10 @@ setSecretPinInput("");
       <HooShisenGame
         onExit={() => setMinigameScreen("menu")}
       />
+    )}
+
+    {minigameScreen === "1952" && (
+      <Hoo1952Game onExit={() => setMinigameScreen("menu")} />
     )}
 
     {minigameScreen === "sudoku" &&

@@ -87,6 +87,32 @@ const PERIOD_LABEL: Record<RankingPeriod, string> = {
   all: "종합 점수",
 };
 
+type LocalMiniGameScores = {
+  shisen: number;
+  hoo1952: number;
+};
+
+const LOCAL_MINIGAME_SCORE_KEYS = {
+  shisen: "hoo-shisen-ranking-score",
+  hoo1952: "hoo-1952-ranking-score",
+} as const;
+
+function readLocalMiniGameScores(): LocalMiniGameScores {
+  if (typeof window === "undefined") {
+    return { shisen: 0, hoo1952: 0 };
+  }
+
+  const readScore = (key: string) => {
+    const value = Number.parseInt(window.localStorage.getItem(key) ?? "0", 10);
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  };
+
+  return {
+    shisen: readScore(LOCAL_MINIGAME_SCORE_KEYS.shisen),
+    hoo1952: readScore(LOCAL_MINIGAME_SCORE_KEYS.hoo1952),
+  };
+}
+
 type HooCommunityPanelProps = {
   refreshKey?: number;
 };
@@ -120,6 +146,8 @@ const [selectedGame, setSelectedGame] =
 
   const [rankings, setRankings] = useState<RankingRow[]>([]);
   const [stats, setStats] = useState<MyStats>(null);
+  const [localMiniGameScores, setLocalMiniGameScores] =
+    useState<LocalMiniGameScores>({ shisen: 0, hoo1952: 0 });
   const [loading, setLoading] = useState(true);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
@@ -380,6 +408,36 @@ const [selectedGame, setSelectedGame] =
   }, [loadRanking]);
 
   useEffect(() => {
+    const syncLocalMiniGameScores = () => {
+      setLocalMiniGameScores(readLocalMiniGameScores());
+    };
+
+    syncLocalMiniGameScores();
+
+    window.addEventListener("storage", syncLocalMiniGameScores);
+    window.addEventListener(
+      "hoo:shisen-ranking-score",
+      syncLocalMiniGameScores,
+    );
+    window.addEventListener(
+      "hoo:1952-ranking-score",
+      syncLocalMiniGameScores,
+    );
+
+    return () => {
+      window.removeEventListener("storage", syncLocalMiniGameScores);
+      window.removeEventListener(
+        "hoo:shisen-ranking-score",
+        syncLocalMiniGameScores,
+      );
+      window.removeEventListener(
+        "hoo:1952-ranking-score",
+        syncLocalMiniGameScores,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
     if (rankingMode !== "timeAttack") return;
 
     void loadTimeAttackRanking();
@@ -570,7 +628,31 @@ const [selectedGame, setSelectedGame] =
     setStats(null);
   }
 
-  const level = getLevelProgress(stats?.total_score ?? 0);
+  const localMiniGameTotal =
+    localMiniGameScores.shisen + localMiniGameScores.hoo1952;
+  const displayedTotalScore =
+    (stats?.total_score ?? 0) + localMiniGameTotal;
+  const level = getLevelProgress(displayedTotalScore);
+
+  const displayedRankings = useMemo(() => {
+    if (period !== "all" || !user || localMiniGameTotal <= 0) {
+      return rankings;
+    }
+
+    return rankings
+      .map((row) =>
+        row.userId === user.id
+          ? {
+              ...row,
+              totalScore: row.totalScore + localMiniGameTotal,
+              level: getLevelProgress(
+                row.totalScore + localMiniGameTotal,
+              ).level,
+            }
+          : row,
+      )
+      .sort((a, b) => b.totalScore - a.totalScore);
+  }, [localMiniGameTotal, period, rankings, user]);
 
 return (
   <aside className="flex h-[calc(100vh-140px)] max-h-[760px] min-h-0 flex-col overflow-hidden rounded-[34px] bg-[#f7f5ff] p-6">
@@ -625,7 +707,7 @@ return (
           </div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
             <div>
-              <p className="font-black text-[#332f45]">{stats.total_score}</p>
+              <p className="font-black text-[#332f45]">{displayedTotalScore}</p>
               <p className="text-[#928ba8]">총점</p>
             </div>
             <div>
@@ -637,6 +719,12 @@ return (
               <p className="text-[#928ba8]">연속일</p>
             </div>
           </div>
+          {localMiniGameTotal > 0 && (
+            <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 rounded-xl bg-[#f7f5ff] px-3 py-2 text-[10px] font-black text-[#746d88]">
+              <span>사천성 +{localMiniGameScores.shisen}</span>
+              <span>HOO 1952 +{localMiniGameScores.hoo1952}</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -713,12 +801,12 @@ return (
               msOverflowStyle: "none",
             }}
           >
-            {rankings.length === 0 ? (
+            {displayedRankings.length === 0 ? (
               <p className="rounded-2xl bg-white px-4 py-8 text-center text-sm font-bold text-[#948da7]">
                 첫 주인공이 되어보세요!
               </p>
             ) : (
-              rankings.map((row, index) => (
+              displayedRankings.map((row, index) => (
                 <div
                   key={row.userId}
                   className="flex items-center gap-3 rounded-2xl bg-white px-3 py-3"
