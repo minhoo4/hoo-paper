@@ -90,16 +90,18 @@ const PERIOD_LABEL: Record<RankingPeriod, string> = {
 type LocalMiniGameScores = {
   shisen: number;
   hoo1952: number;
+  bubble: number;
 };
 
 const LOCAL_MINIGAME_SCORE_KEYS = {
   shisen: "hoo-shisen-ranking-score",
   hoo1952: "hoo-1952-ranking-score",
+  bubble: "hoo-bubble-ranking-score",
 } as const;
 
 function readLocalMiniGameScores(): LocalMiniGameScores {
   if (typeof window === "undefined") {
-    return { shisen: 0, hoo1952: 0 };
+    return { shisen: 0, hoo1952: 0, bubble: 0 };
   }
 
   const readScore = (key: string) => {
@@ -110,6 +112,7 @@ function readLocalMiniGameScores(): LocalMiniGameScores {
   return {
     shisen: readScore(LOCAL_MINIGAME_SCORE_KEYS.shisen),
     hoo1952: readScore(LOCAL_MINIGAME_SCORE_KEYS.hoo1952),
+    bubble: readScore(LOCAL_MINIGAME_SCORE_KEYS.bubble),
   };
 }
 
@@ -147,7 +150,7 @@ const [selectedGame, setSelectedGame] =
   const [rankings, setRankings] = useState<RankingRow[]>([]);
   const [stats, setStats] = useState<MyStats>(null);
   const [localMiniGameScores, setLocalMiniGameScores] =
-    useState<LocalMiniGameScores>({ shisen: 0, hoo1952: 0 });
+    useState<LocalMiniGameScores>({ shisen: 0, hoo1952: 0, bubble: 0 });
   const [loading, setLoading] = useState(true);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
@@ -423,6 +426,10 @@ const [selectedGame, setSelectedGame] =
       "hoo:1952-ranking-score",
       syncLocalMiniGameScores,
     );
+    window.addEventListener(
+      "hoo:bubble-ranking-score",
+      syncLocalMiniGameScores,
+    );
 
     return () => {
       window.removeEventListener("storage", syncLocalMiniGameScores);
@@ -432,6 +439,10 @@ const [selectedGame, setSelectedGame] =
       );
       window.removeEventListener(
         "hoo:1952-ranking-score",
+        syncLocalMiniGameScores,
+      );
+      window.removeEventListener(
+        "hoo:bubble-ranking-score",
         syncLocalMiniGameScores,
       );
     };
@@ -629,7 +640,9 @@ const [selectedGame, setSelectedGame] =
   }
 
   const localMiniGameTotal =
-    localMiniGameScores.shisen + localMiniGameScores.hoo1952;
+    localMiniGameScores.shisen +
+    localMiniGameScores.hoo1952 +
+    localMiniGameScores.bubble;
   const displayedTotalScore =
     (stats?.total_score ?? 0) + localMiniGameTotal;
   const level = getLevelProgress(displayedTotalScore);
@@ -662,7 +675,9 @@ return (
           <p className="text-xs font-black tracking-[0.16em] text-[#928ba8]">
             HOO COMMUNITY
           </p>
-          <h3 className="mt-1 text-xl font-black text-[#3f3954]">랭킹</h3>
+          <h3 className="mt-1 text-xl font-black text-[#3f3954]">
+            종합 랭킹
+          </h3>
         </div>
         {loading ? null : user ? (
           <button
@@ -723,6 +738,7 @@ return (
             <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 rounded-xl bg-[#f7f5ff] px-3 py-2 text-[10px] font-black text-[#746d88]">
               <span>사천성 +{localMiniGameScores.shisen}</span>
               <span>HOO 1952 +{localMiniGameScores.hoo1952}</span>
+              <span>HOO BUBBLE +{localMiniGameScores.bubble}</span>
             </div>
           )}
         </div>

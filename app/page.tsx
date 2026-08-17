@@ -17,6 +17,7 @@ import PushNotificationButton from "./PushNotificationButton";
 import Hoo2048Game from "@/components/Hoo2048Game";
 import HooShisenGame from "@/components/HooShisenGame";
 import Hoo1952Game from "@/components/Hoo1952Game";
+import HooBubbleGame from "@/components/HooBubbleGame";
 import {
   createPuzzleId,
   submitSudokuCompletion,
@@ -309,7 +310,13 @@ type SudokuBestTimes = Record<
   number | null
 >;
 
-type MinigameScreen = "menu" | "sudoku" | "2048" | "shisen" | "1952";
+type MinigameScreen =
+  | "menu"
+  | "sudoku"
+  | "2048"
+  | "shisen"
+  | "1952"
+  | "bubble";
 
 type Hoo2048Difficulty =
   | "easy"
@@ -5218,7 +5225,8 @@ async function enableHooWeatherWithCurrentLocation() {
   setWeatherErrorMessage("");
 
   if (
-    typeof navigator === "undefined" ||
+    typeof navigator ===
+      "undefined" ||
     !navigator.geolocation
   ) {
     setWeatherPermissionStatus(
@@ -5243,6 +5251,14 @@ async function enableHooWeatherWithCurrentLocation() {
   );
 
   try {
+    /*
+     * 브라우저에서 받은 정확한 위치는
+     * 콜백 안에서 즉시 소수점 둘째 자리,
+     * 약 1km 단위로 축소한다.
+     *
+     * 정확한 GeolocationPosition 객체는
+     * 상태, 로컬 저장소 또는 DB에 저장하지 않는다.
+     */
     const coarseLocation =
       await new Promise<HooSessionLocation>(
         (
@@ -5263,11 +5279,15 @@ async function enableHooWeatherWithCurrentLocation() {
               );
             },
             reject,
-            {
-              enableHighAccuracy: true,
-              timeout: 15_000,
-              maximumAge: 0,
-            },
+          {
+  /*
+   * 오래된 네트워크 위치를 사용하지 않고
+   * 기기에서 받을 수 있는 가장 정확한 위치를 요청한다.
+   */
+  enableHighAccuracy: true,
+  timeout: 15_000,
+  maximumAge: 0,
+},
           );
         },
       );
@@ -5300,6 +5320,10 @@ async function enableHooWeatherWithCurrentLocation() {
       HooWeatherPreference = {
         weatherEnabled: true,
 
+        /*
+         * 원본 GPS 좌표가 아니라 이미 축소된
+         * 소수점 둘째 자리 좌표만 사용한다.
+         */
         latitude:
           coarseLocation.latitude,
 
@@ -5314,12 +5338,20 @@ async function enableHooWeatherWithCurrentLocation() {
         locationSource:
           "device_coarse",
 
+        /*
+         * 저장된 대략적 위치를 이용해 서버가
+         * 앱 종료 후에도 날씨를 갱신할 수 있다.
+         */
         backgroundWeatherEnabled:
           true,
 
         locationProcessingMode:
           "persisted_coarse",
 
+        /*
+         * 정확한 원본 위치는 브라우저 메모리에서만
+         * 최대 60초 동안 처리한다.
+         */
         rawLocationRetentionSeconds:
           60,
 
@@ -5343,6 +5375,10 @@ async function enableHooWeatherWithCurrentLocation() {
           weather_enabled:
             true,
 
+          /*
+           * 정확한 원본 위치가 아닌
+           * 약 1km 단위 좌표만 저장한다.
+           */
           latitude:
             coarseLocation.latitude,
 
@@ -5393,12 +5429,21 @@ async function enableHooWeatherWithCurrentLocation() {
       "granted",
     );
 
+    /*
+     * 저장된 것과 동일한 대략적 위치로
+     * 현재 날씨를 즉시 한 번 갱신한다.
+     */
     await fetchHooWeatherForLocation(
       coarseLocation,
     );
 
     setIsWeatherConsentOpen(false);
   } catch {
+    /*
+     * 위치 권한 거부, GPS 시간 초과, 개발자 도구의 위치 미지원은
+     * 예상 가능한 사용자 환경이므로 console.error를 출력하지 않는다.
+     * Next.js 개발 오류창 대신 아래 상태 메시지만 표시한다.
+     */
     stopHooLiveLocation();
 
     setWeatherPermissionStatus(
@@ -13464,6 +13509,10 @@ setSecretPinInput("");
                   <span className="text-xs font-bold text-white/45">작전 모드</span>
                   <strong className="text-right text-sm font-black text-white">무한 웨이브</strong>
                 </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-white/45">랭킹 점수</span>
+                  <strong className="text-right text-sm font-black text-white">생존 30초마다 +10점</strong>
+                </div>
               </div>
 
               <button
@@ -13521,6 +13570,55 @@ setSecretPinInput("");
                 className="mt-4 w-full rounded-2xl bg-[#8b63dc] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#7650c9] sm:mt-6"
               >
                 HOO 사천성 플레이
+              </button>
+            </article>
+
+            {/* HOO BUBBLE 카드 */}
+            <article className="order-5 relative flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#59634e] bg-[#141713] p-4 text-white shadow-sm sm:rounded-[28px] sm:p-6">
+              <div className="pointer-events-none absolute inset-0 opacity-[0.08] [background-image:repeating-linear-gradient(0deg,transparent,transparent_5px,#dfe7d2_6px)]" />
+
+              <div className="relative flex items-center gap-4">
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[#aab59a]/40 bg-[#252b22] text-3xl">
+                  🦎
+                </span>
+
+                <div>
+                  <p className="text-[11px] font-black tracking-[0.16em] text-[#aab59a]">
+                    CLASSIC BUBBLE ACTION
+                  </p>
+                  <h3 className="font-mono text-2xl font-black tracking-[0.06em] text-white">
+                    HOO BUBBLE
+                  </h3>
+                </div>
+              </div>
+
+              <div className="relative mt-4 space-y-3 rounded-2xl border border-[#aab59a]/20 bg-black/25 p-4 sm:mt-6">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-white/45">주인공</span>
+                  <strong className="text-right text-sm font-black text-[#dfe7d2]">
+                    하찮은 두 발 도마뱀
+                  </strong>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-white/45">조작 방식</span>
+                  <strong className="text-right text-sm font-black text-white">
+                    4방향 · 버블 발사
+                  </strong>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-white/45">플레이</span>
+                  <strong className="text-right text-sm font-black text-white">
+                    버블 포획 · 연속 스테이지
+                  </strong>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setMinigameScreen("bubble")}
+                className="relative mt-auto w-full rounded-2xl border border-[#cfd8c2]/60 bg-[#59634e] py-3.5 font-mono text-sm font-black tracking-[0.08em] text-white transition hover:scale-[1.02] hover:bg-[#6b765e] active:scale-[0.98]"
+              >
+                HOO BUBBLE 플레이
               </button>
             </article>
 
@@ -13619,7 +13717,21 @@ setSecretPinInput("");
     )}
 
     {minigameScreen === "1952" && (
-      <Hoo1952Game onExit={() => setMinigameScreen("menu")} />
+      <Hoo1952Game
+        onExit={() => setMinigameScreen("menu")}
+        onRecordSaved={() => {
+          setCommunityRefreshKey((previous) => previous + 1);
+        }}
+      />
+    )}
+
+    {minigameScreen === "bubble" && (
+      <HooBubbleGame
+        onExit={() => setMinigameScreen("menu")}
+        onRecordSaved={() => {
+          setCommunityRefreshKey((previous) => previous + 1);
+        }}
+      />
     )}
 
     {minigameScreen === "sudoku" &&
