@@ -167,31 +167,31 @@ const [selectedGame, setSelectedGame] =
   const [resendCooldown, setResendCooldown] = useState(0);
   const [hourlyEmailCount, setHourlyEmailCount] = useState(0);
 
-  const loadRanking = useCallback(async () => {
-    try {
-      const response = await fetch(
-        `/api/sudoku/ranking?period=${period}&limit=100`,
-        {
-          cache: "no-store",
-        },
-      );
+const loadRanking = useCallback(async () => {
+  try {
+    const response = await fetch(
+      `/api/community/ranking?period=${period}&limit=100`,
+      {
+        cache: "no-store",
+      },
+    );
 
-      if (!response.ok) {
-        setRankings([]);
-        return;
-      }
-
-      const data = await response.json();
-
-      setRankings(data.rankings ?? []);
-    } catch {
+    if (!response.ok) {
       setRankings([]);
-
-      console.warn(
-        "랭킹 API에 일시적으로 연결하지 못했습니다.",
-      );
+      return;
     }
-  }, [period]);
+
+    const data = await response.json();
+
+    setRankings(data.rankings ?? []);
+  } catch {
+    setRankings([]);
+
+    console.warn(
+      "종합 랭킹 API에 일시적으로 연결하지 못했습니다.",
+    );
+  }
+}, [period]);
 
   const loadTimeAttackRanking = useCallback(async () => {
     try {
