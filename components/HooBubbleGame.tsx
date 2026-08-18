@@ -1728,6 +1728,27 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
           BUBBLE_RANKING_SCORE_KEY,
           String(nextRankingScore),
         );
+
+        void fetch("/api/minigame-scores", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            scores: {
+              bubble: nextRankingScore,
+            },
+          }),
+        })
+          .then((response) => {
+            if (!response.ok) {
+              console.warn("후버블 랭킹 점수 서버 저장 실패");
+            }
+          })
+          .catch((error) => {
+            console.warn("후버블 랭킹 점수 서버 저장 오류:", error);
+          });
+
         window.dispatchEvent(
           new CustomEvent("hoo:bubble-ranking-score", {
             detail: {

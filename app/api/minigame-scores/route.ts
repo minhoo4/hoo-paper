@@ -9,6 +9,7 @@ const GAME_NAMES = [
   "shisen",
   "hoo1952",
   "bubble",
+  "2048",
 ] as const;
 
 type MiniGameName =
@@ -23,6 +24,7 @@ const EMPTY_SCORES: MiniGameScores = {
   shisen: 0,
   hoo1952: 0,
   bubble: 0,
+  2048: 0,
 };
 
 function isMiniGameName(
@@ -117,6 +119,11 @@ export async function GET() {
     return NextResponse.json({
       scores,
       authenticated: true,
+      totalScore:
+        scores.shisen +
+        scores.hoo1952 +
+        scores.bubble +
+        scores["2048"],
     });
   } catch (error) {
     console.error(
@@ -363,7 +370,8 @@ export async function POST(
       totalScore:
         scores.shisen +
         scores.hoo1952 +
-        scores.bubble,
+        scores.bubble +
+        scores["2048"],
     });
   } catch (error) {
     console.error(

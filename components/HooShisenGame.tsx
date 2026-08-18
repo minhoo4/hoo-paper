@@ -525,7 +525,7 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
     setClearReward({ pair: 0, time: 0, efficiency: 0, resource: 0, stage: 0, total: 0, isBest: false, rankingPoints: 0 });
   }, []);
 
-  function clearPair(first: Point, second: Point) {
+  async function clearPair(first: Point, second: Point) {
     const nextBoard = board.map((row) => [...row]);
     nextBoard[first.row][first.column] = null;
     nextBoard[second.row][second.column] = null;
@@ -540,33 +540,107 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
       const expectedMoves = getStageSize(stage).tileCount / 2;
       const finalMoves = moves + 1;
       const timeReward = Math.max(0, 3000 - seconds * 20);
-      const efficiencyReward = Math.max(0, 2000 - Math.max(0, finalMoves - expectedMoves) * 100);
+      const efficiencyReward = Math.max(
+        0,
+        2000 - Math.max(0, finalMoves - expectedMoves) * 100,
+      );
       const resourceReward = hints * 250 + shuffles * 300;
       const stageReward = stage * 100;
-      const totalReward = scoreRef.current + timeReward + efficiencyReward + resourceReward + stageReward;
+      const totalReward =
+        scoreRef.current +
+        timeReward +
+        efficiencyReward +
+        resourceReward +
+        stageReward;
       const bestScoreKey = `hoo-shisen-stage-${stage}-best-score`;
       const previousBest = Number(localStorage.getItem(bestScoreKey) ?? "0");
       const isBest = totalReward > previousBest;
-      if (isBest) localStorage.setItem(bestScoreKey, String(totalReward));
-      const previousTotalScore = Number(localStorage.getItem("hoo-shisen-total-score") ?? "0");
+
+      if (isBest) {
+        localStorage.setItem(bestScoreKey, String(totalReward));
+      }
+
+      const previousTotalScore = Number(
+        localStorage.getItem("hoo-shisen-total-score") ?? "0",
+      );
       const improvedScore = Math.max(0, totalReward - previousBest);
-      localStorage.setItem("hoo-shisen-total-score", String(previousTotalScore + improvedScore));
+      localStorage.setItem(
+        "hoo-shisen-total-score",
+        String(previousTotalScore + improvedScore),
+      );
+
       const isRankingMilestone = stage % 10 === 0;
       const rankingPoints = isRankingMilestone
-        ? stage >= 80 ? 30 : stage >= 50 ? 20 : 10
+        ? stage >= 80
+          ? 30
+          : stage >= 50
+            ? 20
+            : 10
         : 0;
 
       if (rankingPoints > 0) {
-        const previousRankingScore = Number(localStorage.getItem("hoo-shisen-ranking-score") ?? "0");
+        const previousRankingScore = Number(
+          localStorage.getItem("hoo-shisen-ranking-score") ?? "0",
+        );
         const nextRankingScore = previousRankingScore + rankingPoints;
-        localStorage.setItem("hoo-shisen-ranking-score", String(nextRankingScore));
-        window.dispatchEvent(new CustomEvent("hoo:shisen-ranking-score", { detail: { stage, points: rankingPoints, total: nextRankingScore } }));
+
+        localStorage.setItem(
+          "hoo-shisen-ranking-score",
+          String(nextRankingScore),
+        );
+
+        try {
+          const response = await fetch("/api/minigame-scores", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              scores: {
+                shisen: nextRankingScore,
+              },
+            }),
+            cache: "no-store",
+          });
+
+          if (!response.ok && response.status !== 401) {
+            console.warn("사천성 랭킹 점수 서버 저장 실패");
+          }
+        } catch (error) {
+          console.warn("사천성 랭킹 점수 서버 저장 오류:", error);
+        }
+
+        window.dispatchEvent(
+          new CustomEvent("hoo:shisen-ranking-score", {
+            detail: {
+              stage,
+              points: rankingPoints,
+              total: nextRankingScore,
+            },
+          }),
+        );
       }
 
-      setClearReward({ pair: scoreRef.current, time: timeReward, efficiency: efficiencyReward, resource: resourceReward, stage: stageReward, total: totalReward, isBest, rankingPoints });
-      const nextUnlocked = Math.min(100, Math.max(unlockedStage, stage + 1));
+      setClearReward({
+        pair: scoreRef.current,
+        time: timeReward,
+        efficiency: efficiencyReward,
+        resource: resourceReward,
+        stage: stageReward,
+        total: totalReward,
+        isBest,
+        rankingPoints,
+      });
+
+      const nextUnlocked = Math.min(
+        100,
+        Math.max(unlockedStage, stage + 1),
+      );
       setUnlockedStage(nextUnlocked);
-      localStorage.setItem("hoo-shisen-unlocked-stage", String(nextUnlocked));
+      localStorage.setItem(
+        "hoo-shisen-unlocked-stage",
+        String(nextUnlocked),
+      );
       setIsStageClear(true);
       return;
     }
