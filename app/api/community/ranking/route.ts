@@ -1,3 +1,7 @@
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
 import {
   NextRequest,
   NextResponse,
@@ -214,9 +218,18 @@ export async function GET(
       )
       .slice(0, limit);
 
-    return NextResponse.json({
-      rankings,
-    });
+   return NextResponse.json(
+  {
+    rankings,
+  },
+  {
+    headers: {
+      "Cache-Control":
+        "no-store, no-cache, must-revalidate, max-age=0",
+    },
+  },
+);
+
   } catch (error) {
     console.error(
       "GET /api/community/ranking 오류:",
