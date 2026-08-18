@@ -90,7 +90,14 @@ type UpgradeKind =
   | "counter"
   | "artillery"
   | "repair";
-type PowerUp = { x: number; y: number; vy: number; kind: UpgradeKind };
+
+type PowerUp = {
+  x: number;
+  y: number;
+  vy: number;
+  kind: UpgradeKind;
+};
+
 type MegaBomb = {
   x: number;
   y: number;
