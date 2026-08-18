@@ -80,6 +80,15 @@ type HitSmoke = {
   maxLife: number;
   size: number;
 };
+type BarrierDust = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  size: number;
+};
 type UpgradeKind =
   | "spread"
   | "rapid"
@@ -365,6 +374,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
     let dreadWindUntil = -Infinity;
     let dreadnoughtDefeatedAt = -Infinity;
     let dreadDebrisEmitted = 0;
+    let lastDreadDebrisAt = -Infinity;
     let arrivalStarted = false;
     let dreadExplosionX = width / 2;
     let dreadExplosionY = height * 0.24;
@@ -377,6 +387,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
     const particles: Particle[] = [];
     const damagePopups: DamagePopup[] = [];
     const hitSmokes: HitSmoke[] = [];
+    const barrierDusts: BarrierDust[] = [];
     const powerUps: PowerUp[] = [];
     const megaBombs: MegaBomb[] = [];
     const megaBlasts: MegaBlast[] = [];
@@ -877,28 +888,36 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
 
       if (Number.isFinite(dreadnoughtDefeatedAt)) {
         const defeatAge = now - dreadnoughtDefeatedAt;
-        const stormDuration = 5000;
-        const totalDebris = (lowPowerMode ? 26 : 42) * 150;
-        const targetEmitted = Math.min(totalDebris, Math.floor((defeatAge / stormDuration) * totalDebris));
-        const batchCount = Math.min(targetEmitted - dreadDebrisEmitted, lowPowerMode ? 28 : 46);
+        const stormDuration = 30000;
+        const stormProgress = clamp(defeatAge / stormDuration, 0, 1);
+        // 0~25초는 파편이 서서히 많아지고, 25~30초는 다시 듬성듬성 줄어든다.
+        const density = defeatAge < 25000
+          ? 0.2 + 0.8 * (defeatAge / 25000)
+          : Math.max(0.08, 1 - (defeatAge - 25000) / 5000);
+        const debrisInterval = (lowPowerMode ? 720 : 540) / Math.max(0.08, density);
+        const batchCount = defeatAge < stormDuration && now - lastDreadDebrisAt >= debrisInterval
+          ? (Math.random() < density * 0.32 ? 2 : 1)
+          : 0;
         for (let debrisIndex = 0; debrisIndex < batchCount; debrisIndex += 1) {
-          const spawnX = dreadExplosionX + (Math.random() - 0.5) * width * 0.92;
-          const safeHalfWidth = Math.max(48, width * 0.1);
-          const canHurt = Math.random() < 0.038 && Math.abs(spawnX - player.x) > safeHalfWidth;
-          const speed = 76 + Math.random() * 118;
-          const horizontal = (Math.random() - 0.5) * speed * 1.25;
+          const spawnX = clamp(dreadExplosionX + (Math.random() - 0.5) * width * 0.94, -30, width + 30);
+          const spawnY = dreadExplosionY + (Math.random() - 0.5) * 120;
+          const aimX = player.x + (Math.random() - 0.5) * Math.max(90, width * 0.32);
+          const aimY = player.y + (Math.random() - 0.5) * 120;
+          const angle = Math.atan2(aimY - spawnY, aimX - spawnX);
+          const speed = 44 + stormProgress * 72 + Math.random() * 48;
           dreadDebris.push({
             x: spawnX,
-            y: dreadExplosionY + (Math.random() - 0.5) * 90,
-            vx: horizontal,
-            vy: 58 + Math.random() * speed,
-            r: canHurt ? 10 + Math.random() * 15 : 3 + Math.random() * 9,
+            y: spawnY,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            r: 7 + Math.random() * 15,
             angle: Math.random() * Math.PI * 2,
             spin: (Math.random() - 0.5) * 9,
-            life: 1.2 + Math.random() * 2.5,
-            harmful: canHurt,
+            life: 9 + Math.random() * 3,
+            harmful: true,
           });
         }
+        if (batchCount > 0) lastDreadDebrisAt = now;
         dreadDebrisEmitted += Math.max(0, batchCount);
 
         if (defeatAge < stormDuration && now - lastDreadChainSoundAt >= 280) {
@@ -915,7 +934,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
           setLives(currentLives);
           setWave(currentWave);
           setRunSeconds(Math.floor((now - runStartedAt) / 1000));
-          setMissionPhase("landing");
+          setMissionPhase("returned");
           running = false;
           return;
         }
@@ -1201,9 +1220,9 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
           const insideRight = Math.abs(enemy.x - (player.x + wingOffset)) <= beamWidth + enemy.r;
           if (!insideLeft && !insideRight) continue;
 
-          const damage = enemy.kind === "boss" || enemy.kind === "fortress" || enemy.kind === "dreadnought"
-            ? enemy.maxHp * delta * 0.22
-            : enemy.maxHp + 1;
+          // 날개 레이저 한 줄은 1초 풀타격 기준 60, 두 줄을 모두 맞으면 최대 120의 고정 피해만 준다.
+          const beamHits = Number(insideLeft) + Number(insideRight);
+          const damage = 60 * delta * beamHits;
           markEnemyHit(enemy, damage, now, enemy.x, enemy.y, false);
           if (enemy.hp <= 0) {
             destroyed.push({ x: enemy.x, y: enemy.y, maxHp: enemy.maxHp });
@@ -1211,24 +1230,10 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
           }
         }
 
-        // 레이저로 터진 적의 폭발은 주변 적에게 최대 체력의 50% 피해
+        // 레이저로 터진 적의 폭발은 연쇄 폭발 연출만 만들며 주변 적에게 피해를 주지 않는다.
         destroyed.forEach((blast) => {
           explode(blast.x, blast.y, 24);
-          for (let enemyIndex = enemies.length - 1; enemyIndex >= 0; enemyIndex -= 1) {
-            const enemy = enemies[enemyIndex];
-            if (Math.hypot(enemy.x - blast.x, enemy.y - blast.y) > 62 + enemy.r) continue;
-            markEnemyHit(
-              enemy,
-              enemy.kind === "boss" || enemy.kind === "fortress" || enemy.kind === "dreadnought"
-                ? enemy.maxHp * 0.08
-                : enemy.maxHp * 0.5,
-              now,
-              enemy.x,
-              enemy.y,
-              false,
-            );
-            if (enemy.hp <= 0) destroyEnemy(enemyIndex);
-          }
+          megaBlasts.push({ x: blast.x, y: blast.y, startedAt: now, radius: 62 });
         });
       }
 
@@ -1345,7 +1350,8 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
         shot.x += shot.vx * delta;
         shot.y += shot.vy * delta;
       });
-      enemyShots.forEach((shot) => {
+      const barrierAbsorbedShotIndexes: number[] = [];
+      enemyShots.forEach((shot, shotIndex) => {
         if (shot.kind === "ufo" && !shot.ufoLaunched) {
           const targetX = shot.ufoTargetX ?? player.x;
           const targetY = shot.ufoTargetY ?? player.y;
@@ -1398,7 +1404,23 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
             shot.lastBarrierPulseAt !== barrierPulseAt
           ) {
             shot.lastBarrierPulseAt = barrierPulseAt;
-            shot.frozenUntil = now + 1000;
+            const dustCount = lowPowerMode ? 5 : 9;
+            for (let dustIndex = 0; dustIndex < dustCount; dustIndex += 1) {
+              const angleToPlayer = Math.atan2(player.y - shot.y, player.x - shot.x);
+              const speed = 75 + Math.random() * 125;
+              const life = 0.55 + Math.random() * 0.55;
+              barrierDusts.push({
+                x: shot.x + (Math.random() - 0.5) * shot.r,
+                y: shot.y + (Math.random() - 0.5) * shot.r,
+                vx: Math.cos(angleToPlayer) * speed + (Math.random() - 0.5) * 38,
+                vy: Math.sin(angleToPlayer) * speed + (Math.random() - 0.5) * 38,
+                life,
+                maxLife: life,
+                size: 1.5 + Math.random() * 4.5,
+              });
+            }
+            barrierAbsorbedShotIndexes.push(shotIndex);
+            return;
           }
         }
 
@@ -1407,6 +1429,9 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
           shot.y += shot.vy * delta;
         }
       });
+      for (let index = barrierAbsorbedShotIndexes.length - 1; index >= 0; index -= 1) {
+        enemyShots.splice(barrierAbsorbedShotIndexes[index], 1);
+      }
       powerUps.forEach((item) => { item.y += item.vy * delta; });
       particles.forEach((particle) => {
         particle.x += particle.vx * delta;
@@ -1426,10 +1451,23 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
         smoke.size += 13 * delta;
         smoke.life -= delta;
       });
+      barrierDusts.forEach((dust) => {
+        dust.x += dust.vx * delta;
+        dust.y += dust.vy * delta;
+        dust.vx *= 0.975;
+        dust.vy *= 0.975;
+        dust.size += 2.5 * delta;
+        dust.life -= delta;
+      });
       dreadDebris.forEach((debris) => {
+        const dx = player.x - debris.x;
+        const dy = player.y - debris.y;
+        const distance = Math.max(1, Math.hypot(dx, dy));
+        const attraction = 18 + Math.max(0, 1 - debris.life / 12) * 34;
+        debris.vx += (dx / distance) * attraction * delta;
+        debris.vy += (dy / distance) * attraction * delta;
         debris.x += debris.vx * delta;
         debris.y += debris.vy * delta;
-        debris.vy += 7 * delta;
         debris.angle += debris.spin * delta;
         debris.life -= delta;
       });
@@ -1859,21 +1897,11 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
         for (let enemyIndex = enemies.length - 1; enemyIndex >= 0; enemyIndex -= 1) {
           const target = enemies[enemyIndex];
           if (target.isEntering || !hit(curveShot, target)) continue;
-          const damage = Math.max(260, target.maxHp * 0.5);
+          // 보라색 최종 커브탄은 대상 종류나 최대 체력과 무관하게 정확히 150 피해를 준다.
+          const damage = 150;
           markEnemyHit(target, damage, now, curveShot.x, curveShot.y, true);
-          explode(curveShot.x, curveShot.y, 180, 2.6);
-          megaBlasts.push({
-            x: curveShot.x,
-            y: curveShot.y,
-            startedAt: now,
-            radius: Math.max(150, curveShot.r * 4.2),
-          });
-          megaBlasts.push({
-            x: curveShot.x,
-            y: curveShot.y,
-            startedAt: now + 70,
-            radius: Math.max(105, curveShot.r * 3.1),
-          });
+          // 피격 지점 주변의 원형 충격파는 제거하고 파편형 폭발만 남긴다.
+          explode(curveShot.x, curveShot.y, lowPowerMode ? 34 : 64, 1.6);
           screenShakeUntil = now + 900;
           screenShakeStrength = 24;
           const audio = getAudioContext();
@@ -1947,6 +1975,9 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
       }
       for (let index = hitSmokes.length - 1; index >= 0; index -= 1) {
         if (hitSmokes[index].life <= 0) hitSmokes.splice(index, 1);
+      }
+      for (let index = barrierDusts.length - 1; index >= 0; index -= 1) {
+        if (barrierDusts[index].life <= 0) barrierDusts.splice(index, 1);
       }
 
       const playerShotLimit = lowPowerMode ? 170 : 300;
@@ -2266,6 +2297,18 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
         context.restore();
       });
 
+      barrierDusts.forEach((dust) => {
+        context.save();
+        context.globalAlpha = clamp(dust.life / dust.maxLife, 0, 1) * 0.72;
+        context.fillStyle = "#8a8a86";
+        context.shadowColor = "#b5b5b0";
+        context.shadowBlur = lowPowerMode ? 2 : 5;
+        context.beginPath();
+        context.arc(dust.x, dust.y, dust.size, 0, Math.PI * 2);
+        context.fill();
+        context.restore();
+      });
+
       hitSmokes.forEach((smoke) => {
         const smokeAlpha = clamp(smoke.life / smoke.maxLife, 0, 1) * 0.55;
         context.save();
@@ -2350,19 +2393,6 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
           context.font = "700 8px monospace";
           context.textAlign = "center";
           context.fillText("APPROACH", enemy.x, enemy.y + enemy.r + 16);
-          context.restore();
-        }
-        if (enemy.damageFlashUntil && now < enemy.damageFlashUntil) {
-          context.save();
-          context.globalCompositeOperation = "screen";
-          context.globalAlpha = clamp((enemy.damageFlashUntil - now) / 120, 0, 1);
-          context.strokeStyle = "#fff";
-          context.lineWidth = 3;
-          context.shadowColor = "#fff";
-          context.shadowBlur = 18;
-          context.beginPath();
-          context.arc(enemy.x, enemy.y, enemy.r * 1.15, 0, Math.PI * 2);
-          context.stroke();
           context.restore();
         }
         if (enemy.kind === "fortress" || enemy.kind === "dreadnought") {
@@ -3075,19 +3105,24 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
           )}
 
           {missionPhase === "returned" && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-white px-5 text-center text-black">
-              <div className="w-full max-w-md border-4 border-black bg-white p-7 shadow-[12px_12px_0_#999] sm:p-10">
-                <p className="text-[9px] font-black tracking-[0.4em] text-black/45 sm:text-xs">EARTH RETURN COMPLETE</p>
-                <h2 className="mt-4 text-2xl font-black tracking-[0.08em] sm:text-4xl">무사히 귀환했습니다.</h2>
-                <div className="mx-auto mt-6 h-px w-24 bg-black/30" />
+            <div className="absolute inset-0 z-50 flex animate-[hooReturnBlackout_1.8s_ease-in_both] items-center justify-center bg-black px-5 text-center text-white">
+              <div className="w-full max-w-xl border border-white/25 bg-[#080808] p-7 shadow-[0_0_55px_rgba(255,255,255,.08)] sm:p-10">
+                <p className="text-[9px] font-black tracking-[0.4em] text-white/35 sm:text-xs">EARTH COORDINATES CONFIRMED</p>
+                <p className="mt-6 text-base font-black leading-8 tracking-[0.04em] sm:text-xl sm:leading-10">
+                  무사히 지구에 도착한 당신.<br />
+                  분명 좌표는 지구가 맞는데.....<br />
+                  내가 알던 지구의 모습이 아니다.
+                </p>
+                <div className="mx-auto mt-6 h-px w-24 bg-white/30" />
                 <button
                   type="button"
-                  onClick={() => { setMissionPhase("report"); setGameOver(true); }}
-                  className="mt-7 min-h-14 w-full bg-black px-5 text-sm font-black tracking-[0.15em] text-white transition active:scale-[0.98] sm:text-base"
+                  onClick={() => { stopBgm(); onExit(); }}
+                  className="mt-7 min-h-14 w-full border-2 border-white bg-white px-5 text-sm font-black tracking-[0.12em] text-black transition hover:bg-black hover:text-white active:scale-[0.98] sm:text-base"
                 >
-                  다음 습격 준비하기
+                  다음 습격 기다리기
                 </button>
               </div>
+              <style>{`@keyframes hooReturnBlackout { from { opacity: 0; } to { opacity: 1; } }`}</style>
             </div>
           )}
 
