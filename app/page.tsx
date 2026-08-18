@@ -1569,6 +1569,30 @@ useEffect(() => {
 
 const [minigameScreen, setMinigameScreen] =
   useState<MinigameScreen>("menu");
+const minigameLaunchTokenRef = useRef(0);
+
+function openMinigame(
+  target: Exclude<MinigameScreen, "menu">,
+) {
+  // 포털 기반 게임을 먼저 완전히 언마운트한 뒤 다음 프레임에
+  // 선택한 게임만 마운트한다. 이전 1952 포털이 남는 현상을 차단한다.
+  const launchToken = minigameLaunchTokenRef.current + 1;
+  minigameLaunchTokenRef.current = launchToken;
+  setMinigameScreen("menu");
+
+  requestAnimationFrame(() => {
+    if (minigameLaunchTokenRef.current !== launchToken) {
+      return;
+    }
+
+    setMinigameScreen(target);
+  });
+}
+
+function closeMinigame() {
+  minigameLaunchTokenRef.current += 1;
+  setMinigameScreen("menu");
+}
 
 useEffect(() => {
   if (minigameScreen !== "sudoku") {
@@ -13220,7 +13244,7 @@ setSecretPinInput("");
 
           <div
             data-hoo-vertical-scroll="true"
-            className="mt-4 grid h-0 min-h-0 flex-1 touch-pan-y gap-4 overflow-y-scroll overscroll-contain pb-8 pr-0.5 sm:mt-7 sm:gap-5 sm:pr-1 lg:grid-cols-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+            className="isolate mt-4 grid h-0 min-h-0 flex-1 touch-pan-y gap-4 overflow-y-scroll overscroll-contain pb-8 pr-0.5 sm:mt-7 sm:gap-5 sm:pr-1 lg:grid-cols-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           >
             {/* 스도쿠 카드 */}
             <article className="rounded-[22px] border border-[#ded8ef] bg-[#faf9ff] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
@@ -13292,7 +13316,7 @@ setSecretPinInput("");
                 type="button"
                 onClick={() => {
                   startSudokuGame(sudokuDifficulty);
-                  setMinigameScreen("sudoku");
+                  openMinigame("sudoku");
                 }}
                 className="mt-4 w-full rounded-2xl bg-[#7467d8] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#6255c7] sm:mt-6"
               >
@@ -13468,7 +13492,7 @@ setSecretPinInput("");
         });
     }
 
-    setMinigameScreen("2048");
+    openMinigame("2048");
   }}
   className={`mt-6 w-full rounded-2xl border py-3.5 text-sm font-black text-white transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] ${
     hoo2048Difficulty === "buddha"
@@ -13484,7 +13508,7 @@ setSecretPinInput("");
 </article>
 
             {/* HOO 1952 카드 — 두 번째 줄 오른쪽 */}
-            <article className="order-4 relative flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#555] bg-[#111] p-4 text-white shadow-sm sm:rounded-[28px] sm:p-6">
+            <article className="relative z-0 order-4 flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#555] bg-[#111] p-4 text-white shadow-sm sm:rounded-[28px] sm:p-6">
               <div className="pointer-events-none absolute inset-0 opacity-[0.08] [background-image:repeating-linear-gradient(0deg,transparent,transparent_4px,#fff_5px)]" />
               <div className="relative flex items-center gap-4">
                 <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/20 bg-white text-3xl grayscale">
@@ -13517,7 +13541,11 @@ setSecretPinInput("");
 
               <button
                 type="button"
-                onClick={() => setMinigameScreen("1952")}
+                data-game-id="1952"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openMinigame("1952");
+                }}
                 className="relative mt-auto w-full rounded-2xl border border-white/70 bg-white/10 py-3.5 text-sm font-black tracking-[0.08em] !text-white transition hover:scale-[1.02] hover:bg-white/20"
               >
                 HOO 1952 출격
@@ -13566,7 +13594,11 @@ setSecretPinInput("");
 
               <button
                 type="button"
-                onClick={() => setMinigameScreen("shisen")}
+                data-game-id="shisen"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openMinigame("shisen");
+                }}
                 className="mt-4 w-full rounded-2xl bg-[#8b63dc] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#7650c9] sm:mt-6"
               >
                 HOO 사천성 플레이
@@ -13574,7 +13606,7 @@ setSecretPinInput("");
             </article>
 
             {/* HOO BUBBLE 카드 */}
-            <article className="order-5 relative flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#59634e] bg-[#141713] p-4 text-white shadow-sm sm:rounded-[28px] sm:p-6">
+            <article className="relative z-20 order-5 flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#59634e] bg-[#141713] p-4 text-white shadow-sm sm:rounded-[28px] sm:p-6">
               <div className="pointer-events-none absolute inset-0 opacity-[0.08] [background-image:repeating-linear-gradient(0deg,transparent,transparent_5px,#dfe7d2_6px)]" />
 
               <div className="relative flex items-center gap-4">
@@ -13615,8 +13647,16 @@ setSecretPinInput("");
 
               <button
                 type="button"
-                onClick={() => setMinigameScreen("bubble")}
-                className="relative mt-auto w-full rounded-2xl border border-[#cfd8c2]/60 bg-[#59634e] py-3.5 font-mono text-sm font-black tracking-[0.08em] text-white transition hover:scale-[1.02] hover:bg-[#6b765e] active:scale-[0.98]"
+                data-game-id="bubble"
+                aria-label="HOO BUBBLE 게임 열기"
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openMinigame("bubble");
+                }}
+                className="relative z-30 mt-auto w-full touch-manipulation rounded-2xl border border-[#cfd8c2]/60 bg-[#59634e] py-3.5 font-mono text-sm font-black tracking-[0.08em] text-white transition hover:scale-[1.02] hover:bg-[#6b765e] active:scale-[0.98]"
               >
                 HOO BUBBLE 플레이
               </button>
@@ -13651,7 +13691,7 @@ setSecretPinInput("");
 
             <button
               type="button"
-              onClick={() => setMinigameScreen("menu")}
+              onClick={closeMinigame}
               className="rounded-full bg-[#eeeafd] px-5 py-2.5 text-sm font-black text-[#665e82] transition hover:bg-[#ddd7fa]"
             >
               ← 게임 선택
@@ -13694,9 +13734,7 @@ setSecretPinInput("");
       (previous) => previous + 1,
     );
   }}
-  onBackToMenu={() => {
-    setMinigameScreen("menu");
-  }}
+  onBackToMenu={closeMinigame}
 />
 
           </div>
@@ -13710,29 +13748,42 @@ setSecretPinInput("");
       </section>
     )}
 
-    {minigameScreen === "shisen" && (
-      <HooShisenGame
-        onExit={() => setMinigameScreen("menu")}
-      />
-    )}
+    {(() => {
+      switch (minigameScreen) {
+        case "shisen":
+          return (
+            <HooShisenGame
+              key="hoo-shisen-game"
+              onExit={closeMinigame}
+            />
+          );
 
-    {minigameScreen === "1952" && (
-      <Hoo1952Game
-        onExit={() => setMinigameScreen("menu")}
-        onRecordSaved={() => {
-          setCommunityRefreshKey((previous) => previous + 1);
-        }}
-      />
-    )}
+        case "1952":
+          return (
+            <Hoo1952Game
+              key="hoo-1952-game"
+              onExit={closeMinigame}
+              onRecordSaved={() => {
+                setCommunityRefreshKey((previous) => previous + 1);
+              }}
+            />
+          );
 
-    {minigameScreen === "bubble" && (
-      <HooBubbleGame
-        onExit={() => setMinigameScreen("menu")}
-        onRecordSaved={() => {
-          setCommunityRefreshKey((previous) => previous + 1);
-        }}
-      />
-    )}
+        case "bubble":
+          return (
+            <HooBubbleGame
+              key="hoo-bubble-game"
+              onExit={closeMinigame}
+              onRecordSaved={() => {
+                setCommunityRefreshKey((previous) => previous + 1);
+              }}
+            />
+          );
+
+        default:
+          return null;
+      }
+    })()}
 
     {minigameScreen === "sudoku" &&
       createPortal(
@@ -13753,7 +13804,7 @@ setSecretPinInput("");
             type="button"
             onClick={() => {
               setIsSudokuRunning(false);
-              setMinigameScreen("menu");
+              closeMinigame();
             }}
             className="flex min-h-11 items-center gap-2 rounded-full border border-white/25 bg-black px-4 py-2 text-sm font-black text-white transition active:scale-[0.97] sm:px-6 sm:py-3 sm:text-base md:hover:border-white/60 md:hover:bg-white/5"
           >

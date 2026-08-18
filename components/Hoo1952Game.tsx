@@ -159,11 +159,9 @@ const SCORE_PER_WAVE = 1850;
 
 export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const bgmRef = useRef<HTMLAudioElement>(null);
   const [mounted, setMounted] = useState(false);
   const [started, setStarted] = useState(false);
   const [gameOver, setGameOver] = useState(false);
-  const [bgmMuted, setBgmMuted] = useState(false);
   const [missionPhase, setMissionPhase] = useState<MissionPhase>("combat");
   const [score, setScore] = useState(0);
   const [lives, setLives] = useState(3);
@@ -180,50 +178,6 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
   const submittedRunRef = useRef<string | null>(null);
   const [rankings, setRankings] = useState<Hoo1952RankingRow[]>([]);
   const [rankingLoading, setRankingLoading] = useState(true);
-
-  const playBgm = useCallback(() => {
-    const bgm = bgmRef.current;
-    if (!bgm) return;
-
-    bgm.volume = 0.35;
-    bgm.loop = true;
-    void bgm.play().catch(() => undefined);
-  }, []);
-
-  const stopBgm = useCallback(() => {
-    const bgm = bgmRef.current;
-    if (!bgm) return;
-
-    bgm.pause();
-    bgm.currentTime = 0;
-  }, []);
-
-  const startMission = useCallback(() => {
-    setMissionPhase("combat");
-    setStarted(true);
-    playBgm();
-  }, [playBgm]);
-
-  const restartMission = useCallback(() => {
-    restartRef.current += 1;
-    setMissionPhase("combat");
-    setStarted(false);
-    playBgm();
-    requestAnimationFrame(() => setStarted(true));
-  }, [playBgm]);
-
-  const exitGame = useCallback(() => {
-    stopBgm();
-    onExit();
-  }, [onExit, stopBgm]);
-
-  const toggleBgm = useCallback(() => {
-    setBgmMuted((currentMuted) => {
-      const nextMuted = !currentMuted;
-      if (bgmRef.current) bgmRef.current.muted = nextMuted;
-      return nextMuted;
-    });
-  }, []);
 
   const loadRankings = useCallback(async () => {
     try {
@@ -260,19 +214,6 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
   }, []);
 
   useEffect(() => setMounted(true), []);
-  useEffect(() => {
-    const bgm = bgmRef.current;
-    if (!bgm) return;
-
-    bgm.volume = 0.35;
-    bgm.loop = true;
-    bgm.muted = bgmMuted;
-  }, [bgmMuted, mounted]);
-  useEffect(() => {
-    if (!gameOver) return;
-    stopBgm();
-  }, [gameOver, stopBgm]);
-  useEffect(() => () => stopBgm(), [stopBgm]);
   useEffect(() => {
     if (!mounted) return;
     void loadRankings();
@@ -2803,12 +2744,6 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
 
   return createPortal(
     <section className="fixed inset-0 z-[999999] overflow-hidden overscroll-none bg-[#080808] font-mono text-white">
-      <audio
-        ref={bgmRef}
-        src="/audio/1952-bgm-viking-overture.mp3"
-        preload="auto"
-        loop
-      />
       <div className="relative mx-auto flex h-[100dvh] w-full max-w-[1120px] bg-black lg:border-x lg:border-white/10">
         <aside className="relative hidden w-[300px] shrink-0 flex-col overflow-hidden border-r border-white/15 bg-[#070707] px-5 py-6 lg:flex">
           <div className="border-b border-white/15 pb-5">
@@ -2860,19 +2795,9 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
             <p className="text-[7px] font-black tracking-[0.28em] text-white/40 sm:text-[9px] sm:tracking-[0.35em]">CLASSIFIED AIR COMMAND</p>
             <h1 className="text-xl font-black tracking-[0.14em] sm:text-3xl sm:tracking-[0.16em]">HOO 1952</h1>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={toggleBgm}
-              aria-pressed={bgmMuted}
-              className="min-h-9 rounded-full border border-white/25 px-3 text-[10px] font-black tracking-wider transition active:scale-95 sm:min-h-11 sm:px-4 sm:text-xs"
-            >
-              {bgmMuted ? "BGM OFF" : "BGM ON"}
-            </button>
-            <button type="button" onClick={exitGame} className="min-h-9 rounded-full border border-white/25 px-3 text-xs font-black transition active:scale-95 sm:min-h-11 sm:px-6 sm:text-sm">
-              나가기 ×
-            </button>
-          </div>
+          <button type="button" onClick={onExit} className="min-h-9 rounded-full border border-white/25 px-3 text-xs font-black transition active:scale-95 sm:min-h-11 sm:px-6 sm:text-sm">
+            나가기 ×
+          </button>
         </header>
 
         <div className="relative min-h-0 flex-1 overflow-hidden">
@@ -2974,7 +2899,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
                 </p>
 
                 <h2 className="mt-6 text-base font-black tracking-[0.06em] text-white sm:text-xl">지구로 돌아가시겠습니까?</h2>
-                <button type="button" onClick={startMission} className="mt-5 min-h-14 w-full border-2 border-white bg-white px-8 text-base font-black tracking-[0.18em] text-black transition hover:bg-black hover:text-white active:scale-[0.98]">
+                <button type="button" onClick={() => { setMissionPhase("combat"); setStarted(true); }} className="mt-5 min-h-14 w-full border-2 border-white bg-white px-8 text-base font-black tracking-[0.18em] text-black transition hover:bg-black hover:text-white active:scale-[0.98]">
                   출격하기
                 </button>
                 <p className="mt-3 text-[8px] font-bold tracking-[0.12em] text-white/30 sm:text-[9px]">DESTINATION · EARTH</p>
@@ -3086,7 +3011,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
                 <strong className="mt-1 block text-xl font-black text-white">{formattedRunTime}</strong>
                 <p className="mt-4 text-xs font-black tracking-wider text-white/45">생존 랭킹 점수</p>
                 <strong className="mt-1 block text-xl font-black text-white">+{survivalPoints}점</strong>
-                <button type="button" onClick={restartMission} className="mt-7 min-h-13 w-full bg-white px-6 py-3.5 font-black tracking-widest text-black transition active:scale-95">
+                <button type="button" onClick={() => { restartRef.current += 1; setMissionPhase("combat"); setStarted(false); requestAnimationFrame(() => setStarted(true)); }} className="mt-7 min-h-13 w-full bg-white px-6 py-3.5 font-black tracking-widest text-black transition active:scale-95">
                   {missionPhase === "report" ? "다음 습격 출격" : "다시 출격"}
                 </button>
               </div>
