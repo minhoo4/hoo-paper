@@ -79,6 +79,8 @@ type MyStats = {
   current_streak: number;
   best_streak: number;
   achievements: string[] | null;
+  mini_game_total_score?: number;
+  mini_game_scores?: LocalMiniGameScores;
 } | null;
 
 const PERIOD_LABEL: Record<RankingPeriod, string> = {
@@ -244,6 +246,53 @@ const [selectedGame, setSelectedGame] =
       );
     }
   }, []);
+
+  const syncMiniGameScores = useCallback(async () => {
+    const browserScores = readLocalMiniGameScores();
+
+    if (!user) {
+      setLocalMiniGameScores(browserScores);
+      return;
+    }
+
+    const hasBrowserScore =
+      browserScores.shisen > 0 ||
+      browserScores.hoo1952 > 0 ||
+      browserScores.bubble > 0;
+
+    try {
+      const response = await fetch("/api/minigame-scores", {
+        method: hasBrowserScore ? "POST" : "GET",
+        headers: hasBrowserScore
+          ? { "Content-Type": "application/json" }
+          : undefined,
+        body: hasBrowserScore
+          ? JSON.stringify({ scores: browserScores })
+          : undefined,
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("미니게임 점수 동기화 실패");
+      }
+
+      const data = await response.json();
+      const serverScores = data.scores as
+        | Partial<LocalMiniGameScores>
+        | undefined;
+
+      setLocalMiniGameScores({
+        shisen: Number(serverScores?.shisen ?? 0),
+        hoo1952: Number(serverScores?.hoo1952 ?? 0),
+        bubble: Number(serverScores?.bubble ?? 0),
+      });
+
+      await Promise.all([loadMe(), loadRanking()]);
+    } catch (error) {
+      console.warn("미니게임 점수를 서버와 동기화하지 못했습니다.", error);
+      setLocalMiniGameScores(browserScores);
+    }
+  }, [loadMe, loadRanking, user]);
 
 
   const getEmailRequestState = useCallback(() => {
@@ -411,42 +460,42 @@ const [selectedGame, setSelectedGame] =
   }, [loadRanking]);
 
   useEffect(() => {
-    const syncLocalMiniGameScores = () => {
-      setLocalMiniGameScores(readLocalMiniGameScores());
+    const handleMiniGameScoreChange = () => {
+      void syncMiniGameScores();
     };
 
-    syncLocalMiniGameScores();
+    void syncMiniGameScores();
 
-    window.addEventListener("storage", syncLocalMiniGameScores);
+    window.addEventListener("storage", handleMiniGameScoreChange);
     window.addEventListener(
       "hoo:shisen-ranking-score",
-      syncLocalMiniGameScores,
+      handleMiniGameScoreChange,
     );
     window.addEventListener(
       "hoo:1952-ranking-score",
-      syncLocalMiniGameScores,
+      handleMiniGameScoreChange,
     );
     window.addEventListener(
       "hoo:bubble-ranking-score",
-      syncLocalMiniGameScores,
+      handleMiniGameScoreChange,
     );
 
     return () => {
-      window.removeEventListener("storage", syncLocalMiniGameScores);
+      window.removeEventListener("storage", handleMiniGameScoreChange);
       window.removeEventListener(
         "hoo:shisen-ranking-score",
-        syncLocalMiniGameScores,
+        handleMiniGameScoreChange,
       );
       window.removeEventListener(
         "hoo:1952-ranking-score",
-        syncLocalMiniGameScores,
+        handleMiniGameScoreChange,
       );
       window.removeEventListener(
         "hoo:bubble-ranking-score",
-        syncLocalMiniGameScores,
+        handleMiniGameScoreChange,
       );
     };
-  }, []);
+  }, [syncMiniGameScores]);
 
   useEffect(() => {
     if (rankingMode !== "timeAttack") return;
@@ -644,28 +693,11 @@ const [selectedGame, setSelectedGame] =
     localMiniGameScores.hoo1952 +
     localMiniGameScores.bubble;
   const displayedTotalScore =
-    (stats?.total_score ?? 0) + localMiniGameTotal;
+  (stats?.total_score ?? 0) +
+  localMiniGameTotal;
   const level = getLevelProgress(displayedTotalScore);
 
-  const displayedRankings = useMemo(() => {
-    if (period !== "all" || !user || localMiniGameTotal <= 0) {
-      return rankings;
-    }
-
-    return rankings
-      .map((row) =>
-        row.userId === user.id
-          ? {
-              ...row,
-              totalScore: row.totalScore + localMiniGameTotal,
-              level: getLevelProgress(
-                row.totalScore + localMiniGameTotal,
-              ).level,
-            }
-          : row,
-      )
-      .sort((a, b) => b.totalScore - a.totalScore);
-  }, [localMiniGameTotal, period, rankings, user]);
+  const displayedRankings = rankings;
 
 return (
   <aside className="flex h-[calc(100vh-140px)] max-h-[760px] min-h-0 flex-col overflow-hidden rounded-[34px] bg-[#f7f5ff] p-6">
