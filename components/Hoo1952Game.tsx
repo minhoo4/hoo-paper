@@ -2381,7 +2381,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
           fan: "F", barrier: "B", counter: "C",
           artillery: "A", repair: "+",
         };
-        context.fillStyle = item.kind === "repair" ? "#fff" : "#bbb";
+        context.fillStyle = "#bbb";
         context.strokeStyle = "#111"; context.lineWidth = 2;
         context.beginPath(); context.arc(item.x, item.y, 13, 0, Math.PI * 2); context.fill(); context.stroke();
         context.fillStyle = "#111"; context.font = "900 13px monospace"; context.textAlign = "center";
