@@ -1129,7 +1129,8 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
         }
       }
 
-      const barrierInterval = 5000;
+      // 배리어 파장은 30초마다 한 번만 발동한다.
+      const barrierInterval = 30000;
       if (barrierLevel > 0 && now - lastBarrierAt >= barrierInterval) {
         lastBarrierAt = now;
         barrierPulseAt = now;
@@ -1403,24 +1404,27 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
             distanceFromPlayer <= pulseRadius + 24 &&
             shot.lastBarrierPulseAt !== barrierPulseAt
           ) {
+            // 같은 파장에서는 탄환마다 단 한 번만 판정하며, 30% 확률로만 삭제한다.
             shot.lastBarrierPulseAt = barrierPulseAt;
-            const dustCount = lowPowerMode ? 5 : 9;
-            for (let dustIndex = 0; dustIndex < dustCount; dustIndex += 1) {
-              const angleToPlayer = Math.atan2(player.y - shot.y, player.x - shot.x);
-              const speed = 75 + Math.random() * 125;
-              const life = 0.55 + Math.random() * 0.55;
-              barrierDusts.push({
-                x: shot.x + (Math.random() - 0.5) * shot.r,
-                y: shot.y + (Math.random() - 0.5) * shot.r,
-                vx: Math.cos(angleToPlayer) * speed + (Math.random() - 0.5) * 38,
-                vy: Math.sin(angleToPlayer) * speed + (Math.random() - 0.5) * 38,
-                life,
-                maxLife: life,
-                size: 1.5 + Math.random() * 4.5,
-              });
+            if (Math.random() < 0.3) {
+              const dustCount = lowPowerMode ? 5 : 9;
+              for (let dustIndex = 0; dustIndex < dustCount; dustIndex += 1) {
+                const angleToPlayer = Math.atan2(player.y - shot.y, player.x - shot.x);
+                const speed = 75 + Math.random() * 125;
+                const life = 0.55 + Math.random() * 0.55;
+                barrierDusts.push({
+                  x: shot.x + (Math.random() - 0.5) * shot.r,
+                  y: shot.y + (Math.random() - 0.5) * shot.r,
+                  vx: Math.cos(angleToPlayer) * speed + (Math.random() - 0.5) * 38,
+                  vy: Math.sin(angleToPlayer) * speed + (Math.random() - 0.5) * 38,
+                  life,
+                  maxLife: life,
+                  size: 1.5 + Math.random() * 4.5,
+                });
+              }
+              barrierAbsorbedShotIndexes.push(shotIndex);
+              return;
             }
-            barrierAbsorbedShotIndexes.push(shotIndex);
-            return;
           }
         }
 
