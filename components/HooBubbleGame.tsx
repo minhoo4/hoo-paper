@@ -501,70 +501,245 @@ function drawMidBoss(ctx: CanvasRenderingContext2D, boss: MidBoss) {
   ctx.save();
   ctx.translate(boss.x, boss.y);
   ctx.scale(2, 2);
-  drawMonster(ctx, {
-    id: -1, x: 0, y: 0, vx: 0, vy: 0, w: 76, h: 76,
-    dir: boss.dir, trapped: 0, dead: false, variant: 2, trapImmunity: 0,
-  });
-  if (boss.mouthOpen) {
-    ctx.fillStyle = "#221022";
-    ctx.fillRect(25, 48, 30, 22);
-    ctx.fillStyle = "#6f2b82";
-    ctx.fillRect(30, 58, 20, 9);
-    ctx.fillStyle = "#fff1d8";
-    ctx.fillRect(27, 48, 6, 7);
-    ctx.fillRect(47, 48, 6, 7);
-  }
-  ctx.restore();
 
-  const ratio = clamp(boss.hp / boss.maxHp, 0, 1);
-  ctx.fillStyle = "rgba(0,0,0,.82)";
-  ctx.fillRect(boss.x - 5, boss.y - 34, boss.w + 10, 23);
-  ctx.fillStyle = "#32153f";
-  ctx.fillRect(boss.x, boss.y - 29, boss.w, 13);
-  ctx.fillStyle = ratio > 0.35 ? "#ad52df" : "#ef668d";
-  ctx.fillRect(boss.x, boss.y - 29, boss.w * ratio, 13);
-  ctx.strokeStyle = "#f0d9ff";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(boss.x, boss.y - 29, boss.w, 13);
-  ctx.fillStyle = "#f6eaff";
-  ctx.font = "900 13px monospace";
-  ctx.textAlign = "center";
-  ctx.fillText(`MID BOSS  ${boss.hp}/20`, boss.x + boss.w / 2, boss.y - 39);
-  ctx.textAlign = "left";
+  // 중급보스: 커다란 왕만두 머리와 보라색 후드를 쓴 울상 흡입 괴물.
+  ctx.fillStyle = "#30123f";
+  ctx.fillRect(7, 17, 62, 47);
+  ctx.fillRect(12, 9, 52, 58);
+  ctx.fillRect(3, 27, 11, 27);
+  ctx.fillRect(62, 27, 11, 27);
+
+  // 양옆 왕만두와 주름
+  ctx.fillStyle = "#8e4eb5";
+  ctx.fillRect(1, 10, 23, 29);
+  ctx.fillRect(5, 5, 16, 38);
+  ctx.fillRect(52, 10, 23, 29);
+  ctx.fillRect(55, 5, 16, 38);
+  ctx.fillStyle = "#c47be8";
+  ctx.fillRect(7, 9, 10, 5);
+  ctx.fillRect(59, 9, 10, 5);
+  ctx.fillStyle = "#56246f";
+  [8, 14, 58, 64].forEach((x) => ctx.fillRect(x, 16, 3, 17));
+
+  // 창백한 얼굴
+  ctx.fillStyle = "#ffe4bd";
+  ctx.fillRect(15, 22, 46, 35);
+  ctx.fillRect(20, 18, 36, 43);
+
+  // 짙은 눈두덩과 커다란 울상 눈
+  ctx.fillStyle = "#241228";
+  ctx.fillRect(18, 27, 17, 14);
+  ctx.fillRect(43, 27, 17, 14);
+  ctx.fillStyle = "#f7f1ff";
+  ctx.fillRect(21, 29, 11, 9);
+  ctx.fillRect(46, 29, 11, 9);
+  ctx.fillStyle = "#4f225f";
+  ctx.fillRect(25, 31, 6, 8);
+  ctx.fillRect(47, 31, 6, 8);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(26, 31, 3, 3);
+  ctx.fillRect(48, 31, 3, 3);
+
+  // 계속 떨어지는 굵은 눈물
+  ctx.fillStyle = "#70d9ff";
+  ctx.fillRect(21, 39, 8, 16);
+  ctx.fillRect(49, 39, 8, 16);
+  ctx.fillStyle = "#d9f8ff";
+  ctx.fillRect(22, 40, 3, 10);
+  ctx.fillRect(50, 40, 3, 10);
+
+  // 흡입할 때 크게 벌어지는 입
+  if (boss.mouthOpen) {
+    ctx.fillStyle = "#130817";
+    ctx.fillRect(25, 45, 28, 24);
+    ctx.fillRect(21, 50, 36, 14);
+    ctx.fillStyle = "#78306f";
+    ctx.fillRect(29, 59, 20, 8);
+    ctx.fillStyle = "#fff0d3";
+    ctx.fillRect(24, 48, 7, 6);
+    ctx.fillRect(47, 48, 7, 6);
+    ctx.fillStyle = "#b46dd0";
+    ctx.fillRect(35, 45, 7, 4);
+  } else {
+    ctx.fillStyle = "#442033";
+    ctx.fillRect(29, 49, 20, 5);
+    ctx.fillRect(25, 53, 5, 5);
+    ctx.fillRect(48, 53, 5, 5);
+  }
+
+  // 짧고 둔한 발과 흡입 기관
+  ctx.fillStyle = "#4b205d";
+  ctx.fillRect(9, 57, 18, 13);
+  ctx.fillRect(51, 57, 18, 13);
+  ctx.fillStyle = "#a866c7";
+  ctx.fillRect(6, 66, 23, 7);
+  ctx.fillRect(49, 66, 23, 7);
+  ctx.fillStyle = "#d48cff";
+  ctx.fillRect(2, 43, 8, 6);
+  ctx.fillRect(68, 43, 8, 6);
+  ctx.restore();
 }
 
 function drawHighBoss(ctx: CanvasRenderingContext2D, boss: HighBoss) {
   ctx.save();
   ctx.translate(boss.x, boss.y);
   ctx.scale(4, 4);
-  drawMonster(ctx, {
-    id: -2, x: 0, y: 0, vx: 0, vy: 0, w: 76, h: 76,
-    dir: boss.dir, trapped: 0, dead: false, variant: 1, trapImmunity: 0,
-  });
-  // 상급보스 전용으로 눈과 입을 더 뒤틀어 괴랄한 인상을 강화한다.
-  ctx.fillStyle = "#571729";
-  ctx.fillRect(14, 42, 49, 25);
-  ctx.fillStyle = "#f5e8c8";
-  for (let x = 17; x < 60; x += 10) ctx.fillRect(x, 43 + (x % 20 ? 0 : 12), 7, 10);
-  ctx.fillStyle = "#bf456a";
-  ctx.fillRect(25, 59, 27, 7);
-  ctx.restore();
 
-  const ratio = clamp(boss.hp / boss.maxHp, 0, 1);
-  ctx.fillStyle = "rgba(0,0,0,.88)";
-  ctx.fillRect(boss.x - 7, boss.y - 39, boss.w + 14, 28);
-  ctx.fillStyle = "#351019";
-  ctx.fillRect(boss.x, boss.y - 32, boss.w, 15);
-  ctx.fillStyle = ratio > .3 ? "#e33e65" : "#ff8b47";
-  ctx.fillRect(boss.x, boss.y - 32, boss.w * ratio, 15);
-  ctx.strokeStyle = "#ffd3bc";
-  ctx.lineWidth = 3;
-  ctx.strokeRect(boss.x, boss.y - 32, boss.w, 15);
-  ctx.fillStyle = "#ffe7dc";
-  ctx.font = "900 15px monospace";
+  // 상급보스: 여러 눈·비대칭 뿔·거대한 턱을 가진 고대 버블 괴수.
+  ctx.fillStyle = "#17111f";
+  ctx.fillRect(8, 14, 61, 54);
+  ctx.fillRect(3, 25, 70, 34);
+  ctx.fillRect(15, 7, 48, 65);
+
+  // 비대칭 뿔과 솟은 등껍질
+  ctx.fillStyle = "#6d596f";
+  ctx.fillRect(7, 3, 9, 21);
+  ctx.fillRect(12, 0, 6, 13);
+  ctx.fillRect(57, 6, 12, 18);
+  ctx.fillRect(65, 1, 7, 13);
+  ctx.fillRect(29, 2, 8, 12);
+  ctx.fillRect(42, 5, 6, 9);
+  ctx.fillStyle = "#9d88a1";
+  ctx.fillRect(10, 4, 3, 13);
+  ctx.fillRect(62, 7, 4, 11);
+
+  // 일그러진 얼굴 판
+  ctx.fillStyle = "#b9b0b6";
+  ctx.fillRect(12, 18, 51, 39);
+  ctx.fillRect(7, 29, 61, 23);
+  ctx.fillStyle = "#d9d1cf";
+  ctx.fillRect(18, 14, 32, 47);
+
+  // 크기와 방향이 전부 다른 다섯 개의 눈
+  ctx.fillStyle = "#f4f0dc";
+  ctx.fillRect(10, 23, 15, 15);
+  ctx.fillRect(29, 18, 19, 17);
+  ctx.fillRect(52, 24, 11, 13);
+  ctx.fillRect(19, 39, 10, 9);
+  ctx.fillRect(48, 39, 14, 10);
+  ctx.fillStyle = "#23121d";
+  ctx.fillRect(15, 27, 7, 9);
+  ctx.fillRect(36, 21, 9, 12);
+  ctx.fillRect(54, 28, 6, 8);
+  ctx.fillRect(21, 41, 5, 6);
+  ctx.fillRect(51, 41, 8, 7);
+  ctx.fillStyle = "#e95582";
+  ctx.fillRect(17, 28, 3, 4);
+  ctx.fillRect(39, 22, 4, 5);
+  ctx.fillRect(54, 29, 3, 3);
+
+  // 얼굴 절반을 차지하는 찢어진 입과 불규칙한 이빨
+  ctx.fillStyle = "#2b0717";
+  ctx.fillRect(12, 50, 53, 19);
+  ctx.fillRect(18, 46, 41, 27);
+  ctx.fillStyle = "#f3e5c4";
+  ctx.fillRect(16, 49, 7, 10);
+  ctx.fillRect(27, 48, 6, 14);
+  ctx.fillRect(39, 50, 8, 9);
+  ctx.fillRect(53, 48, 6, 15);
+  ctx.fillRect(22, 65, 7, 8);
+  ctx.fillRect(35, 62, 6, 11);
+  ctx.fillRect(47, 65, 8, 8);
+  ctx.fillStyle = "#a62b61";
+  ctx.fillRect(28, 62, 23, 8);
+
+  // 양쪽 촉수와 갈고리 손
+  ctx.fillStyle = "#6c5e70";
+  ctx.fillRect(0, 36, 13, 9);
+  ctx.fillRect(1, 43, 7, 21);
+  ctx.fillRect(63, 34, 13, 9);
+  ctx.fillRect(69, 41, 7, 24);
+  ctx.fillStyle = "#d2c8cf";
+  ctx.fillRect(0, 61, 12, 7);
+  ctx.fillRect(64, 62, 12, 7);
+  ctx.fillRect(4, 67, 5, 7);
+  ctx.fillRect(67, 68, 5, 7);
+  ctx.restore();
+}
+
+function drawBossStatusHud(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  midBosses: MidBoss[],
+  highBosses: HighBoss[],
+) {
+  const bosses = [
+    ...highBosses.map((boss) => ({
+      boss,
+      rank: 2,
+      name: "상급보스 · 고대 버블 괴수",
+      track: "#351019",
+      healthy: "#e33e65",
+      danger: "#ff8b47",
+      border: "#ffd3bc",
+      text: "#ffe7dc",
+    })),
+    ...midBosses.map((boss) => ({
+      boss,
+      rank: 1,
+      name: "울보스",
+      track: "#32153f",
+      healthy: "#ad52df",
+      danger: "#ef668d",
+      border: "#f0d9ff",
+      text: "#f6eaff",
+    })),
+  ]
+    .sort((a, b) => {
+      if (a.rank !== b.rank) return b.rank - a.rank;
+      return a.boss.hp / a.boss.maxHp - b.boss.hp / b.boss.maxHp;
+    })
+    .slice(0, 5);
+
+  if (bosses.length === 0) return;
+
+  const centerX = canvasWidth / 2;
+  const barWidth = Math.min(440, Math.max(280, canvasWidth * 0.3));
+  const barHeight = 12;
+  const firstY = 118;
+  const rowHeight = 54;
+
+  ctx.save();
   ctx.textAlign = "center";
-  ctx.fillText(`HIGH BOSS  ${boss.hp}/${boss.maxHp}`, boss.x + boss.w / 2, boss.y - 44);
-  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+
+  bosses.forEach((entry, index) => {
+    const ratio = clamp(entry.boss.hp / entry.boss.maxHp, 0, 1);
+    const nameY = firstY + index * rowHeight;
+    const barX = centerX - barWidth / 2;
+    const healthY = nameY + 16;
+    const barY = nameY + 23;
+
+    ctx.font = "900 15px monospace";
+    ctx.fillStyle = entry.text;
+    ctx.shadowColor = "rgba(0,0,0,.95)";
+    ctx.shadowBlur = 6;
+    ctx.fillText(entry.name, centerX, nameY);
+
+    // 체력 수치는 이름과 분리해 체력바 바로 위에 표시한다.
+    ctx.font = "900 12px monospace";
+    ctx.fillText(
+      `${Math.max(0, Math.ceil(entry.boss.hp))} / ${entry.boss.maxHp}`,
+      centerX,
+      healthY,
+    );
+
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(0,0,0,.86)";
+    ctx.fillRect(barX - 4, barY - 4, barWidth + 8, barHeight + 8);
+    ctx.fillStyle = entry.track;
+    ctx.fillRect(barX, barY, barWidth, barHeight);
+    ctx.fillStyle = ratio > 0.3 ? entry.healthy : entry.danger;
+    ctx.fillRect(barX, barY, barWidth * ratio, barHeight);
+    ctx.strokeStyle = entry.border;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(barX, barY, barWidth, barHeight);
+
+    ctx.fillStyle = "rgba(255,255,255,.38)";
+    ctx.fillRect(barX + 2, barY + 2, Math.max(0, barWidth * ratio - 4), 2);
+  });
+
+  ctx.restore();
 }
 
 const BUBBLE_RANKING_SCORE_KEY = "hoo-bubble-ranking-score";
@@ -578,6 +753,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef(0);
   const firePressRef = useRef(0);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const onRecordSavedRef = useRef(onRecordSaved);
   const dashInputRef = useRef<{
     lastLeftAt: number;
@@ -600,6 +776,26 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
   const [started, setStarted] = useState(false);
   const [hasSave, setHasSave] = useState(false);
   const [hud, setHud] = useState({ score: 0, stage: 1, life: 3 });
+
+  const getGameAudioContext = () => {
+    const AudioContextConstructor =
+      window.AudioContext ??
+      (window as typeof window & {
+        webkitAudioContext?: typeof AudioContext;
+      }).webkitAudioContext;
+
+    if (!AudioContextConstructor) return null;
+    if (
+      !audioContextRef.current ||
+      audioContextRef.current.state === "closed"
+    ) {
+      audioContextRef.current = new AudioContextConstructor();
+    }
+    if (audioContextRef.current.state === "suspended") {
+      void audioContextRef.current.resume();
+    }
+    return audioContextRef.current;
+  };
 
   useEffect(() => {
     onRecordSavedRef.current = onRecordSaved;
@@ -659,6 +855,123 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       life: number;
     }> = [];
     let gameOver = false;
+
+    const playTone = (
+      startAt: number,
+      duration: number,
+      fromFrequency: number,
+      toFrequency: number,
+      volume: number,
+      type: OscillatorType = "sine",
+    ) => {
+      const audio = getGameAudioContext();
+      if (!audio) return;
+      const oscillator = audio.createOscillator();
+      const gain = audio.createGain();
+      oscillator.type = type;
+      oscillator.frequency.setValueAtTime(fromFrequency, startAt);
+      oscillator.frequency.exponentialRampToValueAtTime(
+        Math.max(20, toFrequency),
+        startAt + duration,
+      );
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(volume, startAt + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+      oscillator.connect(gain).connect(audio.destination);
+      oscillator.start(startAt);
+      oscillator.stop(startAt + duration + 0.02);
+    };
+
+    const playNoiseBurst = (
+      startAt: number,
+      duration: number,
+      volume: number,
+      filterFrequency: number,
+    ) => {
+      const audio = getGameAudioContext();
+      if (!audio) return;
+      const frameCount = Math.max(1, Math.floor(audio.sampleRate * duration));
+      const buffer = audio.createBuffer(1, frameCount, audio.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let index = 0; index < frameCount; index += 1) {
+        const fade = 1 - index / frameCount;
+        data[index] = (Math.random() * 2 - 1) * fade * fade;
+      }
+      const source = audio.createBufferSource();
+      const filter = audio.createBiquadFilter();
+      const gain = audio.createGain();
+      source.buffer = buffer;
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(filterFrequency, startAt);
+      filter.frequency.exponentialRampToValueAtTime(
+        Math.max(80, filterFrequency * 0.28),
+        startAt + duration,
+      );
+      gain.gain.setValueAtTime(volume, startAt);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+      source.connect(filter).connect(gain).connect(audio.destination);
+      source.start(startAt);
+    };
+
+    const playBubbleShootSound = () => {
+      const audio = getGameAudioContext();
+      if (!audio) return;
+      const at = audio.currentTime;
+      // 물방울이 통통 튀어나오는 두 겹의 "뽀용" 음색.
+      playTone(at, 0.13, 230, 610, 0.085, "sine");
+      playTone(at + 0.045, 0.15, 720, 310, 0.055, "triangle");
+    };
+
+    const playBubblePopSound = () => {
+      const audio = getGameAudioContext();
+      if (!audio) return;
+      const at = audio.currentTime;
+      playTone(at, 0.085, 760, 135, 0.12, "sine");
+      playNoiseBurst(at, 0.075, 0.055, 2400);
+    };
+
+    const playPlayerHurtSound = () => {
+      const audio = getGameAudioContext();
+      if (!audio) return;
+      const at = audio.currentTime;
+      // 짧은 2음절 상승음으로 귀여운 "아-야!" 느낌을 만든다.
+      playTone(at, 0.09, 520, 820, 0.105, "triangle");
+      playTone(at + 0.095, 0.13, 650, 1080, 0.125, "triangle");
+      playTone(at + 0.1, 0.11, 980, 720, 0.035, "sine");
+    };
+
+    const playBossDefeatSound = (kind: "mid" | "high") => {
+      const audio = getGameAudioContext();
+      if (!audio) return;
+      const at = audio.currentTime;
+      const bursts = kind === "high" ? 4 : 2;
+      for (let index = 0; index < bursts; index += 1) {
+        const burstAt = at + index * 0.115;
+        playNoiseBurst(
+          burstAt,
+          kind === "high" ? 0.48 : 0.32,
+          kind === "high" ? 0.17 : 0.12,
+          1100 - index * 120,
+        );
+        playTone(
+          burstAt,
+          kind === "high" ? 0.42 : 0.28,
+          150 - index * 12,
+          34,
+          kind === "high" ? 0.13 : 0.09,
+          "sawtooth",
+        );
+      }
+      // 폭발 뒤 보스의 형체가 빨려 사라지는 하강 소멸음.
+      playTone(
+        at + bursts * 0.1,
+        kind === "high" ? 0.78 : 0.5,
+        kind === "high" ? 920 : 680,
+        46,
+        kind === "high" ? 0.11 : 0.075,
+        "sine",
+      );
+    };
     let player: Body & { grounded: boolean; face: number; dropThrough: number } = {
       x: 80, y: H - 128, vx: 0, vy: 0, w: 80, h: 86, grounded: false, face: 1, dropThrough: 0,
     };
@@ -911,6 +1224,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       };
       const key = map[event.key];
       if (key) {
+        getGameAudioContext();
         if (!event.repeat && (key === "left" || key === "right")) {
           registerDashPress(key);
         }
@@ -1051,6 +1365,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
 
       if (!playerCaptured && keys.fire && now - fireAt > 280) {
         fireAt = now;
+        playBubbleShootSound();
         bubbles.push({ id: ++bubbleSeq, x: player.x + (player.face > 0 ? 68 : -60), y: player.y + 4,
           vx: player.face * 9, vy: -1, w: 72, h: 72, life: 360 });
       }
@@ -1062,6 +1377,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         if (b.enemyId && hit(player, b)) {
           const e = enemies.find((item) => item.id === b.enemyId);
           if (e) {
+            playBubblePopSound();
             e.dead = true;
             score += 100 + stage * 10;
             b.life = 0;
@@ -1221,6 +1537,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       const deadHighIds = new Set(highBosses.filter((boss) => boss.hp <= 0).map((boss) => boss.id));
 
       for (const boss of midBosses.filter((target) => target.hp <= 0)) {
+        playBossDefeatSound("mid");
         const centerX = boss.x + boss.w / 2;
         const centerY = boss.y + boss.h / 2;
         dropBossCoins(boss, 5);
@@ -1236,6 +1553,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       }
 
       for (const boss of highBosses.filter((target) => target.hp <= 0)) {
+        playBossDefeatSound("high");
         const centerX = boss.x + boss.w / 2;
         const centerY = boss.y + boss.h / 2;
         dropBossCoins(boss, 10);
@@ -1277,6 +1595,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
             capturePressTarget = 10 + Math.floor(Math.random() * 11);
             firingBoss.mouthOpen = true;
           } else if (b.kind === "damage") {
+            playPlayerHurtSound();
             life -= 1;
             invincible = 105;
             player.vx = b.vx > 0 ? 8 : -8;
@@ -1354,6 +1673,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
             // 흡입 도중 일반 몬스터에 닿으면 포획 물방울이 깨진다.
             releasePlayer();
           } else if (invincible <= 0) {
+            playPlayerHurtSound();
             life--; invincible = 110;
             player.x = WORLD_W / 2 - player.w / 2;
             player.y = H - 220; player.vy = -8;
@@ -1855,6 +2175,11 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         ctx.textAlign = "left";
       }
       ctx.restore();
+
+      // 월드와 모든 이펙트를 그린 뒤 마지막 화면 레이어에 보스 HUD를
+      // 배치해야 발판·몬스터·버블 등에 가려지지 않는다.
+      drawBossStatusHud(ctx, W, midBosses, highBosses);
+
       ctx.restore();
       if (!gameOver) rafRef.current = requestAnimationFrame(frame);
     };
@@ -1872,6 +2197,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
   }, [started]);
 
   const hold = (key: Key, value: boolean) => {
+    if (value) getGameAudioContext();
     if ((key === "left" || key === "right") && value && !keys[key]) {
       const now = performance.now();
       const input = dashInputRef.current;
