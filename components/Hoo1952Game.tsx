@@ -548,6 +548,17 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
       player.y = clamp(position.y - (event.pointerType === "touch" ? 58 : 0), 90, height - 38);
     };
     const pointerUp = () => { dragging = false; };
+    const keyDown = (event: KeyboardEvent) => {
+      if (
+        event.code !== "Space" ||
+        event.repeat ||
+        currentSkillCharges <= 0 ||
+        currentLives <= 0
+      ) return;
+
+      event.preventDefault();
+      airstrikeRequestRef.current += 1;
+    };
 
     const explode = (x: number, y: number, amount: number, linger = 1) => {
       const particleLimit = lowPowerMode ? 48 : 90;
@@ -2773,6 +2784,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
 
     resize();
     window.addEventListener("resize", resize);
+    window.addEventListener("keydown", keyDown);
     canvas.addEventListener("pointerdown", pointerDown);
     canvas.addEventListener("pointermove", pointerMove);
     canvas.addEventListener("pointerup", pointerUp);
@@ -2789,6 +2801,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
         void audioContext.close().catch(() => undefined);
       }
       window.removeEventListener("resize", resize);
+      window.removeEventListener("keydown", keyDown);
       canvas.removeEventListener("pointerdown", pointerDown);
       canvas.removeEventListener("pointermove", pointerMove);
       canvas.removeEventListener("pointerup", pointerUp);
@@ -2936,7 +2949,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
               }}
               className="absolute bottom-[calc(12px+env(safe-area-inset-bottom))] right-3 z-20 flex h-[72px] w-[72px] flex-col items-center justify-center rounded-full border-2 border-white/60 bg-black/85 text-white shadow-[0_0_28px_rgba(255,255,255,.18)] backdrop-blur-sm transition active:scale-90 disabled:border-white/20 disabled:text-white/35 disabled:shadow-none sm:bottom-6 sm:right-6 sm:h-24 sm:w-24"
             >
-              <span className="text-[7px] font-black tracking-[0.1em] sm:text-[9px] sm:tracking-[0.14em]">AIR STRIKE</span>
+              <span className="text-[7px] font-black tracking-[0.1em] sm:text-[9px] sm:tracking-[0.14em]">AIR STRIKE · SPACE</span>
               <strong className="mt-0.5 text-[11px] font-black sm:mt-1 sm:text-sm">지원 폭격</strong>
               <span className="mt-0.5 flex items-center gap-1 text-[8px] sm:mt-1 sm:text-[10px]">
                 <i className={`h-1.5 w-1.5 rounded-full sm:h-2 sm:w-2 ${skillCharges >= 1 ? "bg-white" : "bg-white/20"}`} />
