@@ -369,7 +369,6 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
     let dragging = false;
     let bossSpawnedForWave = false;
     let formationSequence = 0;
-    const dreadnoughtSpawnAt = runStartedAt + 270000 + Math.random() * 60000;
     let dreadnoughtSpawned = false;
     let dreadWindUntil = -Infinity;
     let dreadnoughtDefeatedAt = -Infinity;
@@ -625,9 +624,8 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
       const fortress = kind === "fortress";
       const dreadnought = kind === "dreadnought";
       const bomber = kind === "bomber";
-      const fortressHp = 420 + currentWave * 70;
       const hp = dreadnought
-        ? fortressHp * 20 * 200
+        ? 1_000_000
         : fortress
         ? 420 + currentWave * 70
         : boss
@@ -752,7 +750,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
       const enemy = enemies[enemyIndex];
       if (!enemy) return;
       playEnemyExplosionSound(enemy.kind);
-      currentScore += enemy.kind === "dreadnought" ? 25000 : enemy.kind === "fortress" ? 3500 : enemy.kind === "boss" ? 1000 : enemy.kind === "bomber" ? 180 : 80;
+      currentScore += enemy.kind === "dreadnought" ? 5_000_000 : enemy.kind === "fortress" ? 3500 : enemy.kind === "boss" ? 1000 : enemy.kind === "bomber" ? 180 : 80;
       const isDreadnought = enemy.kind === "dreadnought";
       const isMediumEnemy = enemy.kind === "bomber";
       const isLargeEnemy = enemy.kind === "boss" || enemy.kind === "fortress" || isDreadnought;
@@ -928,7 +926,6 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
 
         if (!arrivalStarted && defeatAge >= stormDuration) {
           arrivalStarted = true;
-          currentScore += 50000;
           currentWave = Math.floor(currentScore / SCORE_PER_WAVE) + 1;
           setScore(currentScore);
           setLives(currentLives);
@@ -940,8 +937,8 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
         }
       }
 
-      // 최종 귀환 저지함: 시작 후 4분 30초~5분 30초 사이에 단 한 번 등장한다.
-      if (!dreadnoughtSpawned && now >= dreadnoughtSpawnAt) {
+      // 최종 귀환 저지함: 플레이 시간과 관계없이 점수가 35만 점을 넘으면 단 한 번 등장한다.
+      if (!dreadnoughtSpawned && currentScore >= 350_000) {
         dreadnoughtSpawned = true;
         spawnEnemy("dreadnought", {
           x: width / 2,
@@ -999,19 +996,19 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
         for (let index = enemies.length - 1; index >= 0; index -= 1) {
           const enemy = enemies[index];
           if (enemy.isEntering) continue;
-          if (sweepY <= enemy.y + enemy.r || activeAirstrikeAge > 1600) {
-            if (enemy.kind === "boss" || enemy.kind === "fortress" || enemy.kind === "dreadnought") {
-              if (enemy.lastAirstrikeAt !== airstrikeStartedAt) {
-                enemy.lastAirstrikeAt = airstrikeStartedAt;
-                enemy.hp = Math.max(1, enemy.hp - enemy.maxHp * 0.3);
-                explode(enemy.x, enemy.y, enemy.kind === "dreadnought" ? 64 : enemy.kind === "fortress" ? 42 : 26);
-              }
-              continue;
-            }
-            currentScore += enemy.kind === "bomber" ? 180 : 80;
-            explode(enemy.x, enemy.y, 14);
-            enemies.splice(index, 1);
-          }
+          if (sweepY > enemy.y + enemy.r && activeAirstrikeAge <= 1600) continue;
+          if (enemy.lastAirstrikeAt === airstrikeStartedAt) continue;
+
+          // 지원폭격은 적 종류나 최대 체력과 관계없이 한 기당 한 번, 최대 500 고정 피해만 준다.
+          enemy.lastAirstrikeAt = airstrikeStartedAt;
+          const airstrikeDamage = Math.min(500, enemy.hp);
+          markEnemyHit(enemy, airstrikeDamage, now, enemy.x, enemy.y, true);
+          explode(
+            enemy.x,
+            enemy.y,
+            enemy.kind === "dreadnought" ? 64 : enemy.kind === "fortress" ? 42 : enemy.kind === "boss" ? 26 : 14,
+          );
+          if (enemy.hp <= 0) destroyEnemy(index);
         }
 
         for (let index = enemyShots.length - 1; index >= 0; index -= 1) {
