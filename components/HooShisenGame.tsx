@@ -569,14 +569,11 @@ export default function HooShisenGame({ onExit }: HooShisenGameProps) {
         String(previousTotalScore + improvedScore),
       );
 
-      const isRankingMilestone = stage % 10 === 0;
-      const rankingPoints = isRankingMilestone
-        ? stage >= 80
-          ? 30
-          : stage >= 50
-            ? 20
-            : 10
-        : 0;
+    const rankingPoints =
+  Math.max(
+    1,
+    Math.floor(stage),
+  ) * 10;
 
       if (rankingPoints > 0) {
         const previousRankingScore = Number(

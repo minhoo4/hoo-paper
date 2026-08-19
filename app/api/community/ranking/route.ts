@@ -58,7 +58,7 @@ export async function GET(
       safeLimit(request);
 
     /*
-     * 1. 스도쿠
+     * 1. 스도쿠 종합점수
      */
     const {
       data: sudokuRows,
@@ -89,7 +89,10 @@ export async function GET(
     }
 
     /*
-     * 2. 사천성 / 1952 / 버블
+     * 2. 사천성 / 1952 / 후버블
+     *
+     * 여기의 score는 게임 원점수가 아니라
+     * 종합점수 전용 누적 포인트다.
      */
     const {
       data: miniGameRows,
@@ -110,7 +113,7 @@ export async function GET(
 
     if (miniGameError) {
       console.error(
-        "미니게임 랭킹 조회 오류:",
+        "미니게임 종합점수 조회 오류:",
         miniGameError,
       );
 
@@ -126,7 +129,10 @@ export async function GET(
     }
 
     /*
-     * 3. HOO 2048 실제 플레이 점수
+     * 3. 2048 종합점수
+     *
+     * 게임 score는 사용하지 않고
+     * awarded_score만 누적한다.
      */
     const {
       data: score2048Rows,
@@ -134,16 +140,16 @@ export async function GET(
     } = await supabase
       .from("hoo2048_scores")
       .select(
-        "user_id, score",
+        "user_id, awarded_score",
       )
       .gt(
-        "score",
+        "awarded_score",
         0,
       );
 
     if (score2048Error) {
       console.error(
-        "2048 랭킹 조회 오류:",
+        "2048 종합점수 조회 오류:",
         score2048Error,
       );
 
@@ -206,7 +212,6 @@ export async function GET(
             ),
 
           miniGameScore: 0,
-
           score2048: 0,
 
           easyCount:
@@ -243,7 +248,8 @@ export async function GET(
     }
 
     /*
-     * 사천성 / 1952 / 버블 합산
+     * 사천성 / 1952 / 후버블
+     * 종합점수 전용 포인트 합산
      */
     for (
       const row of
@@ -296,7 +302,7 @@ export async function GET(
 
     /*
      * 2048
-     * 사용자별 최고 플레이 점수 사용
+     * awarded_score 전부 누적
      */
     for (
       const row of
@@ -312,16 +318,16 @@ export async function GET(
         continue;
       }
 
-      const score =
+      const awardedScore =
         Number(
-          row.score,
+          row.awarded_score,
         );
 
       if (
         !Number.isFinite(
-          score,
+          awardedScore,
         ) ||
-        score <= 0
+        awardedScore <= 0
       ) {
         continue;
       }
@@ -343,11 +349,8 @@ export async function GET(
         );
       }
 
-      user.score2048 =
-        Math.max(
-          user.score2048,
-          score,
-        );
+      user.score2048 +=
+        awardedScore;
     }
 
     /*
@@ -406,7 +409,9 @@ export async function GET(
     }
 
     /*
-     * 최종 종합랭킹
+     * 최종 종합점수
+     *
+     * 게임 원점수는 절대 포함하지 않는다.
      */
     const rankings = [
       ...users.values(),

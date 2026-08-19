@@ -745,10 +745,13 @@ function drawBossStatusHud(
 const BUBBLE_RANKING_SCORE_KEY = "hoo-bubble-ranking-score";
 
 function getBubbleStageRankingPoints(stage: number) {
-  const normalizedStage = Math.max(1, Math.min(10, Math.floor(stage)));
-  return 30 * 2 ** (normalizedStage - 1);
-}
+  const normalizedStage = Math.max(
+    1,
+    Math.min(10, Math.floor(stage)),
+  );
 
+  return 30 * normalizedStage;
+}
 export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef(0);
