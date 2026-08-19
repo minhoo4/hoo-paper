@@ -6311,18 +6311,20 @@ useEffect(() => {
 
     try {
       const {
-        data: { user },
-        error: userError,
+        data: { session },
+        error: sessionError,
       } =
-        await supabase.auth.getUser();
+        await supabase.auth.getSession();
 
-      if (userError) {
-        throw userError;
-      }
-
-      if (!user || cancelled) {
+      if (
+        cancelled ||
+        sessionError ||
+        !session?.user
+      ) {
         return;
       }
+
+      const user = session.user;
 
       /*
        * 1. 오늘 일정의 성격을 분석한다.

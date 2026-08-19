@@ -2020,7 +2020,7 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
       if (now < screenShakeUntil) {
         const shakeDuration = screenShakeStrength >= 35 ? 1500 : screenShakeStrength >= 20 ? 820 : 460;
         const shakeProgress = clamp((screenShakeUntil - now) / shakeDuration, 0, 1);
-        const shakePower = screenShakeStrength * shakeProgress;
+        const shakePower = screenShakeStrength * shakeProgress * 0.8;
         context.translate(
           (Math.random() - 0.5) * shakePower * 2,
           (Math.random() - 0.5) * shakePower * 2,
@@ -2949,12 +2949,31 @@ export default function Hoo1952Game({ onExit, onRecordSaved }: Hoo1952GameProps)
               }}
               className="absolute bottom-[calc(12px+env(safe-area-inset-bottom))] right-3 z-20 flex h-[72px] w-[72px] flex-col items-center justify-center rounded-full border-2 border-white/60 bg-black/85 text-white shadow-[0_0_28px_rgba(255,255,255,.18)] backdrop-blur-sm transition active:scale-90 disabled:border-white/20 disabled:text-white/35 disabled:shadow-none sm:bottom-6 sm:right-6 sm:h-24 sm:w-24"
             >
-              <span className="text-[7px] font-black tracking-[0.1em] sm:text-[9px] sm:tracking-[0.14em]">AIR STRIKE · SPACE</span>
+          
+        
+        
               <strong className="mt-0.5 text-[11px] font-black sm:mt-1 sm:text-sm">지원 폭격</strong>
               <span className="mt-0.5 flex items-center gap-1 text-[8px] sm:mt-1 sm:text-[10px]">
                 <i className={`h-1.5 w-1.5 rounded-full sm:h-2 sm:w-2 ${skillCharges >= 1 ? "bg-white" : "bg-white/20"}`} />
                 <i className={`h-1.5 w-1.5 rounded-full sm:h-2 sm:w-2 ${skillCharges >= 2 ? "bg-white" : "bg-white/20"}`} />
                 {skillCharges < 2 && <b className="ml-1 font-black">{skillSeconds}s</b>}
+              </span>
+              <span
+                className="mt-1 flex items-center justify-center gap-[1px] text-[9px] leading-none sm:mt-1.5 sm:gap-0.5 sm:text-xs"
+                aria-label={`체력 ${lives} / 5`}
+              >
+                {Array.from({ length: 5 }, (_, index) => (
+                  <i
+                    key={index}
+                    className={`not-italic ${
+                      index < lives
+                        ? "text-red-500 [text-shadow:0_0_6px_rgba(239,68,68,.75)]"
+                        : "text-white/15"
+                    }`}
+                  >
+                    ♥
+                  </i>
+                ))}
               </span>
             </button>
           )}
