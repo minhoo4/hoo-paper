@@ -6836,279 +6836,289 @@ useEffect(() => {
   isRoutineSaving,
 ]);
 
-
 /* ─────────────────────────────
    HOO 오늘의 일정 투두 생성
 ───────────────────────────── */
 useEffect(() => {
   let cancelled = false;
 
- async function generateTodayScheduleTodos() {
-  const now = new Date();
+  async function generateTodayScheduleTodos() {
+    const now = new Date();
 
-  /*
-   * 자정부터 새벽 4시까지는
-   * 투두와 브리핑을 동기화하지 않는다.
-   */
-  if (now.getHours() < 4) {
-    return;
-  }
-
-  const todayTaskDate =
-    getTodayStorageDate();
-
-  function normalizeBriefingStatus(
-    value: unknown,
-  ): HooBriefingStatus {
-    if (
-      value === "generating" ||
-      value === "completed" ||
-      value === "failed"
-    ) {
-      return value;
-    }
-
-    return "pending";
-  }
-
-  try {
-    const {
-      data: { user },
-      error: userError,
-    } =
-      await supabase.auth.getUser();
-
-    if (userError) {
-      throw userError;
-    }
-
-    if (!user || cancelled) {
+    /*
+     * 자정부터 새벽 4시까지는
+     * 투두와 브리핑을 동기화하지 않는다.
+     */
+    if (now.getHours() < 4) {
       return;
     }
 
-    /*
-     * 캘린더 일정, 오늘의 투두,
-     * 아침 브리핑을 서버에서 동기화한다.
-     */
-    const {
-      data: changedTodoCount,
-      error: generationError,
-    } =
-      await supabase.rpc(
-        "generate_hoo_daily_todos",
-        {
-          p_task_date:
+    const todayTaskDate =
+      getTodayStorageDate();
+
+    function normalizeBriefingStatus(
+      value: unknown,
+    ): HooBriefingStatus {
+      if (
+        value === "generating" ||
+        value === "completed" ||
+        value === "failed"
+      ) {
+        return value;
+      }
+
+      return "pending";
+    }
+
+    try {
+      /*
+       * getUser()를 바로 호출하면
+       * 로그인 세션이 없는 상태에서
+       * AuthSessionMissingError가 발생할 수 있다.
+       *
+       * 먼저 로컬 세션 존재 여부를 확인하고,
+       * 로그인 사용자가 있을 때만
+       * 서버 동기화를 진행한다.
+       */
+      const {
+        data: { session },
+        error: sessionError,
+      } =
+        await supabase.auth.getSession();
+
+      if (
+        sessionError ||
+        !session?.user ||
+        cancelled
+      ) {
+        return;
+      }
+
+      const user = session.user;
+
+      /*
+       * 캘린더 일정, 오늘의 투두,
+       * 아침 브리핑을 서버에서 동기화한다.
+       */
+      const {
+        data: changedTodoCount,
+        error: generationError,
+      } =
+        await supabase.rpc(
+          "generate_hoo_daily_todos",
+          {
+            p_task_date:
+              todayTaskDate,
+          },
+        );
+
+      if (generationError) {
+        throw generationError;
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      const safeChangedTodoCount =
+        typeof changedTodoCount === "number"
+          ? changedTodoCount
+          : Number(
+              changedTodoCount ?? 0,
+            );
+
+      /*
+       * 실제 일정 변경이 없다면
+       * 추가 조회를 실행하지 않는다.
+       */
+      if (
+        !Number.isFinite(
+          safeChangedTodoCount,
+        ) ||
+        safeChangedTodoCount <= 0
+      ) {
+        return;
+      }
+
+      /*
+       * 최신 투두와 최신 브리핑을
+       * 동시에 다시 불러온다.
+       */
+      const [
+        updatedTodosResult,
+        updatedBriefingResult,
+      ] = await Promise.all([
+        supabase
+          .from("todos")
+          .select(
+            `
+              id,
+              content,
+              completed,
+              source,
+              task_date,
+              task_type,
+              game_id,
+              schedule_id,
+              generated_at,
+              archived_at,
+              generation_reason,
+              sort_order,
+              created_at
+            `,
+          )
+          .eq("user_id", user.id)
+          .eq(
+            "task_date",
             todayTaskDate,
-        },
-      );
+          )
+          .is("archived_at", null)
+          .order("sort_order", {
+            ascending: true,
+          })
+          .order("created_at", {
+            ascending: true,
+          }),
 
-    if (generationError) {
-      throw generationError;
-    }
+        supabase
+          .from("hoo_daily_briefings")
+          .select(
+            `
+              id,
+              briefing_date,
 
-    if (cancelled) {
-      return;
-    }
+              morning_title,
+              morning_content,
+              morning_generated_at,
+              morning_read_at,
+              morning_status,
 
-    const safeChangedTodoCount =
-      typeof changedTodoCount === "number"
-        ? changedTodoCount
-        : Number(
-            changedTodoCount ?? 0,
-          );
+              evening_title,
+              evening_content,
+              evening_generated_at,
+              evening_read_at,
+              evening_status,
 
-    /*
-     * 실제 일정 변경이 없다면
-     * 추가 조회를 실행하지 않는다.
-     */
-    if (
-      !Number.isFinite(
-        safeChangedTodoCount,
-      ) ||
-      safeChangedTodoCount <= 0
-    ) {
-      return;
-    }
+              total_todo_count,
+              completed_todo_count,
+              incomplete_todo_count,
+              completion_rate
+            `,
+          )
+          .eq("user_id", user.id)
+          .eq(
+            "briefing_date",
+            todayTaskDate,
+          )
+          .maybeSingle(),
+      ]);
 
-    /*
-     * 최신 투두와 최신 브리핑을
-     * 동시에 다시 불러온다.
-     */
-    const [
-      updatedTodosResult,
-      updatedBriefingResult,
-    ] = await Promise.all([
-      supabase
-        .from("todos")
-        .select(
-          `
-            id,
-            content,
-            completed,
-            source,
-            task_date,
-            task_type,
-            game_id,
-            schedule_id,
-            generated_at,
-            archived_at,
-            generation_reason,
-            sort_order,
-            created_at
-          `,
-        )
-        .eq("user_id", user.id)
-        .eq(
-          "task_date",
-          todayTaskDate,
-        )
-        .is("archived_at", null)
-        .order("sort_order", {
-          ascending: true,
-        })
-        .order("created_at", {
-          ascending: true,
-        }),
+      if (updatedTodosResult.error) {
+        throw updatedTodosResult.error;
+      }
 
-      supabase
-        .from("hoo_daily_briefings")
-        .select(
-          `
-            id,
-            briefing_date,
+      if (updatedBriefingResult.error) {
+        throw updatedBriefingResult.error;
+      }
 
-            morning_title,
-            morning_content,
-            morning_generated_at,
-            morning_read_at,
-            morning_status,
+      if (cancelled) {
+        return;
+      }
 
-            evening_title,
-            evening_content,
-            evening_generated_at,
-            evening_read_at,
-            evening_status,
+      /*
+       * 최신 투두를 화면에 반영한다.
+       */
+      const updatedTodos =
+        updatedTodosResult.data;
 
-            total_todo_count,
-            completed_todo_count,
-            incomplete_todo_count,
-            completion_rate
-          `,
-        )
-        .eq("user_id", user.id)
-        .eq(
-          "briefing_date",
-          todayTaskDate,
-        )
-        .maybeSingle(),
-    ]);
+      if (Array.isArray(updatedTodos)) {
+        const normalizedTodos:
+          TodoItem[] =
+          updatedTodos.map((todo) => {
+            const taskType: TodoTaskType =
+              todo.task_type === "schedule" ||
+              todo.task_type ===
+                "preparation" ||
+              todo.task_type ===
+                "recommendation"
+                ? todo.task_type
+                : "manual";
 
-    if (updatedTodosResult.error) {
-      throw updatedTodosResult.error;
-    }
+            return {
+              id: todo.id,
+              content: todo.content,
 
-    if (updatedBriefingResult.error) {
-      throw updatedBriefingResult.error;
-    }
+              completed:
+                todo.completed === true,
 
-    if (cancelled) {
-      return;
-    }
+              source:
+                todo.source === "hoo"
+                  ? "hoo"
+                  : "user",
 
-    /*
-     * 최신 투두를 화면에 반영한다.
-     */
-    const updatedTodos =
-      updatedTodosResult.data;
+              taskDate:
+                typeof todo.task_date ===
+                "string"
+                  ? todo.task_date
+                  : todayTaskDate,
 
-    if (Array.isArray(updatedTodos)) {
-      const normalizedTodos:
-        TodoItem[] =
-        updatedTodos.map((todo) => {
-          const taskType: TodoTaskType =
-            todo.task_type === "schedule" ||
-            todo.task_type ===
-              "preparation" ||
-            todo.task_type ===
-              "recommendation"
-              ? todo.task_type
-              : "manual";
+              taskType,
 
-          return {
-            id: todo.id,
-            content: todo.content,
+              gameId:
+                typeof todo.game_id ===
+                "string"
+                  ? todo.game_id
+                  : undefined,
 
-            completed:
-              todo.completed === true,
+              scheduleId:
+                typeof todo.schedule_id ===
+                "string"
+                  ? todo.schedule_id
+                  : undefined,
 
-            source:
-              todo.source === "hoo"
-                ? "hoo"
-                : "user",
+              generatedAt:
+                typeof todo.generated_at ===
+                "string"
+                  ? todo.generated_at
+                  : undefined,
 
-            taskDate:
-              typeof todo.task_date ===
-              "string"
-                ? todo.task_date
-                : todayTaskDate,
+              archivedAt:
+                typeof todo.archived_at ===
+                "string"
+                  ? todo.archived_at
+                  : undefined,
 
-            taskType,
+              generationReason:
+                typeof todo.generation_reason ===
+                "string"
+                  ? todo.generation_reason
+                  : undefined,
 
-            gameId:
-              typeof todo.game_id ===
-              "string"
-                ? todo.game_id
-                : undefined,
+              createdAt:
+                typeof todo.created_at ===
+                "string"
+                  ? todo.created_at
+                  : new Date().toISOString(),
+            };
+          });
 
-            scheduleId:
-              typeof todo.schedule_id ===
-              "string"
-                ? todo.schedule_id
-                : undefined,
+        setTodos(normalizedTodos);
 
-            generatedAt:
-              typeof todo.generated_at ===
-              "string"
-                ? todo.generated_at
-                : undefined,
+        window.localStorage.setItem(
+          TODO_STORAGE_KEY,
+          JSON.stringify(normalizedTodos),
+        );
+      }
 
-            archivedAt:
-              typeof todo.archived_at ===
-              "string"
-                ? todo.archived_at
-                : undefined,
+      /*
+       * 최신 아침·저녁 브리핑을 화면에 반영한다.
+       */
+      const updatedBriefing =
+        updatedBriefingResult.data;
 
-            generationReason:
-              typeof todo.generation_reason ===
-              "string"
-                ? todo.generation_reason
-                : undefined,
-
-            createdAt:
-              typeof todo.created_at ===
-              "string"
-                ? todo.created_at
-                : new Date().toISOString(),
-          };
-        });
-
-      setTodos(normalizedTodos);
-
-      window.localStorage.setItem(
-        TODO_STORAGE_KEY,
-        JSON.stringify(normalizedTodos),
-      );
-    }
-
-    /*
-     * 최신 아침·저녁 브리핑을 화면에 반영한다.
-     */
-    const updatedBriefing =
-      updatedBriefingResult.data;
-
-    if (updatedBriefing) {
-      const normalizedBriefing:
-        HooDailyBriefing = {
+      if (updatedBriefing) {
+        const normalizedBriefing:
+          HooDailyBriefing = {
           id: updatedBriefing.id,
 
           briefingDate:
@@ -7200,24 +7210,24 @@ useEffect(() => {
             ),
         };
 
-      setMorningBriefing(
-        normalizedBriefing,
+        setMorningBriefing(
+          normalizedBriefing,
+        );
+
+        setIsMorningBriefingOpen(true);
+      }
+    } catch (error) {
+      console.error(
+        "HOO 오늘의 일정과 브리핑 동기화 실패:",
+        error,
       );
 
-      setIsMorningBriefingOpen(true);
+      /*
+       * 자동 동기화가 실패해도
+       * 현재 화면과 기존 기능은 유지한다.
+       */
     }
-  } catch (error) {
-    console.error(
-      "HOO 오늘의 일정과 브리핑 동기화 실패:",
-      error,
-    );
-
-    /*
-     * 자동 동기화가 실패해도
-     * 현재 화면과 기존 기능은 유지한다.
-     */
   }
-}
 
   void generateTodayScheduleTodos();
 

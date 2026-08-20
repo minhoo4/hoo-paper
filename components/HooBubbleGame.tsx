@@ -16,8 +16,35 @@ type Enemy = Body & {
   dead: boolean;
   variant: 0 | 1 | 2;
   trapImmunity: number;
+
+  // 어떤 공격으로 처치되더라도 일반 몬스터 코인은 정확히 1번만 드랍한다.
+  coinDropped?: boolean;
 };
-type Bubble = Body & { id: number; life: number; enemyId?: number };
+type Bubble = Body & {
+  id: number;
+  life: number;
+  enemyId?: number;
+  riddenAtMs?: number;
+};
+
+type WaterStream = Body & {
+  id: number;
+  dir: number;
+  life: number;
+  pushedEnemyId?: number;
+  source: "sky" | "player";
+
+  // 지형 추적 상태
+  flowMode?: "falling" | "surface" | "wall";
+  attachedPlatformIndex?: number;
+  wallX?: number;
+  wallDir?: number;
+
+  // 떨어질 때는 좁은 1자 물기둥,
+  // 지형에 붙은 뒤 점점 길게 펴지기 위한 값.
+  targetWidth?: number;
+  flowWidth?: number;
+};
 type BossBubble = Body & {
   id: number;
   life: number;
@@ -25,6 +52,21 @@ type BossBubble = Body & {
   ownerId: number;
 };
 type Coin = Body & { id: number; life: number };
+
+type WaterBurst = {
+  x: number;
+  y: number;
+  life: number;
+  maxLife: number;
+  radius: number;
+};
+
+
+type WaterBomb = Body & {
+  id: number;
+  life: number;
+  dir: number;
+};
 type BossExplosion = {
   x: number;
   y: number;
@@ -49,7 +91,8 @@ type SavedGame = {
   score: number;
   life: number;
   coinProgress: number;
-  waveRemainingMs: number;
+  stageElapsedMs?: number;
+  normalSpawned?: number;
   midSpawned: number;
   highSpawned: number;
   player: Body & { grounded: boolean; face: number; dropThrough: number };
@@ -74,32 +117,44 @@ const WORLD_W = 3800;
 const WORLD_OFFSET_X = (WORLD_W - W) / 2;
 const SAVE_KEY = "hoo-bubble-wave-save-v1";
 
+// 코인 크기: 기존 26px의 약 5배.
+const NORMAL_COIN_SIZE = 65;
+const NORMAL_COIN_HALF = NORMAL_COIN_SIZE / 2;
+
+const BOSS_COIN_SIZE = 65;
+const BOSS_COIN_HALF = BOSS_COIN_SIZE / 2;
+
 type StageConfig = {
-  minutes: number;
+  normalTotal: number;
+  normalSimultaneous: number;
   midTotal: number;
   highTotal: number;
   midSimultaneous: number;
   highSimultaneous: number;
-  normalMonsters: boolean;
 };
 
 const STAGE_CONFIGS: StageConfig[] = [
-  { minutes: 2, midTotal: 1, highTotal: 0, midSimultaneous: 1, highSimultaneous: 0, normalMonsters: true },
-  { minutes: 3, midTotal: 2, highTotal: 0, midSimultaneous: 1, highSimultaneous: 0, normalMonsters: true },
-  { minutes: 5, midTotal: 3, highTotal: 1, midSimultaneous: 1, highSimultaneous: 1, normalMonsters: true },
-  { minutes: 7, midTotal: 5, highTotal: 3, midSimultaneous: 2, highSimultaneous: 1, normalMonsters: true },
-  { minutes: 10, midTotal: 10, highTotal: 5, midSimultaneous: 3, highSimultaneous: 2, normalMonsters: true },
-  { minutes: 12, midTotal: 15, highTotal: 7, midSimultaneous: 4, highSimultaneous: 3, normalMonsters: true },
-  { minutes: 15, midTotal: 20, highTotal: 10, midSimultaneous: 6, highSimultaneous: 4, normalMonsters: true },
-  { minutes: 20, midTotal: 25, highTotal: 10, midSimultaneous: 10, highSimultaneous: 10, normalMonsters: true },
-  { minutes: 30, midTotal: 30, highTotal: 15, midSimultaneous: 20, highSimultaneous: 10, normalMonsters: true },
-  { minutes: 60, midTotal: 50, highTotal: 30, midSimultaneous: 50, highSimultaneous: 30, normalMonsters: true },
+  { normalTotal: 5, normalSimultaneous: 5, midTotal: 1, highTotal: 0, midSimultaneous: 1, highSimultaneous: 0 },
+  { normalTotal: 12, normalSimultaneous: 10, midTotal: 2, highTotal: 0, midSimultaneous: 1, highSimultaneous: 0 },
+  { normalTotal: 18, normalSimultaneous: 15, midTotal: 3, highTotal: 1, midSimultaneous: 1, highSimultaneous: 1 },
+  { normalTotal: 25, normalSimultaneous: 15, midTotal: 5, highTotal: 3, midSimultaneous: 2, highSimultaneous: 1 },
+  { normalTotal: 35, normalSimultaneous: 15, midTotal: 10, highTotal: 5, midSimultaneous: 3, highSimultaneous: 2 },
+  { normalTotal: 20, normalSimultaneous: 20, midTotal: 15, highTotal: 7, midSimultaneous: 4, highSimultaneous: 3 },
+  { normalTotal: 30, normalSimultaneous: 20, midTotal: 20, highTotal: 10, midSimultaneous: 6, highSimultaneous: 4 },
+  { normalTotal: 50, normalSimultaneous: 30, midTotal: 25, highTotal: 10, midSimultaneous: 10, highSimultaneous: 10 },
+  { normalTotal: 80, normalSimultaneous: 30, midTotal: 30, highTotal: 15, midSimultaneous: 20, highSimultaneous: 10 },
+  { normalTotal: 150, normalSimultaneous: 100, midTotal: 50, highTotal: 30, midSimultaneous: 50, highSimultaneous: 30 },
 ];
 
 const getStageConfig = (stage: number) =>
   STAGE_CONFIGS[Math.min(STAGE_CONFIGS.length - 1, Math.max(0, stage - 1))];
 
-const formatCountdown = (milliseconds: number) => {
+const formatStageTime = (milliseconds: number) => {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+};
+
+const formatSpawnCountdown = (milliseconds: number) => {
   const seconds = Math.max(0, Math.ceil(milliseconds / 1000));
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 };
@@ -107,17 +162,665 @@ const keys: Record<Key, boolean> = {
   left: false, right: false, up: false, down: false, fire: false,
 };
 
-const MAP_THEMES = [
-  { sky: "#101b24", horizon: "#172d35", platform: "#38575a", edge: "#92d2c5", accent: "#f0d27a" },
-  { sky: "#181326", horizon: "#2b2040", platform: "#51466d", edge: "#c6a9ef", accent: "#e9b8d1" },
-  { sky: "#171c17", horizon: "#263529", platform: "#486248", edge: "#abd68e", accent: "#f1d781" },
-  { sky: "#20151a", horizon: "#3b2228", platform: "#67434b", edge: "#e0a493", accent: "#ffd38e" },
-  { sky: "#111b2b", horizon: "#1d3350", platform: "#354f6b", edge: "#8ec5eb", accent: "#f0c980" },
-] as const;
+type StageVisualTheme = {
+  sky: string;
+  horizon: string;
+  platform: string;
+  platformDark: string;
+  edge: string;
+  accent: string;
+  glow: string;
+  secondaryGlow: string;
+  slide: string;
+  slideEdge: string;
+  scenery: "bubble" | "steampunk" | "cyberpunk" | "hell";
+};
+
+const MAP_THEMES: StageVisualTheme[] = [
+  // 1~3단계: 기존 버블 판타지 분위기 유지
+  { sky: "#101b24", horizon: "#172d35", platform: "#38575a", platformDark: "#22383b", edge: "#92d2c5", accent: "#f0d27a", glow: "#9df7e8", secondaryGlow: "#8bcfff", slide: "#4d7778", slideEdge: "#b8efe4", scenery: "bubble" },
+  { sky: "#181326", horizon: "#2b2040", platform: "#51466d", platformDark: "#332a48", edge: "#c6a9ef", accent: "#e9b8d1", glow: "#c391ff", secondaryGlow: "#89cfff", slide: "#715f8d", slideEdge: "#e2ceff", scenery: "bubble" },
+  { sky: "#171c17", horizon: "#263529", platform: "#486248", platformDark: "#2c3f2e", edge: "#abd68e", accent: "#f1d781", glow: "#9ee6ae", secondaryGlow: "#82d7e4", slide: "#617c5f", slideEdge: "#d1efb5", scenery: "bubble" },
+
+  // 4~5단계: 스팀펑크
+  { sky: "#1b1512", horizon: "#4a3024", platform: "#6f5438", platformDark: "#34251b", edge: "#c9955a", accent: "#edbd67", glow: "#f0a94e", secondaryGlow: "#a46f45", slide: "#745035", slideEdge: "#e1ad6b", scenery: "steampunk" },
+  { sky: "#15110f", horizon: "#3b261d", platform: "#5c422f", platformDark: "#281b15", edge: "#ad784c", accent: "#e49345", glow: "#ffad4b", secondaryGlow: "#9d4f31", slide: "#623b28", slideEdge: "#ea8c4c", scenery: "steampunk" },
+
+  // 6~7단계: 사이버펑크
+  { sky: "#061523", horizon: "#0f2b42", platform: "#17384c", platformDark: "#0a1e2c", edge: "#1ddce8", accent: "#d849ff", glow: "#00f4ff", secondaryGlow: "#ea3dff", slide: "#15556a", slideEdge: "#28f1ff", scenery: "cyberpunk" },
+  { sky: "#070920", horizon: "#21103f", platform: "#25245d", platformDark: "#10112f", edge: "#8f50ff", accent: "#ff42d1", glow: "#28ddff", secondaryGlow: "#ff3bd0", slide: "#392c79", slideEdge: "#ba5fff", scenery: "cyberpunk" },
+
+  // 8~10단계: 지옥
+  { sky: "#19090a", horizon: "#581511", platform: "#492521", platformDark: "#251010", edge: "#b8462c", accent: "#ff8b32", glow: "#ff4d1f", secondaryGlow: "#ffb038", slide: "#632315", slideEdge: "#ff6b28", scenery: "hell" },
+  { sky: "#120506", horizon: "#450a08", platform: "#391716", platformDark: "#1d0808", edge: "#991f17", accent: "#ff531c", glow: "#ff3217", secondaryGlow: "#d7190f", slide: "#54150f", slideEdge: "#ff3a1c", scenery: "hell" },
+  { sky: "#080202", horizon: "#330404", platform: "#28100f", platformDark: "#0f0404", edge: "#74120f", accent: "#ff2f14", glow: "#ff1808", secondaryGlow: "#ff771c", slide: "#3a0a08", slideEdge: "#ff3417", scenery: "hell" },
+];
 
 const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
 const hit = (a: Body, b: Body) =>
   a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+// 미끄럼틀 양 끝은 완만하고 중앙에서 자연스럽게 기울어지는 S-커브.
+// 렌더링과 충돌 판정이 같은 곡선을 사용하므로 캐릭터가 뜨거나 파묻히지 않는다.
+const smoothSlideProgress = (progress: number) => {
+  const t = clamp(progress, 0, 1);
+  return t * t * (3 - 2 * t);
+};
+
+const roundedRectPath = (
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  radius: number,
+) => {
+  const r = Math.max(0, Math.min(radius, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+};
+
+function drawStageBackground(
+  ctx: CanvasRenderingContext2D,
+  stage: number,
+  theme: StageVisualTheme,
+) {
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, theme.sky);
+  sky.addColorStop(0.58, theme.horizon);
+  sky.addColorStop(1, theme.platformDark);
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+
+  if (theme.scenery === "bubble") {
+    // 1~3단계: 편안한 버블 판타지. 단계가 오를수록 조금 더 깊고 신비롭게.
+    const moonX = W - 150;
+    const moonY = 122;
+    const moonR = 48 + stage * 3;
+    const moonGlow = ctx.createRadialGradient(moonX, moonY, 4, moonX, moonY, 150);
+    moonGlow.addColorStop(0, "rgba(255,242,183,.34)");
+    moonGlow.addColorStop(1, "rgba(255,242,183,0)");
+    ctx.fillStyle = moonGlow;
+    ctx.fillRect(moonX - 160, moonY - 160, 320, 320);
+
+    ctx.beginPath();
+    ctx.arc(moonX, moonY, moonR, 0, Math.PI * 2);
+    ctx.fillStyle = theme.accent;
+    ctx.globalAlpha = 0.73;
+    ctx.fill();
+
+    // 별의 크기와 밝기를 조금씩 다르게 해서 평면적인 느낌을 줄인다.
+    ctx.globalAlpha = 1;
+    for (let i = 0; i < 64; i += 1) {
+      const starX = (i * 193 + stage * 47 + 71) % W;
+      const starY = 45 + ((i * 97 + stage * 29 + 31) % 540);
+      const size = i % 13 === 0 ? 4 : i % 5 === 0 ? 3 : 1.5;
+      ctx.fillStyle = i % 6 === 0 ? theme.accent : "rgba(244,255,248,.62)";
+      ctx.fillRect(starX, starY, size, size);
+      if (i % 11 === 0) {
+        ctx.globalAlpha = 0.23;
+        ctx.fillRect(starX - 4, starY + 1, size + 8, 1);
+        ctx.fillRect(starX + 1, starY - 4, 1, size + 8);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // 세 겹의 원경을 만들어 깊이감을 준다.
+    ctx.globalAlpha = 0.16;
+    ctx.fillStyle = theme.secondaryGlow;
+    ctx.beginPath();
+    ctx.moveTo(0, H - 365);
+    ctx.bezierCurveTo(270, H - 510, 520, H - 300, 760, H - 420);
+    ctx.bezierCurveTo(1030, H - 545, 1280, H - 315, 1510, H - 420);
+    ctx.bezierCurveTo(1710, H - 510, 1840, H - 395, W, H - 440);
+    ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
+
+    ctx.globalAlpha = 0.29;
+    ctx.fillStyle = theme.platform;
+    ctx.beginPath();
+    ctx.moveTo(0, H - 250);
+    ctx.bezierCurveTo(220, H - 380, 430, H - 185, 650, H - 285);
+    ctx.bezierCurveTo(870, H - 370, 1090, H - 190, 1320, H - 280);
+    ctx.bezierCurveTo(1530, H - 355, 1735, H - 230, W, H - 305);
+    ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
+
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = theme.edge;
+    ctx.beginPath();
+    ctx.moveTo(0, H - 150);
+    ctx.bezierCurveTo(300, H - 255, 535, H - 110, 790, H - 200);
+    ctx.bezierCurveTo(1030, H - 280, 1290, H - 125, 1535, H - 210);
+    ctx.bezierCurveTo(1700, H - 260, 1820, H - 210, W, H - 235);
+    ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath(); ctx.fill();
+
+    // 작은 버블 군집과 먼 빛기둥.
+    for (let i = 0; i < 28; i += 1) {
+      const bubbleX = (i * 257 + stage * 53 + 95) % W;
+      const bubbleY = 135 + ((i * 173 + stage * 37 + 65) % 690);
+      const radius = 3 + (i % 5) * 2.6;
+      const halo = ctx.createRadialGradient(bubbleX, bubbleY, 0, bubbleX, bubbleY, radius * 2.4);
+      halo.addColorStop(0, "rgba(226,255,250,.10)");
+      halo.addColorStop(1, "rgba(226,255,250,0)");
+      ctx.fillStyle = halo;
+      ctx.fillRect(bubbleX - radius * 3, bubbleY - radius * 3, radius * 6, radius * 6);
+      ctx.beginPath(); ctx.arc(bubbleX, bubbleY, radius, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(225,245,242,.025)"; ctx.fill();
+      ctx.strokeStyle = "rgba(225,245,242,.17)"; ctx.lineWidth = 1.5; ctx.stroke();
+    }
+
+    if (stage >= 2) {
+      ctx.globalAlpha = stage === 3 ? 0.15 : 0.09;
+      for (let i = 0; i < 5; i += 1) {
+        const beamX = 190 + i * 390;
+        const beam = ctx.createLinearGradient(beamX, 120, beamX, H - 80);
+        beam.addColorStop(0, "rgba(160,220,255,0)");
+        beam.addColorStop(0.4, "rgba(160,220,255,.22)");
+        beam.addColorStop(1, "rgba(160,220,255,0)");
+        ctx.fillStyle = beam;
+        ctx.fillRect(beamX, 100, 3, H - 180);
+      }
+    }
+  } else if (theme.scenery === "steampunk") {
+    // 4~5단계: 황동 공업도시. 5단계는 더 거대하고 더 뜨거운 공장지대.
+    const sunX = W - 235;
+    const sunY = 150;
+    const sun = ctx.createRadialGradient(sunX, sunY, 4, sunX, sunY, stage === 5 ? 185 : 145);
+    sun.addColorStop(0, "rgba(255,220,137,.55)");
+    sun.addColorStop(0.36, "rgba(255,167,62,.25)");
+    sun.addColorStop(1, "rgba(255,112,35,0)");
+    ctx.fillStyle = sun;
+    ctx.fillRect(sunX - 210, sunY - 210, 420, 420);
+
+    // 먼 파이프 라인.
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = theme.edge;
+    ctx.lineWidth = 12;
+    for (let i = 0; i < 4; i += 1) {
+      const y = 180 + i * 130;
+      ctx.beginPath();
+      ctx.moveTo(-30, y);
+      ctx.bezierCurveTo(330, y - 50, 630, y + 70, 970, y + 10);
+      ctx.bezierCurveTo(1300, y - 40, 1600, y + 55, W + 50, y - 15);
+      ctx.stroke();
+    }
+
+    // 굴뚝과 공장. 앞/뒤 레이어를 다르게 해서 도시의 깊이를 만든다.
+    for (let layer = 0; layer < 2; layer += 1) {
+      const spacing = layer === 0 ? 145 : 120;
+      const alpha = layer === 0 ? 0.38 : 0.73;
+      ctx.globalAlpha = alpha;
+      for (let i = 0; i < 17; i += 1) {
+        const x = i * spacing - 35 + (layer ? 45 : 0);
+        const height = 105 + ((i * 61 + layer * 93) % (stage === 5 ? 340 : 270));
+        ctx.fillStyle = layer === 0 ? "#271a13" : "#140d09";
+        ctx.fillRect(x, H - 42 - height, 90, height);
+        if (i % 2 === 0) {
+          ctx.fillRect(x + 19, H - 42 - height - 72, 18, 72);
+          ctx.fillRect(x + 50, H - 42 - height - 104, 20, 104);
+          ctx.fillStyle = "rgba(255,157,58,.18)";
+          ctx.fillRect(x + 47, H - 42 - height - 8, 26, 6);
+        }
+        ctx.fillStyle = "rgba(255,174,67,.28)";
+        for (let wy = H - height + 18; wy < H - 80; wy += 45) {
+          ctx.fillRect(x + 17, wy, 8, 11);
+          ctx.fillRect(x + 54, wy + 7, 9, 11);
+        }
+      }
+    }
+
+    // 큰 톱니바퀴와 체인.
+    ctx.globalAlpha = stage === 5 ? 0.30 : 0.22;
+    ctx.strokeStyle = theme.accent;
+    ctx.lineWidth = 7;
+    for (let i = 0; i < 8; i += 1) {
+      const gearX = 115 + i * 250;
+      const gearY = H - 130 - (i % 3) * 105;
+      const radius = 28 + (i % 3) * 15;
+      ctx.beginPath(); ctx.arc(gearX, gearY, radius, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(gearX, gearY, radius * 0.42, 0, Math.PI * 2); ctx.stroke();
+      for (let tooth = 0; tooth < 10; tooth += 1) {
+        const angle = (Math.PI * 2 * tooth) / 10;
+        ctx.beginPath();
+        ctx.moveTo(gearX + Math.cos(angle) * (radius - 1), gearY + Math.sin(angle) * (radius - 1));
+        ctx.lineTo(gearX + Math.cos(angle) * (radius + 11), gearY + Math.sin(angle) * (radius + 11));
+        ctx.stroke();
+      }
+    }
+
+    ctx.globalAlpha = 0.13;
+    ctx.strokeStyle = "#d7aa72";
+    ctx.lineWidth = 3;
+    for (let chain = 0; chain < 5; chain += 1) {
+      const x = 180 + chain * 405;
+      for (let y = 40; y < 460; y += 24) {
+        ctx.beginPath(); ctx.ellipse(x, y, 7, 12, chain % 2 ? 0 : Math.PI / 2, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+
+    // 증기 구름.
+    ctx.globalAlpha = stage === 5 ? 0.10 : 0.07;
+    ctx.fillStyle = "#f0e2cc";
+    for (let i = 0; i < 16; i += 1) {
+      ctx.beginPath();
+      ctx.arc(65 + ((i * 211) % W), 120 + ((i * 83) % 420), 25 + (i % 5) * 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (theme.scenery === "cyberpunk") {
+    // 6~7단계: 입체적인 네온 메가시티. 7단계에서 광고/전력선 밀도를 크게 올린다.
+    const haze = ctx.createLinearGradient(0, H * 0.25, 0, H);
+    haze.addColorStop(0, "rgba(20,10,65,0)");
+    haze.addColorStop(1, stage === 7 ? "rgba(194,32,255,.12)" : "rgba(0,220,255,.09)");
+    ctx.fillStyle = haze; ctx.fillRect(0, 0, W, H);
+
+    // 원경 빌딩.
+    ctx.globalAlpha = 0.42;
+    for (let i = 0; i < 24; i += 1) {
+      const x = i * 88 - 24;
+      const h = 100 + ((i * 57) % 290);
+      ctx.fillStyle = "#08101e";
+      ctx.fillRect(x, H - 42 - h, 55, h);
+      ctx.fillStyle = i % 2 ? theme.glow : theme.secondaryGlow;
+      for (let y = H - h + 18; y < H - 70; y += 36) {
+        ctx.globalAlpha = 0.10;
+        ctx.fillRect(x + 11, y, 5, 8);
+        ctx.fillRect(x + 34, y + 9, 6, 7);
+      }
+      ctx.globalAlpha = 0.42;
+    }
+
+    // 전경 타워.
+    ctx.globalAlpha = 0.85;
+    for (let i = 0; i < 17; i += 1) {
+      const x = i * 120 - 20;
+      const h = 155 + ((i * 73) % (stage === 7 ? 450 : 360));
+      ctx.fillStyle = "rgba(3,7,17,.88)";
+      ctx.fillRect(x, H - 42 - h, 76, h);
+      ctx.fillStyle = i % 2 === 0 ? theme.glow : theme.secondaryGlow;
+      ctx.globalAlpha = 0.25;
+      ctx.fillRect(x + 3, H - 42 - h, 2, h);
+      for (let wy = H - h + 15; wy < H - 75; wy += 32) {
+        ctx.fillRect(x + 14, wy, 8, 13);
+        ctx.fillRect(x + 47, wy + 7, 10, 8);
+      }
+      ctx.globalAlpha = 0.85;
+    }
+
+    // 홀로그램 광고판.
+    const signCount = stage === 7 ? 10 : 6;
+    for (let i = 0; i < signCount; i += 1) {
+      const sx = 120 + (i * 207) % 1680;
+      const sy = 130 + (i % 4) * 125;
+      ctx.globalAlpha = 0.18 + (i % 3) * 0.04;
+      ctx.strokeStyle = i % 2 ? theme.secondaryGlow : theme.glow;
+      ctx.lineWidth = 2.5;
+      roundedRectPath(ctx, sx, sy, 96 + (i % 3) * 18, 38 + (i % 2) * 8, 7);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(sx + 16, sy + 14);
+      ctx.lineTo(sx + 70, sy + 14);
+      ctx.moveTo(sx + 16, sy + 24);
+      ctx.lineTo(sx + 54, sy + 24);
+      ctx.stroke();
+    }
+
+    // 원근감 있는 네온 전력선.
+    ctx.globalAlpha = 0.15;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 9; i += 1) {
+      ctx.strokeStyle = i % 2 ? theme.secondaryGlow : theme.glow;
+      ctx.beginPath();
+      ctx.moveTo(-20, 165 + i * 72);
+      ctx.lineTo(W + 30, 75 + i * 82);
+      ctx.stroke();
+    }
+
+    // 바닥 안개와 데이터 입자.
+    const fog = ctx.createLinearGradient(0, H - 300, 0, H);
+    fog.addColorStop(0, "rgba(0,0,0,0)");
+    fog.addColorStop(1, stage === 7 ? "rgba(161,38,255,.18)" : "rgba(10,203,232,.14)");
+    ctx.fillStyle = fog; ctx.globalAlpha = 1; ctx.fillRect(0, H - 300, W, 300);
+    for (let i = 0; i < (stage === 7 ? 58 : 38); i += 1) {
+      const px = (i * 181 + 43) % W;
+      const py = 90 + ((i * 137) % 750);
+      ctx.fillStyle = i % 2 ? theme.glow : theme.secondaryGlow;
+      ctx.globalAlpha = 0.2 + (i % 5) * 0.05;
+      ctx.fillRect(px, py, i % 7 === 0 ? 3 : 1.5, 10 + (i % 4) * 6);
+    }
+  } else {
+    // 8~10단계: 지옥. 단계가 오를수록 성채·화산·용암·불씨가 압도적으로 늘어난다.
+    const intensity = stage - 7;
+    const hellGlow = ctx.createRadialGradient(W / 2, 145, 0, W / 2, 145, 620 + intensity * 80);
+    hellGlow.addColorStop(0, `rgba(255,${70 - intensity * 12},10,${0.24 + intensity * 0.08})`);
+    hellGlow.addColorStop(0.55, "rgba(170,18,5,.12)");
+    hellGlow.addColorStop(1, "rgba(70,0,0,0)");
+    ctx.fillStyle = hellGlow; ctx.fillRect(0, 0, W, H);
+
+    // 붉은 구름층.
+    ctx.globalAlpha = 0.16 + intensity * 0.03;
+    for (let i = 0; i < 14; i += 1) {
+      const cx = (i * 179 + 70) % W;
+      const cy = 80 + ((i * 83) % 330);
+      const cloud = ctx.createRadialGradient(cx, cy, 0, cx, cy, 85 + (i % 4) * 20);
+      cloud.addColorStop(0, "rgba(135,20,12,.42)");
+      cloud.addColorStop(1, "rgba(40,0,0,0)");
+      ctx.fillStyle = cloud;
+      ctx.fillRect(cx - 150, cy - 110, 300, 220);
+    }
+
+    // 여러 화산 실루엣.
+    ctx.globalAlpha = 0.82;
+    for (let i = 0; i < 5; i += 1) {
+      const vx = 160 + i * 410;
+      const peakY = 210 + ((i * 73) % 170) - intensity * 18;
+      ctx.fillStyle = i === 2 ? "#110505" : "#160707";
+      ctx.beginPath();
+      ctx.moveTo(vx - 250, H - 42);
+      ctx.lineTo(vx, peakY);
+      ctx.lineTo(vx + 250, H - 42);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = theme.glow;
+      ctx.globalAlpha = 0.24 + intensity * 0.05;
+      ctx.lineWidth = 3 + intensity;
+      ctx.beginPath();
+      ctx.moveTo(vx - 12, peakY + 20);
+      ctx.lineTo(vx + 15, peakY + 130);
+      ctx.lineTo(vx - 8, peakY + 215);
+      ctx.stroke();
+      ctx.globalAlpha = 0.82;
+    }
+
+    // 지옥 성채. 10단계는 중앙 왕좌 첨탑을 가장 크게.
+    ctx.fillStyle = "#080202";
+    ctx.globalAlpha = 0.58 + intensity * 0.08;
+    for (let i = 0; i < 14; i += 1) {
+      const towerX = i * 148 - 20;
+      let towerHeight = 135 + ((i * 97) % (260 + intensity * 55));
+      if (stage === 10 && i === 6) towerHeight = 590;
+      ctx.fillRect(towerX, H - 42 - towerHeight, 88, towerHeight);
+      ctx.beginPath();
+      ctx.moveTo(towerX - 6, H - 42 - towerHeight);
+      ctx.lineTo(towerX + 44, H - 100 - towerHeight - (i % 3) * 18);
+      ctx.lineTo(towerX + 94, H - 42 - towerHeight);
+      ctx.closePath(); ctx.fill();
+      if (i % 2 === 0) {
+        ctx.fillStyle = "rgba(255,61,20,.34)";
+        for (let wy = H - towerHeight + 25; wy < H - 85; wy += 55) {
+          ctx.fillRect(towerX + 35, wy, 10, 18);
+        }
+        ctx.fillStyle = "#080202";
+      }
+    }
+
+    // 용암강과 균열.
+    const lava = ctx.createLinearGradient(0, H - 150, 0, H);
+    lava.addColorStop(0, "rgba(255,40,8,0)");
+    lava.addColorStop(1, `rgba(255,54,8,${0.13 + intensity * 0.05})`);
+    ctx.fillStyle = lava; ctx.globalAlpha = 1; ctx.fillRect(0, H - 180, W, 180);
+
+    ctx.strokeStyle = theme.glow;
+    ctx.lineWidth = 2 + intensity;
+    ctx.globalAlpha = 0.43 + intensity * 0.06;
+    for (let i = 0; i < 14 + intensity * 3; i += 1) {
+      const crackX = 45 + i * (W / (14 + intensity * 3));
+      ctx.beginPath();
+      ctx.moveTo(crackX, H);
+      ctx.lineTo(crackX + 20, H - 75);
+      ctx.lineTo(crackX - 12, H - 135);
+      ctx.lineTo(crackX + 27, H - 195 - (i % 3) * 25);
+      ctx.stroke();
+    }
+
+    // 불씨 + 유성처럼 떨어지는 불꽃.
+    for (let i = 0; i < 44 + intensity * 15; i += 1) {
+      const sparkX = (i * 173 + intensity * 41 + 61) % W;
+      const sparkY = 70 + ((i * 119 + intensity * 83) % 770);
+      const sparkSize = i % 8 === 0 ? 4 : 2;
+      ctx.fillStyle = i % 4 === 0 ? "#ffcf63" : theme.glow;
+      ctx.globalAlpha = 0.52 + (i % 4) * 0.08;
+      ctx.fillRect(sparkX, sparkY, sparkSize, sparkSize);
+      if (i % 12 === 0) {
+        ctx.strokeStyle = "rgba(255,150,60,.32)";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(sparkX, sparkY); ctx.lineTo(sparkX - 20, sparkY - 55); ctx.stroke();
+      }
+    }
+  }
+
+  ctx.restore();
+}
+
+function drawStagePlatform(
+  ctx: CanvasRenderingContext2D,
+  platform: Platform,
+  theme: StageVisualTheme,
+) {
+  const isFloor = platform.y >= H - 50;
+  const bodyHeight = isFloor ? platform.h + 18 : platform.h + 12;
+  const radius =
+    theme.scenery === "bubble" ? (isFloor ? 18 : 13) :
+    theme.scenery === "cyberpunk" ? 7 : 5;
+
+  ctx.save();
+
+  // 넓은 그림자와 접지 그림자를 분리해 발판이 배경에 붙어 보이지 않게 한다.
+  roundedRectPath(ctx, platform.x + 9, platform.y + 11, platform.w, bodyHeight, radius);
+  ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.fill();
+  roundedRectPath(ctx, platform.x + 3, platform.y + 5, platform.w, bodyHeight, radius);
+  ctx.strokeStyle = "rgba(0,0,0,.28)"; ctx.lineWidth = 4; ctx.stroke();
+
+  roundedRectPath(ctx, platform.x, platform.y, platform.w, bodyHeight, radius);
+  const gradient = ctx.createLinearGradient(0, platform.y, 0, platform.y + bodyHeight);
+  gradient.addColorStop(0, theme.edge);
+  gradient.addColorStop(0.12, theme.platform);
+  gradient.addColorStop(0.62, theme.platform);
+  gradient.addColorStop(1, theme.platformDark);
+  ctx.fillStyle = gradient; ctx.fill();
+
+  // 위쪽 림과 하단 림.
+  ctx.beginPath();
+  ctx.moveTo(platform.x + radius, platform.y + 4);
+  ctx.lineTo(platform.x + platform.w - radius, platform.y + 4);
+  ctx.strokeStyle = theme.edge;
+  ctx.lineWidth = theme.scenery === "cyberpunk" ? 5 : 4;
+  ctx.globalAlpha = 0.92; ctx.lineCap = "round"; ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(platform.x + radius, platform.y + bodyHeight - 4);
+  ctx.lineTo(platform.x + platform.w - radius, platform.y + bodyHeight - 4);
+  ctx.strokeStyle = theme.platformDark; ctx.globalAlpha = 0.75; ctx.lineWidth = 3; ctx.stroke();
+
+  if (theme.scenery === "bubble") {
+    // 둥근 섬 형태 + 작은 결정/이끼 같은 장식.
+    if (!isFloor) {
+      ctx.globalAlpha = 0.38;
+      ctx.fillStyle = theme.platform;
+      const lobeCount = Math.max(2, Math.min(7, Math.floor(platform.w / 100)));
+      for (let index = 0; index < lobeCount; index += 1) {
+        const lobeX = platform.x + ((index + 1) / (lobeCount + 1)) * platform.w;
+        const lobeRadius = 8 + ((index * 7 + Math.floor(platform.x)) % 10);
+        ctx.beginPath(); ctx.arc(lobeX, platform.y + bodyHeight - 1, lobeRadius, 0, Math.PI); ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 0.62;
+    for (let x = platform.x + 46; x < platform.x + platform.w - 30; x += 96) {
+      ctx.beginPath(); ctx.arc(x, platform.y + 13, 2.4, 0, Math.PI * 2);
+      ctx.fillStyle = theme.accent; ctx.fill();
+      if (!isFloor && Math.floor(x / 96) % 2 === 0) {
+        ctx.strokeStyle = theme.glow; ctx.globalAlpha = 0.22; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(x - 7, platform.y + bodyHeight - 2); ctx.lineTo(x, platform.y + bodyHeight + 9); ctx.lineTo(x + 7, platform.y + bodyHeight - 2); ctx.stroke();
+        ctx.globalAlpha = 0.62;
+      }
+    }
+  }
+
+  if (theme.scenery === "steampunk") {
+    // 황동 판넬, 리벳, 지지빔, 작은 파이프.
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "rgba(28,15,8,.62)"; ctx.lineWidth = 2;
+    for (let x = platform.x + 92; x < platform.x + platform.w; x += 118) {
+      ctx.beginPath(); ctx.moveTo(x, platform.y + 6); ctx.lineTo(x, platform.y + bodyHeight - 4); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x - 38, platform.y + bodyHeight - 4); ctx.lineTo(x, platform.y + 7); ctx.stroke();
+    }
+    for (let x = platform.x + 25; x < platform.x + platform.w - 15; x += 48) {
+      ctx.beginPath(); ctx.arc(x, platform.y + 14, 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = theme.accent; ctx.fill();
+      ctx.beginPath(); ctx.arc(x - 1, platform.y + 13, 1, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,245,190,.72)"; ctx.fill();
+    }
+    ctx.strokeStyle = theme.secondaryGlow; ctx.globalAlpha = 0.48; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(platform.x + 18, platform.y + bodyHeight - 9); ctx.lineTo(platform.x + platform.w - 18, platform.y + bodyHeight - 9); ctx.stroke();
+  }
+
+  if (theme.scenery === "cyberpunk") {
+    // 네온 패널과 회로 패턴.
+    ctx.globalAlpha = 0.86;
+    ctx.fillStyle = theme.glow;
+    for (let x = platform.x + 34; x < platform.x + platform.w - 20; x += 78) {
+      ctx.fillRect(x, platform.y + bodyHeight - 7, 28, 2);
+    }
+    ctx.strokeStyle = theme.secondaryGlow; ctx.lineWidth = 2; ctx.globalAlpha = 0.48;
+    for (let x = platform.x + 55; x < platform.x + platform.w - 45; x += 145) {
+      ctx.beginPath();
+      ctx.moveTo(x, platform.y + 10); ctx.lineTo(x + 24, platform.y + 10);
+      ctx.lineTo(x + 38, platform.y + 18); ctx.lineTo(x + 62, platform.y + 18);
+      ctx.stroke();
+      ctx.fillStyle = theme.secondaryGlow; ctx.globalAlpha = 0.75;
+      ctx.fillRect(x + 62, platform.y + 16, 4, 4);
+      ctx.globalAlpha = 0.48;
+    }
+    // 아주 약한 발광 테두리.
+    ctx.shadowColor = theme.glow; ctx.shadowBlur = 7; ctx.globalAlpha = 0.24;
+    roundedRectPath(ctx, platform.x + 1, platform.y + 1, platform.w - 2, bodyHeight - 2, radius);
+    ctx.strokeStyle = theme.glow; ctx.lineWidth = 1.5; ctx.stroke(); ctx.shadowBlur = 0;
+  }
+
+  if (theme.scenery === "hell") {
+    // 검은 암석 + 안쪽에서 새어나오는 용암 균열 + 쇠가시.
+    ctx.globalAlpha = 0.92;
+    ctx.strokeStyle = theme.glow; ctx.lineWidth = 2;
+    for (let x = platform.x + 38; x < platform.x + platform.w - 22; x += 76) {
+      ctx.beginPath();
+      ctx.moveTo(x, platform.y + bodyHeight - 3);
+      ctx.lineTo(x + 8, platform.y + bodyHeight - 17);
+      ctx.lineTo(x + 17, platform.y + bodyHeight - 7);
+      ctx.lineTo(x + 27, platform.y + 7);
+      ctx.stroke();
+    }
+    if (!isFloor) {
+      ctx.fillStyle = theme.platformDark; ctx.globalAlpha = 0.92;
+      for (let x = platform.x + 42; x < platform.x + platform.w - 25; x += 95) {
+        ctx.beginPath();
+        ctx.moveTo(x - 8, platform.y + bodyHeight);
+        ctx.lineTo(x, platform.y + bodyHeight + 13);
+        ctx.lineTo(x + 8, platform.y + bodyHeight);
+        ctx.closePath(); ctx.fill();
+      }
+    }
+    ctx.shadowColor = theme.glow; ctx.shadowBlur = 9; ctx.globalAlpha = 0.28;
+    ctx.beginPath(); ctx.moveTo(platform.x + radius, platform.y + 4); ctx.lineTo(platform.x + platform.w - radius, platform.y + 4);
+    ctx.strokeStyle = theme.glow; ctx.lineWidth = 2; ctx.stroke(); ctx.shadowBlur = 0;
+  }
+
+  ctx.restore();
+}
+
+function drawStageSlide(
+  ctx: CanvasRenderingContext2D,
+  platform: Platform,
+  theme: StageVisualTheme,
+) {
+  if (platform.kind !== "slide" || typeof platform.endY !== "number") return;
+
+  const drawCurve = (offsetX = 0, offsetY = 0) => {
+    ctx.beginPath();
+    for (let step = 0; step <= 32; step += 1) {
+      const progress = step / 32;
+      const curvedProgress = smoothSlideProgress(progress);
+      const x = platform.x + platform.w * progress + offsetX;
+      const y = platform.y + (platform.endY! - platform.y) * curvedProgress + platform.h / 2 + offsetY;
+      if (step === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+  };
+
+  ctx.save();
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  // 다층 그림자.
+  drawCurve(9, 12); ctx.strokeStyle = "rgba(0,0,0,.38)"; ctx.lineWidth = platform.h + 17; ctx.stroke();
+  drawCurve(3, 5); ctx.strokeStyle = "rgba(0,0,0,.18)"; ctx.lineWidth = platform.h + 12; ctx.stroke();
+
+  drawCurve(); ctx.strokeStyle = theme.slide; ctx.lineWidth = platform.h + 9; ctx.stroke();
+  drawCurve(); ctx.strokeStyle = theme.slideEdge; ctx.lineWidth = theme.scenery === "cyberpunk" ? 5 : 4; ctx.globalAlpha = 0.92; ctx.stroke();
+
+  if (theme.scenery === "bubble") {
+    // 물방울 관보다는 부드러운 고체형 곡선 다리 느낌. 내부 반사만 약하게 유지.
+    drawCurve(0, 6); ctx.strokeStyle = "rgba(255,255,255,.13)"; ctx.lineWidth = 2; ctx.stroke();
+    for (const progress of [0.22, 0.46, 0.70]) {
+      const t = smoothSlideProgress(progress);
+      const x = platform.x + platform.w * progress;
+      const y = platform.y + (platform.endY - platform.y) * t + platform.h / 2;
+      ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fillStyle = theme.accent; ctx.globalAlpha = 0.50; ctx.fill();
+    }
+  } else if (theme.scenery === "steampunk") {
+    // 진짜 금속 파이프처럼 밴드와 리벳을 추가.
+    for (const progress of [0.14, 0.30, 0.46, 0.62, 0.78, 0.92]) {
+      const t = smoothSlideProgress(progress);
+      const x = platform.x + platform.w * progress;
+      const y = platform.y + (platform.endY - platform.y) * t + platform.h / 2;
+      ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fillStyle = theme.accent; ctx.globalAlpha = 0.92; ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fillStyle = theme.platformDark; ctx.fill();
+      ctx.beginPath(); ctx.arc(x - 2, y - 2, 1, 0, Math.PI * 2); ctx.fillStyle = "#ffe0a3"; ctx.fill();
+    }
+  } else if (theme.scenery === "cyberpunk") {
+    // 에너지 레일: 중심선 + 양쪽 점멸 세그먼트.
+    ctx.shadowColor = theme.glow; ctx.shadowBlur = 10;
+    drawCurve(); ctx.strokeStyle = theme.secondaryGlow; ctx.globalAlpha = 0.62; ctx.lineWidth = 2.5; ctx.stroke();
+    ctx.shadowBlur = 0;
+    for (const progress of [0.12, 0.28, 0.44, 0.60, 0.76, 0.92]) {
+      const t = smoothSlideProgress(progress);
+      const x = platform.x + platform.w * progress;
+      const y = platform.y + (platform.endY - platform.y) * t + platform.h / 2;
+      ctx.fillStyle = progress < 0.5 ? theme.glow : theme.secondaryGlow;
+      ctx.globalAlpha = 0.88; ctx.fillRect(x - 4, y - 2, 8, 4);
+    }
+  } else {
+    // 용암이 흐르는 검은 돌다리.
+    ctx.shadowColor = theme.glow; ctx.shadowBlur = 9;
+    drawCurve(); ctx.strokeStyle = "#ffb037"; ctx.globalAlpha = 0.64; ctx.lineWidth = 3; ctx.stroke();
+    ctx.shadowBlur = 0;
+    for (const progress of [0.18, 0.37, 0.57, 0.78]) {
+      const t = smoothSlideProgress(progress);
+      const x = platform.x + platform.w * progress;
+      const y = platform.y + (platform.endY - platform.y) * t + platform.h / 2;
+      ctx.beginPath(); ctx.arc(x, y, 3.2, 0, Math.PI * 2); ctx.fillStyle = "#ff7a24"; ctx.globalAlpha = 0.8; ctx.fill();
+    }
+  }
+
+  // 연결부 캡. 테마별 장식은 달라도 충돌 경계는 동일하게 유지한다.
+  ctx.globalAlpha = 1;
+  for (const endpoint of [
+    { x: platform.x, y: platform.y + platform.h / 2 },
+    { x: platform.x + platform.w, y: platform.endY + platform.h / 2 },
+  ]) {
+    ctx.beginPath(); ctx.arc(endpoint.x, endpoint.y, platform.h * 0.72, 0, Math.PI * 2);
+    ctx.fillStyle = theme.slide; ctx.fill();
+    ctx.beginPath(); ctx.arc(endpoint.x, endpoint.y - platform.h * 0.25, 4.7, 0, Math.PI * 2);
+    ctx.fillStyle = theme.slideEdge; ctx.fill();
+  }
+
+  ctx.restore();
+}
 
 function stagePlatforms(stage: number): Platform[] {
   const floor = { x: 0, y: H - 42, w: WORLD_W, h: 42 };
@@ -858,6 +1561,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       life: number;
     }> = [];
     let gameOver = false;
+    let squirrelFallTimer = 0;
 
     const playTone = (
       startAt: number,
@@ -933,6 +1637,42 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       playNoiseBurst(at, 0.075, 0.055, 2400);
     };
 
+    const playCoinPickupSound = () => {
+      const audio = getGameAudioContext();
+      if (!audio) return;
+
+      const at = audio.currentTime;
+
+      // 짧고 선명한 동전 획득음: "띠-링!"
+      playTone(
+        at,
+        0.085,
+        1320,
+        1680,
+        0.095,
+        "sine",
+      );
+
+      playTone(
+        at + 0.065,
+        0.16,
+        1780,
+        2350,
+        0.085,
+        "triangle",
+      );
+
+      // 끝에 아주 약한 반짝임을 더해 금속성 동전 느낌을 만든다.
+      playTone(
+        at + 0.11,
+        0.12,
+        2450,
+        2050,
+        0.035,
+        "sine",
+      );
+    };
+
     const playPlayerHurtSound = () => {
       const audio = getGameAudioContext();
       if (!audio) return;
@@ -981,6 +1721,37 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
     if (saved?.player) player = saved.player;
     let platforms = stagePlatforms(stage);
     let bubbles: Bubble[] = [];
+    let waterStreams: WaterStream[] = [];
+    let waterBursts: WaterBurst[] = [];
+    let waterBombs: WaterBomb[] = [];
+    let waterStreamSeq = 0;
+    let waterBombSeq = 0;
+
+    const createFallingWaterStream = (
+      x: number,
+      dir: number,
+      y: number,
+    ): WaterStream => ({
+      id: ++waterStreamSeq,
+      x,
+      y,
+      vx: 0,
+      vy: 3.28,
+      w: 42,
+      h: 150,
+      dir,
+      life: 900,
+      source: "sky",
+      flowMode: "falling",
+      targetWidth: 520,
+      flowWidth: 42,
+    });
+    let skyWaterAccumulator = 0;
+    let lastSpacePressAt = -Infinity;
+    let waterShotReadyAt = 0;
+    let pendingWaterShot = false;
+    let ridingBubbleId: number | null = null;
+    let ridingWaterStreamId: number | null = null;
     let bossBubbles: BossBubble[] = [];
     let coins: Coin[] = [];
     let bossExplosions: BossExplosion[] = [];
@@ -991,7 +1762,28 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
     let enemies: Enemy[] = saved?.enemies ?? [];
     let midBosses: MidBoss[] = (saved?.midBosses ?? []).map((boss) => ({ ...boss, mouthOpen: false }));
     let highBosses: HighBoss[] = saved?.highBosses ?? [];
-    coins = saved?.coins ?? [];
+    coins = (saved?.coins ?? []).map(
+      (coin) => {
+        const centerX =
+          coin.x +
+          coin.w / 2;
+        const centerY =
+          coin.y +
+          coin.h / 2;
+
+        return {
+          ...coin,
+          x:
+            centerX -
+            NORMAL_COIN_HALF,
+          y:
+            centerY -
+            NORMAL_COIN_HALF,
+          w: NORMAL_COIN_SIZE,
+          h: NORMAL_COIN_SIZE,
+        };
+      },
+    );
 
     // 이전 너비로 저장된 세이브는 늘어난 폭의 절반만큼 이동해
     // 플레이 위치가 확장 월드의 같은 중앙 구역에 유지되도록 한다.
@@ -1008,8 +1800,11 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
     bossSeq = Math.max(0, ...midBosses.map((boss) => boss.id), ...highBosses.map((boss) => boss.id));
     coinSeq = Math.max(0, ...coins.map((coin) => coin.id));
     let stageConfig = getStageConfig(stage);
-    let waveDurationMs = stageConfig.minutes * 60_000;
-    let waveRemainingMs = saved?.waveRemainingMs ?? waveDurationMs;
+    let stageElapsedMs = saved?.stageElapsedMs ?? 0;
+    let normalSpawned = Math.min(
+      stageConfig.normalTotal,
+      Math.max(saved?.normalSpawned ?? 0, enemies.length),
+    );
     let midSpawned = saved?.midSpawned ?? midBosses.length;
     let highSpawned = saved?.highSpawned ?? highBosses.length;
     let normalSpawnAccumulator = 0;
@@ -1019,7 +1814,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
     let playerCaptured = false;
     let capturedBossId: number | null = null;
     let capturePressStart = 0;
-    let capturePressTarget = 15;
+    let capturePressTarget = 5;
 
     const makeEnemy = (index = enemySeq): Enemy => ({
       id: ++enemySeq,
@@ -1033,8 +1828,8 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
 
     const spawnStage = () => {
       stageConfig = getStageConfig(stage);
-      waveDurationMs = stageConfig.minutes * 60_000;
-      waveRemainingMs = waveDurationMs;
+      stageElapsedMs = 0;
+      normalSpawned = 0;
       midSpawned = 0;
       highSpawned = 0;
       normalSpawnAccumulator = 0;
@@ -1044,28 +1839,47 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       player.x = WORLD_W / 2 - player.w / 2;
       player.y = H - 130; player.vx = 0; player.vy = 0; player.dropThrough = 0;
       bubbles = [];
+      waterStreams = [];
+      waterBursts = [];
+      waterBombs = [];
+      skyWaterAccumulator = 0;
+      ridingBubbleId = null;
+      ridingWaterStreamId = null;
       bossBubbles = [];
       bossExplosions = [];
       healingEffect = 0;
       midBosses = [];
       highBosses = [];
-      enemies = stageConfig.normalMonsters
-        ? Array.from({ length: 5 }, (_, index) => makeEnemy(index))
-        : [];
+
+      // 각 스테이지는 5마리로 시작하고, 처치될 때마다
+      // 스테이지별 최대 동시출몰 수를 넘지 않는 범위에서 보충한다.
+      const initialNormalCount = Math.min(
+        5,
+        stageConfig.normalTotal,
+        stageConfig.normalSimultaneous,
+      );
+      enemies = Array.from(
+        { length: initialNormalCount },
+        (_, index) => makeEnemy(index),
+      );
+      normalSpawned = initialNormalCount;
+
       setHud({ score, stage, life });
     };
 
     // 이전 버전에서 1스테이지가 일반 몬스터 없이 보스로 바로 시작된
     // 저장 데이터도 새 진행 방식에 맞게 한 번만 정상화한다.
-    if (saved && stage === 1 && enemies.length === 0) {
-      enemies = Array.from({ length: 5 }, (_, index) => makeEnemy(index));
-      midBosses = [];
-      highBosses = [];
-      bossBubbles = [];
-      midSpawned = 0;
-      highSpawned = 0;
-      midSpawnAccumulator = 0;
-      highSpawnAccumulator = 0;
+    if (saved && enemies.length === 0 && normalSpawned === 0) {
+      const initialNormalCount = Math.min(
+        5,
+        stageConfig.normalTotal,
+        stageConfig.normalSimultaneous,
+      );
+      enemies = Array.from(
+        { length: initialNormalCount },
+        (_, index) => makeEnemy(index),
+      );
+      normalSpawned = initialNormalCount;
     }
     if (!saved) spawnStage();
 
@@ -1136,6 +1950,36 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       }
     };
 
+    const dropNormalMonsterCoin = (
+      enemy: Enemy,
+    ) => {
+      // 이미 이 몬스터가 코인을 드랍했다면 중복 생성하지 않는다.
+      if (enemy.coinDropped) {
+        return;
+      }
+
+      enemy.coinDropped = true;
+
+      coins.push({
+        id: ++coinSeq,
+        x:
+          enemy.x +
+          enemy.w / 2 -
+          NORMAL_COIN_HALF,
+        y:
+          enemy.y +
+          enemy.h / 2 -
+          NORMAL_COIN_HALF,
+        vx:
+          (Math.random() - .5) *
+          5,
+        vy: -7,
+        w: NORMAL_COIN_SIZE,
+        h: NORMAL_COIN_SIZE,
+        life: 900,
+      });
+    };
+
     const dropBossCoins = (boss: MidBoss | HighBoss, amount: number) => {
       const centerX = boss.x + boss.w / 2;
       const centerY = boss.y + boss.h / 2;
@@ -1144,12 +1988,21 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         const speed = 5.5 + (index % 3) * 1.1;
         coins.push({
           id: ++coinSeq,
-          x: centerX - 13,
-          y: centerY - 13,
-          vx: Math.cos(angle) * speed,
-          vy: Math.sin(angle) * speed - 4.5,
-          w: 26,
-          h: 26,
+          x:
+            centerX -
+            BOSS_COIN_HALF,
+          y:
+            centerY -
+            BOSS_COIN_HALF,
+          vx:
+            Math.cos(angle) *
+            speed,
+          vy:
+            Math.sin(angle) *
+              speed -
+            4.5,
+          w: BOSS_COIN_SIZE,
+          h: BOSS_COIN_SIZE,
           life: 1100,
         });
       }
@@ -1168,7 +2021,8 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       if (gameOver || life <= 0) return;
       const data: SavedGame = {
         version: 1, worldWidth: WORLD_W,
-        stage, score, life, coinProgress, waveRemainingMs,
+        stage, score, life, coinProgress,
+        stageElapsedMs, normalSpawned,
         midSpawned, highSpawned,
         player: { ...player },
         enemies: enemies.map((enemy) => ({ ...enemy })),
@@ -1223,27 +2077,61 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
     const down = (event: KeyboardEvent) => {
       const map: Record<string, Key | undefined> = {
         ArrowLeft: "left", a: "left", A: "left", ArrowRight: "right", d: "right", D: "right",
-        ArrowUp: "up", w: "up", W: "up", ArrowDown: "down", s: "down", S: "down", " ": "fire",
+        ArrowUp: "up", w: "up", W: "up", ArrowDown: "down", s: "down", S: "down",
+        " ": "fire", Spacebar: "fire",
       };
-      const key = map[event.key];
+      const key: Key | undefined =
+        event.code === "Space" ? "fire" : map[event.key];
+
       if (key) {
+        // Space가 직전에 클릭했던 START/RESTART/FULLSCREEN 같은 버튼을
+        // 다시 눌러 게임 루프가 중복 실행되는 브라우저 기본 동작을 완전히 차단한다.
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (key === "fire") {
+          const activeElement = document.activeElement;
+          if (activeElement instanceof HTMLElement) {
+            activeElement.blur();
+          }
+        }
+
         getGameAudioContext();
         if (!event.repeat && (key === "left" || key === "right")) {
           registerDashPress(key);
         }
         if (!event.repeat && key === "up") registerDashJump();
-        if (key === "fire" && !event.repeat) firePressRef.current += 1;
+        if (key === "fire" && !event.repeat) {
+          firePressRef.current += 1;
+
+          const pressedAt = performance.now();
+          if (
+            pressedAt - lastSpacePressAt <= 300 &&
+            pressedAt >= waterShotReadyAt &&
+            !playerCaptured
+          ) {
+            // 실제 발사 프레임에서 성공한 뒤에만 쿨타임을 시작한다.
+            pendingWaterShot = true;
+            lastSpacePressAt = -Infinity;
+          } else {
+            lastSpacePressAt = pressedAt;
+          }
+        }
         keys[key] = true;
-        event.preventDefault();
       }
     };
     const up = (event: KeyboardEvent) => {
       const map: Record<string, Key | undefined> = {
         ArrowLeft: "left", a: "left", A: "left", ArrowRight: "right", d: "right", D: "right",
-        ArrowUp: "up", w: "up", W: "up", ArrowDown: "down", s: "down", S: "down", " ": "fire",
+        ArrowUp: "up", w: "up", W: "up", ArrowDown: "down", s: "down", S: "down",
+        " ": "fire", Spacebar: "fire",
       };
-      const key = map[event.key];
+      const key: Key | undefined =
+        event.code === "Space" ? "fire" : map[event.key];
+
       if (key) {
+        event.preventDefault();
+        event.stopPropagation();
         keys[key] = false;
         const releasedDirection = key === "left" ? -1 : key === "right" ? 1 : 0;
         if (dashInputRef.current.direction === releasedDirection) {
@@ -1280,9 +2168,10 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
 
         const centerX = clamp(body.x + body.w / 2, p.x, p.x + p.w);
         const progress = (centerX - p.x) / p.w;
+        const curvedProgress = smoothSlideProgress(progress);
         const surfaceY =
           p.kind === "slide" && typeof p.endY === "number"
-            ? p.y + (p.endY - p.y) * progress
+            ? p.y + (p.endY - p.y) * curvedProgress
             : p.y;
 
         if (
@@ -1306,10 +2195,11 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
     const frame = (now: number) => {
       const dt = Math.min(2, (now - last) / 16.667); last = now;
       const elapsedMs = dt * 16.667;
-      waveRemainingMs = Math.max(0, waveRemainingMs - elapsedMs);
+      stageElapsedMs += elapsedMs;
       normalSpawnAccumulator += elapsedMs;
       midSpawnAccumulator += elapsedMs;
       highSpawnAccumulator += elapsedMs;
+      skyWaterAccumulator += elapsedMs;
       saveAccumulator += elapsedMs;
       invincible = Math.max(0, invincible - dt);
       highJumpEffect = Math.max(0, highJumpEffect - dt);
@@ -1335,6 +2225,15 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         }
         if (keys.down && !player.grounded) player.vy = Math.min(22, player.vy + 2.8 * dt);
         player.vy += .78 * dt;
+      if (squirrelFallTimer > 0 && !player.grounded && ridingBubbleId === null) {
+        squirrelFallTimer = Math.max(0, squirrelFallTimer - dt);
+
+        // 날다람쥐 활공처럼 낙하속도를 제한한다.
+        player.vy = Math.min(player.vy, 4.2);
+
+        // 수평 관성을 조금 오래 유지해 '펼쳐서 떨어지는' 느낌을 준다.
+        player.vx *= Math.pow(.992, dt);
+      }
         const oldPY = player.y; player.x += player.vx * dt; player.y += player.vy * dt;
         player.x = clamp(player.x, 0, WORLD_W - player.w);
         player.grounded = land(player, oldPY);
@@ -1366,17 +2265,105 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         if (dashTrailPoints.length > 10) dashTrailPoints.shift();
       }
 
+      // 30초마다 하늘에서 한 칸 폭의 물줄기가 떨어진다.
+      // 발판에 닿으면 진행 방향으로 흘러가며, 최대 한 마리만 밀어낸다.
+      while (skyWaterAccumulator >= 30_000) {
+        skyWaterAccumulator -= 30_000;
+        const fallWidth = 42;
+        const fallHeight = 150;
+
+        // 정기 낙하 물줄기는 맵 양끝에서만 생성된다.
+        // 왼쪽 끝이면 오른쪽으로, 오른쪽 끝이면 왼쪽으로 흐른다.
+        const spawnFromLeft =
+          Math.random() < .5;
+
+        // 현재 카메라에 보이는 맵의 좌/우 끝에서 생성한다.
+        // 그래서 넓은 월드에서도 낙하 물줄기가 화면에 확실히 보인다.
+        const visibleCameraX = clamp(
+          player.x + player.w / 2 - W / 2,
+          0,
+          WORLD_W - W,
+        );
+
+        const spawnX =
+          spawnFromLeft
+            ? visibleCameraX + 26
+            : visibleCameraX +
+              W -
+              fallWidth -
+              26;
+
+        const flowDirection =
+          spawnFromLeft
+            ? 1
+            : -1;
+
+        waterStreams.push(
+          createFallingWaterStream(
+            spawnX,
+            flowDirection,
+            -fallHeight,
+          ),
+        );
+      }
+
+      // 스페이스바 빠른 2회 입력: 12초 쿨타임의 물폭탄.
+      if (pendingWaterShot && !playerCaptured) {
+        pendingWaterShot = false;
+
+        const direction =
+          player.face >= 0 ? 1 : -1;
+
+        const bombSize = 64;
+
+        waterBombs.push({
+          id: ++waterBombSeq,
+          x:
+            direction > 0
+              ? player.x + player.w + 8
+              : player.x - bombSize - 8,
+          y:
+            player.y +
+            player.h * .34 -
+            bombSize / 2,
+          vx: direction * 8.2,
+          vy: -8.6,
+          w: bombSize,
+          h: bombSize,
+          dir: direction,
+          life: 420,
+        });
+
+        // 실제 물폭탄 생성이 완료된 뒤에만 쿨타임 시작.
+        waterShotReadyAt = now + 12_000;
+      }
+
       if (!playerCaptured && keys.fire && now - fireAt > 280) {
         fireAt = now;
         playBubbleShootSound();
-        bubbles.push({ id: ++bubbleSeq, x: player.x + (player.face > 0 ? 68 : -60), y: player.y + 4,
-          vx: player.face * 9, vy: -1, w: 72, h: 72, life: 360 });
+        bubbles.push({
+          id: ++bubbleSeq,
+          // 발사 직후 바로 올라탈 수 있도록 생성 위치와 전진 속도를 줄인다.
+          x: player.x + (player.face > 0 ? 54 : -46),
+          y: player.y + 4,
+          vx: player.face * 5.5,
+          vy: -1,
+          w: 72,
+          h: 72,
+          life: 360,
+        });
       }
 
       for (const b of bubbles) {
-        b.life -= dt; b.vx *= Math.pow(.975, dt); b.vy = Math.max(-2.3, b.vy - .018 * dt);
-        b.x += b.vx * dt; b.y += b.vy * dt;
-        if (b.x < -20) b.x = WORLD_W; if (b.x > WORLD_W) b.x = -20;
+        b.life -= dt;
+        b.vx *= Math.pow(.975, dt);
+        b.vy = Math.max(-2.3, b.vy - .018 * dt);
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+
+        if (b.x < -20) b.x = WORLD_W;
+        if (b.x > WORLD_W) b.x = -20;
+
         if (b.enemyId && hit(player, b)) {
           const e = enemies.find((item) => item.id === b.enemyId);
           if (e) {
@@ -1384,35 +2371,1124 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
             e.dead = true;
             score += 100 + stage * 10;
             b.life = 0;
-            coins.push({
-              id: ++coinSeq, x: e.x + e.w / 2 - 13, y: e.y + e.h / 2 - 13,
-              vx: (Math.random() - .5) * 5, vy: -7, w: 26, h: 26, life: 900,
-            });
+            dropNormalMonsterCoin(e);
           }
         }
       }
 
-      const waveActive = waveRemainingMs > 0;
-      const normalAliveLimit = Math.min(
-        39,
-        Math.ceil((5 + stage * 3) * 1.3),
-      );
-      const stageMonsterTotal = stageConfig.normalMonsters
-        ? normalAliveLimit + stageConfig.midTotal + stageConfig.highTotal
-        : stageConfig.midTotal + stageConfig.highTotal;
-      const normalSpawnInterval = Math.max(180, 620 - stage * 40);
+      // 빈 버블 위에 착지하면 버블을 타고 천천히 상승한다.
+      // 탑승 후 5초가 지나면 버블이 터지며, 탑승 중에도 좌우 이동이 가능하다.
       if (
-        waveActive && stageConfig.normalMonsters &&
-        normalSpawnAccumulator >= normalSpawnInterval &&
-        enemies.length < normalAliveLimit
+        !playerCaptured &&
+        ridingWaterStreamId === null
       ) {
-        normalSpawnAccumulator = 0;
-        enemies.push(makeEnemy());
+        let ridingBubble =
+          ridingBubbleId !== null
+            ? bubbles.find(
+                (bubble) =>
+                  bubble.id === ridingBubbleId &&
+                  !bubble.enemyId &&
+                  bubble.life > 0,
+              )
+            : undefined;
+
+        if (!ridingBubble && player.vy >= 0) {
+          ridingBubble = bubbles.find((bubble) => {
+            if (bubble.enemyId || bubble.life <= 0) return false;
+
+            const bubbleTop = bubble.y + 12;
+            const playerBottom = player.y + player.h;
+            const horizontalOverlap =
+              player.x + player.w * .72 > bubble.x + 7 &&
+              player.x + player.w * .28 < bubble.x + bubble.w - 7;
+
+            return (
+              horizontalOverlap &&
+              playerBottom >= bubbleTop - 12 &&
+              playerBottom <= bubbleTop + 20
+            );
+          });
+
+          if (ridingBubble) {
+            ridingBubbleId = ridingBubble.id;
+            ridingBubble.riddenAtMs ??= now;
+          }
+        }
+
+        if (ridingBubble) {
+          if (
+            ridingBubble.riddenAtMs !== undefined &&
+            now - ridingBubble.riddenAtMs >= 5_000
+          ) {
+            playBubblePopSound();
+            ridingBubble.life = 0;
+            ridingBubbleId = null;
+            player.vy = -2.5;
+          } else {
+            const rideDirection =
+              (keys.right ? 1 : 0) -
+              (keys.left ? 1 : 0);
+
+            // 아래키를 누르면 물풍선에서 바로 떨어진다.
+            if (keys.down) {
+              // 버블 탑승은 쿨타임 없는 자유 기술.
+              // 아래키를 누르면 곧바로 땅으로 꽂히지 않고,
+              // 잠깐 활공한 뒤 날다람쥐처럼 납작하게 떨어진다.
+              ridingBubbleId = null;
+              player.grounded = false;
+              player.vx = ridingBubble.vx * 0.55;
+              player.vy = 1.2;
+              squirrelFallTimer = 58;
+
+              // 같은 버블에 즉시 재탑승되지 않을 정도만 아래로 분리한다.
+              player.y =
+                ridingBubble.y +
+                ridingBubble.h -
+                2;
+
+              keys.down = false;
+            } else if (keys.up) {
+              // 위키는 기존처럼 점프 하차.
+              player.vy = -12.5;
+              player.grounded = false;
+              ridingBubbleId = null;
+              keys.up = false;
+            } else {
+              // 탑승 중에는 플레이어가 따로 움직이는 것이 아니라
+              // 물풍선 자체가 좌우로 이동하고 플레이어는 그 중심에 고정된다.
+              ridingBubble.vy = Math.max(
+                -1.45,
+                Math.min(ridingBubble.vy, -1.05),
+              );
+
+              ridingBubble.vx +=
+                rideDirection * .34 * dt;
+              ridingBubble.vx *=
+                Math.pow(.94, dt);
+              ridingBubble.vx = clamp(
+                ridingBubble.vx,
+                -5.2,
+                5.2,
+              );
+
+              // 입력 직후에도 풍선이 바로 반응하도록 소량 직접 이동시킨다.
+              ridingBubble.x +=
+                rideDirection * 1.15 * dt;
+              ridingBubble.x = clamp(
+                ridingBubble.x,
+                0,
+                WORLD_W - ridingBubble.w,
+              );
+
+              // 플레이어를 물풍선 중앙에 고정해 둘이 함께 움직이게 한다.
+              player.x =
+                ridingBubble.x +
+                (ridingBubble.w - player.w) / 2;
+              player.x = clamp(
+                player.x,
+                0,
+                WORLD_W - player.w,
+              );
+
+              // 이전보다 물풍선에 조금 더 붙어 보이도록 8px → 16px 겹친다.
+              player.y =
+                ridingBubble.y -
+                player.h +
+                16;
+
+              player.vx = ridingBubble.vx;
+              player.vy = ridingBubble.vy;
+              player.grounded = true;
+
+              if (Math.abs(rideDirection) > 0) {
+                player.face = rideDirection;
+              }
+            }
+          }
+        } else {
+          ridingBubbleId = null;
+        }
       }
 
-      const midInterval = Math.max(900, waveDurationMs * .48 / Math.max(1, stageConfig.midTotal));
+      const applyWaterBombExplosionDamage = (
+        x: number,
+        y: number,
+        radius: number,
+        excludedNormalId?: number,
+        excludedMidBossId?: number,
+        excludedHighBossId?: number,
+      ) => {
+        // 일반 몬스터는 체력 시스템이 없으므로 폭발 데미지 1에도 처치된다.
+        for (const enemy of enemies) {
+          if (
+            enemy.dead ||
+            enemy.id === excludedNormalId
+          ) {
+            continue;
+          }
+
+          const centerX =
+            enemy.x + enemy.w / 2;
+          const centerY =
+            enemy.y + enemy.h / 2;
+
+          const distance =
+            Math.hypot(
+              centerX - x,
+              centerY - y,
+            );
+
+          if (distance <= radius) {
+            enemy.dead = true;
+            dropNormalMonsterCoin(enemy);
+            score += 100 + stage * 10;
+          }
+        }
+
+        // 중급/상급 보스는 폭발 데미지 1.
+        for (const boss of midBosses) {
+          if (
+            boss.id === excludedMidBossId
+          ) {
+            continue;
+          }
+
+          const centerX =
+            boss.x + boss.w / 2;
+          const centerY =
+            boss.y + boss.h / 2;
+
+          if (
+            Math.hypot(
+              centerX - x,
+              centerY - y,
+            ) <= radius
+          ) {
+            boss.hp -= 1;
+          }
+        }
+
+        for (const boss of highBosses) {
+          if (
+            boss.id === excludedHighBossId
+          ) {
+            continue;
+          }
+
+          const centerX =
+            boss.x + boss.w / 2;
+          const centerY =
+            boss.y + boss.h / 2;
+
+          if (
+            Math.hypot(
+              centerX - x,
+              centerY - y,
+            ) <= radius
+          ) {
+            boss.hp -= 1;
+          }
+        }
+      };
+
+      // 플레이어 물폭탄:
+      // 직격은 데미지 2, 폭발 범위는 데미지 1.
+      // 일반 몬스터는 어느 쪽이든 맞으면 처치되고,
+      // 보스는 해당 수치만큼 체력이 감소한다.
+      for (const bomb of waterBombs) {
+        bomb.life -= dt;
+
+        const oldBottom =
+          bomb.y + bomb.h;
+
+        bomb.vy = Math.min(
+          15,
+          bomb.vy + .52 * dt,
+        );
+
+        const nextX =
+          bomb.x + bomb.vx * dt;
+        const nextY =
+          bomb.y + bomb.vy * dt;
+        const nextBody: Body = {
+          x: nextX,
+          y: nextY,
+          vx: bomb.vx,
+          vy: bomb.vy,
+          w: bomb.w,
+          h: bomb.h,
+        };
+
+        let directNormalId:
+          number | undefined;
+        let directMidBossId:
+          number | undefined;
+        let directHighBossId:
+          number | undefined;
+        let directHitX =
+          nextX + bomb.w / 2;
+        let directHitY =
+          nextY + bomb.h / 2;
+        let directHit = false;
+
+        // 일반 몬스터 직격: 데미지 2 → 즉시 처치
+        const directEnemy =
+          enemies.find(
+            (enemy) =>
+              !enemy.dead &&
+              hit(nextBody, enemy),
+          );
+
+        if (directEnemy) {
+          directEnemy.dead = true;
+          dropNormalMonsterCoin(
+            directEnemy,
+          );
+          directNormalId =
+            directEnemy.id;
+          directHitX =
+            directEnemy.x +
+            directEnemy.w / 2;
+          directHitY =
+            directEnemy.y +
+            directEnemy.h / 2;
+          score +=
+            100 +
+            stage * 10;
+          directHit = true;
+        }
+
+        // 중급보스 직격: 정확히 2 데미지
+        if (!directHit) {
+          const directMid =
+            midBosses.find(
+              (boss) =>
+                hit(nextBody, boss),
+            );
+
+          if (directMid) {
+            directMid.hp -= 2;
+            directMidBossId =
+              directMid.id;
+            directHitX =
+              directMid.x +
+              directMid.w / 2;
+            directHitY =
+              directMid.y +
+              directMid.h / 2;
+            score += 80;
+            directHit = true;
+          }
+        }
+
+        // 상급보스 직격: 정확히 2 데미지
+        if (!directHit) {
+          const directHigh =
+            highBosses.find(
+              (boss) =>
+                hit(nextBody, boss),
+            );
+
+          if (directHigh) {
+            directHigh.hp -= 2;
+            directHighBossId =
+              directHigh.id;
+            directHitX =
+              directHigh.x +
+              directHigh.w / 2;
+            directHitY =
+              directHigh.y +
+              directHigh.h / 2;
+            score += 120;
+            directHit = true;
+          }
+        }
+
+        if (directHit) {
+          const explosionRadius = 38;
+
+          waterBursts.push({
+            x: directHitX,
+            y: directHitY,
+            life: 17,
+            maxLife: 17,
+            radius: 7,
+          });
+
+          // 직격 대상은 2 데미지만 받고,
+          // 주변 대상만 폭발 데미지 1을 받는다.
+          applyWaterBombExplosionDamage(
+            directHitX,
+            directHitY,
+            explosionRadius,
+            directNormalId,
+            directMidBossId,
+            directHighBossId,
+          );
+
+          playBubblePopSound();
+          bomb.life = 0;
+          continue;
+        }
+
+        const nextBottom =
+          nextY + bomb.h;
+
+        let hitPlatform = false;
+        let hitY = nextBottom;
+
+        for (const platform of platforms) {
+          if (
+            nextX + bomb.w <
+              platform.x ||
+            nextX >
+              platform.x +
+                platform.w
+          ) {
+            continue;
+          }
+
+          const centerX = clamp(
+            nextX + bomb.w / 2,
+            platform.x,
+            platform.x + platform.w,
+          );
+
+          const progress =
+            platform.w <= 0
+              ? 0
+              : (centerX - platform.x) /
+                platform.w;
+
+          const surfaceY =
+            platform.kind === "slide" &&
+            typeof platform.endY ===
+              "number"
+              ? platform.y +
+                (platform.endY -
+                  platform.y) *
+                  progress
+              : platform.y;
+
+          if (
+            oldBottom <=
+              surfaceY + 12 &&
+            nextBottom >=
+              surfaceY - 8
+          ) {
+            hitPlatform = true;
+            hitY = surfaceY;
+            break;
+          }
+        }
+
+        if (hitPlatform) {
+          const explosionX =
+            nextX + bomb.w / 2;
+          const explosionRadius = 38;
+
+          waterBursts.push({
+            x: explosionX,
+            y: hitY,
+            life: 17,
+            maxLife: 17,
+            radius: 7,
+          });
+
+          // 지형에 맞아 터졌을 때는 범위 내 대상에게 데미지 1.
+          applyWaterBombExplosionDamage(
+            explosionX,
+            hitY,
+            explosionRadius,
+          );
+
+          playBubblePopSound();
+          bomb.life = 0;
+          continue;
+        }
+
+        bomb.x = nextX;
+        bomb.y = nextY;
+
+        if (
+          bomb.x <
+            -bomb.w * 2 ||
+          bomb.x >
+            WORLD_W +
+              bomb.w * 2 ||
+          bomb.y > H + 220
+        ) {
+          bomb.life = 0;
+        }
+      }
+
+      // 물줄기 이동:
+      // 1) 떨어질 때는 세로로 좁은 1자 물기둥
+      // 2) 발판/경사면과 실제로 교차하는 순간 표면에 정확히 붙음
+      // 3) 붙은 뒤 진행 방향으로 흐르면서 길이가 점점 늘어남
+      // 4) 발판 끝에서는 벽을 타고 내려간 뒤 아래층에서 반대 방향으로 흐름
+      for (const stream of waterStreams) {
+        stream.life -= dt;
+
+        const getPlatformSurfaceY = (
+          platform: Platform,
+          x: number,
+        ): number => {
+          const clampedX = clamp(
+            x,
+            platform.x,
+            platform.x + platform.w,
+          );
+
+          if (
+            platform.kind === "slide" &&
+            typeof platform.endY === "number"
+          ) {
+            const progress =
+              platform.w <= 0
+                ? 0
+                : (clampedX - platform.x) /
+                  platform.w;
+
+            return (
+              platform.y +
+              (platform.endY - platform.y) *
+                progress
+            );
+          }
+
+          return platform.y;
+        };
+
+        const findLandingPlatform = (
+          previousBottom: number,
+          nextBottom: number,
+          left: number,
+          right: number,
+        ) => {
+          let bestIndex = -1;
+          let bestSurfaceY = Infinity;
+          let bestProbeX = (left + right) / 2;
+
+          const probeCount = 11;
+
+          for (
+            let platformIndex = 0;
+            platformIndex < platforms.length;
+            platformIndex += 1
+          ) {
+            const platform = platforms[platformIndex];
+
+            if (
+              right < platform.x - 14 ||
+              left > platform.x + platform.w + 14
+            ) {
+              continue;
+            }
+
+            for (
+              let probeIndex = 0;
+              probeIndex < probeCount;
+              probeIndex += 1
+            ) {
+              const ratio =
+                probeIndex / (probeCount - 1);
+
+              const probeX =
+                left +
+                (right - left) * ratio;
+
+              if (
+                probeX < platform.x - 10 ||
+                probeX > platform.x + platform.w + 10
+              ) {
+                continue;
+              }
+
+              const surfaceX = clamp(
+                probeX,
+                platform.x,
+                platform.x + platform.w,
+              );
+
+              const surfaceY =
+                getPlatformSurfaceY(
+                  platform,
+                  surfaceX,
+                );
+
+              const crossedSurface =
+                previousBottom <= surfaceY + 16 &&
+                nextBottom >= surfaceY - 12;
+
+              if (
+                crossedSurface &&
+                surfaceY < bestSurfaceY
+              ) {
+                bestIndex = platformIndex;
+                bestSurfaceY = surfaceY;
+                bestProbeX = surfaceX;
+              }
+            }
+          }
+
+          return {
+            index: bestIndex,
+            surfaceY: bestSurfaceY,
+            probeX: bestProbeX,
+          };
+        };
+
+        const currentTargetWidth =
+          stream.targetWidth ??
+          (stream.source === "player" ? 280 : 260);
+
+        if (
+          stream.flowMode === undefined ||
+          stream.flowMode === "falling"
+        ) {
+          stream.flowMode = "falling";
+
+          const previousBottom =
+            stream.y + stream.h;
+
+          // 하늘/플레이어 물줄기 모두 같은 설정으로 수직 낙하.
+          stream.vx = 0;
+          stream.vy = Math.min(
+            6.8,
+            stream.vy + .36 * dt,
+          );
+
+          const nextX = stream.x;
+          const nextY =
+            stream.y + stream.vy * dt;
+          const nextBottom =
+            nextY + stream.h;
+
+          const landing =
+            findLandingPlatform(
+              previousBottom,
+              nextBottom,
+              nextX,
+              nextX + stream.w,
+            );
+
+          // 지형 충돌을 먼저 검사하고, 없을 때만 실제로 아래로 이동한다.
+          // 이 순서로 처리해 발판 관통을 막는다.
+          if (landing.index < 0) {
+            stream.x = nextX;
+            stream.y = nextY;
+          }
+
+          if (landing.index >= 0) {
+            const platform =
+              platforms[landing.index];
+
+            stream.attachedPlatformIndex =
+              landing.index;
+            stream.flowMode = "surface";
+
+            // 지형에 닿는 순간부터 완성된 긴 물줄기로 전환한다.
+            const oldCenterX =
+              stream.x + stream.w / 2;
+
+            stream.h = 38;
+            stream.flowWidth =
+              stream.targetWidth ?? 520;
+            stream.w =
+              stream.flowWidth;
+
+            if (stream.dir > 0) {
+              stream.x =
+                oldCenterX - 24;
+            } else {
+              stream.x =
+                oldCenterX -
+                stream.w +
+                24;
+            }
+
+            const attachX = clamp(
+              landing.probeX,
+              platform.x,
+              platform.x + platform.w,
+            );
+
+            const surfaceY =
+              getPlatformSurfaceY(
+                platform,
+                attachX,
+              );
+
+            stream.y =
+              surfaceY -
+              stream.h +
+              5;
+
+            const targetSpeed = 3.28;
+
+            stream.vx =
+              stream.dir * targetSpeed;
+            stream.vy = 0;
+          }
+        } else if (
+          stream.flowMode === "surface"
+        ) {
+          const platformIndex =
+            stream.attachedPlatformIndex;
+
+          const platform =
+            typeof platformIndex === "number"
+              ? platforms[platformIndex]
+              : undefined;
+
+          if (!platform) {
+            stream.flowMode = "falling";
+            stream.attachedPlatformIndex =
+              undefined;
+            stream.vy = 3;
+          } else {
+            // 지형을 타는 동안에도 처음부터 최종 길이를 유지한다.
+            stream.flowWidth =
+              currentTargetWidth;
+            stream.w =
+              currentTargetWidth;
+
+            const targetSpeed = 3.28;
+
+            const nextX =
+              stream.x +
+              stream.dir *
+                targetSpeed *
+                dt;
+
+            const nextFrontX =
+              stream.dir > 0
+                ? nextX + stream.w
+                : nextX;
+
+            const platformLeft =
+              platform.x;
+            const platformRight =
+              platform.x +
+              platform.w;
+
+            const frontReachedEdge =
+              stream.dir > 0
+                ? nextFrontX >=
+                  platformRight
+                : nextFrontX <=
+                  platformLeft;
+
+            if (!frontReachedEdge) {
+              stream.x = nextX;
+
+              // 진행 방향 앞쪽을 기준으로 지형 표면에 붙인다.
+              // 곡선 보간 없이 발판/사선의 실제 직선 형태를 따라간다.
+              const surfaceProbeX = clamp(
+                stream.dir > 0
+                  ? stream.x + stream.w - 8
+                  : stream.x + 8,
+                platform.x,
+                platform.x + platform.w,
+              );
+
+              const surfaceY =
+                getPlatformSurfaceY(
+                  platform,
+                  surfaceProbeX,
+                );
+
+              stream.y =
+                surfaceY -
+                stream.h +
+                4;
+
+              stream.vx =
+                stream.dir *
+                targetSpeed;
+              stream.vy = 0;
+            } else {
+              const edgeX =
+                stream.dir > 0
+                  ? platformRight
+                  : platformLeft;
+
+              stream.flowMode = "wall";
+              stream.wallX = edgeX;
+              stream.wallDir = stream.dir;
+              stream.attachedPlatformIndex =
+                undefined;
+
+              // 벽을 탈 때 다시 좁아지며 세로 물기둥으로 변한다.
+              stream.w = 48;
+              stream.flowWidth = 48;
+              stream.h = 120;
+
+              stream.x =
+                edgeX - stream.w / 2;
+
+              stream.vx = 0;
+              stream.vy = 2.72;
+            }
+          }
+        } else {
+          // 벽을 타고 아래로 내려가는 세로 물기둥
+          const wallX =
+            stream.wallX ??
+            stream.x + stream.w / 2;
+
+          const previousBottom =
+            stream.y + stream.h;
+
+          stream.vx = 0;
+          stream.vy = Math.min(
+            5.2,
+            stream.vy +
+              .232 * dt,
+          );
+
+          stream.x =
+            wallX -
+            stream.w / 2;
+          stream.y +=
+            stream.vy * dt;
+
+          const nextBottom =
+            stream.y + stream.h;
+
+          const landing =
+            findLandingPlatform(
+              previousBottom,
+              nextBottom,
+              stream.x - 24,
+              stream.x + stream.w + 24,
+            );
+
+          if (landing.index >= 0) {
+            const platform =
+              platforms[landing.index];
+
+            stream.attachedPlatformIndex =
+              landing.index;
+            stream.flowMode = "surface";
+
+            // 아래층에서는 반대 방향으로 꺾여 흐른다.
+            stream.dir =
+              -(
+                stream.wallDir ??
+                stream.dir
+              );
+
+            stream.wallX = undefined;
+            stream.wallDir = undefined;
+
+            stream.h = 38;
+            stream.flowWidth =
+              stream.targetWidth ?? 520;
+            stream.w =
+              stream.flowWidth;
+
+            const targetSpeed = 3.28;
+
+            stream.vx =
+              stream.dir * targetSpeed;
+            stream.vy = 0;
+
+            const centerX = clamp(
+              wallX,
+              platform.x + stream.w / 2,
+              platform.x +
+                platform.w -
+                stream.w / 2,
+            );
+
+            stream.x =
+              centerX -
+              stream.w / 2;
+
+            const surfaceY =
+              getPlatformSurfaceY(
+                platform,
+                centerX,
+              );
+
+            stream.y =
+              surfaceY -
+              stream.h +
+              5;
+          }
+        }
+
+        // 아직 태운 적이 없을 때 첫 번째 적만 포획한다.
+        if (
+          stream.pushedEnemyId ===
+            undefined &&
+          stream.life > 0
+        ) {
+          const target =
+            enemies.find(
+              (enemy) =>
+                !enemy.dead &&
+                enemy.trapped <= 0 &&
+                hit(stream, enemy),
+            );
+
+          if (target) {
+            stream.pushedEnemyId =
+              target.id;
+            target.trapped = 0;
+            target.trapImmunity =
+              Math.max(
+                target.trapImmunity,
+                140,
+              );
+            target.dir =
+              stream.dir;
+          }
+        }
+
+        // 첫 번째 적은 물줄기의 선두에 계속 실려간다.
+        if (
+          stream.pushedEnemyId !==
+          undefined
+        ) {
+          const carriedEnemy =
+            enemies.find(
+              (enemy) =>
+                enemy.id ===
+                  stream.pushedEnemyId &&
+                !enemy.dead,
+            );
+
+          if (carriedEnemy) {
+            if (
+              stream.flowMode ===
+              "wall"
+            ) {
+              carriedEnemy.x =
+                stream.x +
+                (stream.w -
+                  carriedEnemy.w) /
+                  2;
+              carriedEnemy.y =
+                stream.y +
+                stream.h -
+                16;
+              carriedEnemy.vx = 0;
+              carriedEnemy.vy =
+                stream.vy;
+            } else {
+              const frontOverlap =
+                18;
+
+              carriedEnemy.x =
+                stream.dir > 0
+                  ? stream.x +
+                    stream.w -
+                    frontOverlap
+                  : stream.x -
+                    carriedEnemy.w +
+                    frontOverlap;
+
+              carriedEnemy.y =
+                stream.y -
+                carriedEnemy.h +
+                14;
+
+              carriedEnemy.vx =
+                stream.vx;
+              carriedEnemy.vy =
+                stream.vy;
+            }
+
+            carriedEnemy.dir =
+              stream.dir;
+            carriedEnemy.trapped = 0;
+            carriedEnemy.trapImmunity =
+              Math.max(
+                carriedEnemy.trapImmunity,
+                140,
+              );
+          }
+        }
+
+        if (
+          stream.x <
+            -stream.w * 1.5 ||
+          stream.x >
+            WORLD_W +
+              stream.w * 1.5 ||
+          stream.y >
+            H + 220
+        ) {
+          stream.life = 0;
+        }
+      }
+
+      // 플레이어도 흐르는 물줄기 위에 올라탈 수 있다.
+      // 쿨타임 없이 자유롭게 이용하며 물줄기와 함께 이동한다.
+      if (
+        !playerCaptured &&
+        ridingBubbleId === null
+      ) {
+        let ridingWaterStream =
+          ridingWaterStreamId !== null
+            ? waterStreams.find(
+                (stream) =>
+                  stream.id ===
+                    ridingWaterStreamId &&
+                  stream.life > 0 &&
+                  stream.flowMode ===
+                    "surface",
+              )
+            : undefined;
+
+        if (
+          !ridingWaterStream &&
+          player.vy >= 0
+        ) {
+          ridingWaterStream =
+            waterStreams.find(
+              (stream) => {
+                if (
+                  stream.life <= 0 ||
+                  stream.flowMode !==
+                    "surface"
+                ) {
+                  return false;
+                }
+
+                const streamTop =
+                  stream.y + 3;
+                const playerBottom =
+                  player.y +
+                  player.h;
+
+                const horizontalOverlap =
+                  player.x +
+                    player.w * .72 >
+                    stream.x + 5 &&
+                  player.x +
+                    player.w * .28 <
+                    stream.x +
+                      stream.w -
+                      5;
+
+                return (
+                  horizontalOverlap &&
+                  playerBottom >=
+                    streamTop - 12 &&
+                  playerBottom <=
+                    streamTop + 22
+                );
+              },
+            );
+
+          if (ridingWaterStream) {
+            ridingWaterStreamId =
+              ridingWaterStream.id;
+          }
+        }
+
+        if (ridingWaterStream) {
+          const rideDirection =
+            (keys.right ? 1 : 0) -
+            (keys.left ? 1 : 0);
+
+          // 물줄기 자체의 이동량을 그대로 플레이어에게 전달한다.
+          player.x +=
+            ridingWaterStream.vx *
+            dt;
+
+          // 물줄기 위에서 좌우로 걸을 수도 있다.
+          player.x +=
+            rideDirection *
+            1.8 *
+            dt;
+
+          player.x = clamp(
+            player.x,
+            ridingWaterStream.x -
+              player.w * .5,
+            ridingWaterStream.x +
+              ridingWaterStream.w -
+              player.w * .5,
+          );
+
+          player.y =
+            ridingWaterStream.y -
+            player.h +
+            10;
+
+          player.vx =
+            ridingWaterStream.vx;
+          player.vy = 0;
+          player.grounded = true;
+
+          if (
+            rideDirection !== 0
+          ) {
+            player.face =
+              rideDirection;
+          }
+
+          // 위키로 점프해서 내린다.
+          if (keys.up) {
+            ridingWaterStreamId =
+              null;
+            player.grounded = false;
+            player.vy = -11.5;
+            keys.up = false;
+          } else if (keys.down) {
+            // 아래키로 물줄기 아래로 빠져나온다.
+            ridingWaterStreamId =
+              null;
+            player.grounded = false;
+            player.vy = 5.5;
+            player.y =
+              ridingWaterStream.y +
+              ridingWaterStream.h +
+              5;
+            keys.down = false;
+          }
+        } else {
+          ridingWaterStreamId =
+            null;
+        }
+      } else if (
+        ridingBubbleId !== null
+      ) {
+        ridingWaterStreamId =
+          null;
+      }
+
+      // 일반 몬스터는 총 등장 수를 넘지 않으며,
+      // 현재 살아있는 수는 스테이지별 동시출몰 상한을 넘지 않는다.
+      const normalSpawnInterval = Math.max(
+        180,
+        520 - stage * 24,
+      );
+
       while (
-        waveActive && midSpawned < stageConfig.midTotal &&
+        normalSpawned < stageConfig.normalTotal &&
+        enemies.length < stageConfig.normalSimultaneous &&
+        normalSpawnAccumulator >= normalSpawnInterval
+      ) {
+        normalSpawnAccumulator -= normalSpawnInterval;
+        enemies.push(makeEnemy());
+        normalSpawned += 1;
+      }
+
+      // 제한시간이 사라졌으므로 보스 출몰도 스테이지 경과시간을 기준으로
+      // 일정한 템포로 진행한다. 총 수와 최대 동시출몰 수는 기존 설정을 유지한다.
+      const midInterval = Math.max(
+        3600,
+        9000 - stage * 350,
+      );
+
+      while (
+        midSpawned < stageConfig.midTotal &&
         midBosses.length < stageConfig.midSimultaneous &&
         midSpawnAccumulator >= midInterval
       ) {
@@ -1430,11 +3506,18 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       }
 
       const simultaneousBossWave = stage >= 8;
-      const highPhaseReady = simultaneousBossWave ||
+      const highPhaseReady =
+        simultaneousBossWave ||
         (midSpawned >= stageConfig.midTotal && midBosses.length === 0);
-      const highInterval = Math.max(1200, waveDurationMs * .46 / Math.max(1, stageConfig.highTotal));
+
+      const highInterval = Math.max(
+        5200,
+        12000 - stage * 400,
+      );
+
       while (
-        waveActive && highPhaseReady && highSpawned < stageConfig.highTotal &&
+        highPhaseReady &&
+        highSpawned < stageConfig.highTotal &&
         highBosses.length < stageConfig.highSimultaneous &&
         highSpawnAccumulator >= highInterval
       ) {
@@ -1454,24 +3537,26 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       const getMidSpawnStatus = () => {
         if (stageConfig.midTotal === 0) return "없음";
         if (midSpawned >= stageConfig.midTotal) return "출몰 완료";
-        if (!waveActive) return "웨이브 종료";
         if (
           midBosses.length >= stageConfig.midSimultaneous &&
           midSpawnAccumulator >= midInterval
         ) return "전투 중";
-        return formatCountdown(Math.max(0, midInterval - midSpawnAccumulator));
+        return formatSpawnCountdown(
+          Math.max(0, midInterval - midSpawnAccumulator),
+        );
       };
 
       const getHighSpawnStatus = () => {
         if (stageConfig.highTotal === 0) return "없음";
         if (highSpawned >= stageConfig.highTotal) return "출몰 완료";
-        if (!waveActive) return "웨이브 종료";
         if (!highPhaseReady) return "중급 처치 후";
         if (
           highBosses.length >= stageConfig.highSimultaneous &&
           highSpawnAccumulator >= highInterval
         ) return "전투 중";
-        return formatCountdown(Math.max(0, highInterval - highSpawnAccumulator));
+        return formatSpawnCountdown(
+          Math.max(0, highInterval - highSpawnAccumulator),
+        );
       };
 
       const midSpawnStatus = getMidSpawnStatus();
@@ -1571,6 +3656,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         });
         life = 5;
         healingEffect = 96;
+        ctx.restore();
       }
 
       if (deadMidIds.size) score += deadMidIds.size * 3000;
@@ -1595,7 +3681,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
             player.vx = 0;
             player.vy = 0;
             capturePressStart = firePressRef.current;
-            capturePressTarget = 10 + Math.floor(Math.random() * 11);
+            capturePressTarget = 5;
             firingBoss.mouthOpen = true;
           } else if (b.kind === "damage") {
             playPlayerHurtSound();
@@ -1627,6 +3713,27 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
 
       for (const e of enemies) {
         if (e.dead) continue;
+
+        // 물줄기 앞에 실려가는 적은 일반 이동 AI를 잠시 중지한다.
+        // 위치는 위의 물줄기 로직이 매 프레임 직접 갱신한다.
+        const carryingStream = waterStreams.find(
+          (stream) =>
+            stream.life > 0 &&
+            stream.pushedEnemyId === e.id,
+        );
+
+        if (carryingStream) {
+          e.trapped = 0;
+          e.trapImmunity = Math.max(
+            e.trapImmunity,
+            140,
+          );
+          e.dir = carryingStream.dir;
+          e.vx = carryingStream.vx;
+          e.vy = carryingStream.vy;
+          continue;
+        }
+
         e.trapImmunity = Math.max(0, e.trapImmunity - dt);
         if (e.trapped > 0) { e.trapped -= dt; e.vx = 0; e.vy = -1.2; }
         else {
@@ -1693,15 +3800,70 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         if (land(coin, oldY)) coin.vx *= .85;
         if (hit(player, coin)) {
           coin.life = 0;
+
+          // 코인을 실제로 획득한 순간 "띠링!" 효과음.
+          playCoinPickupSound();
+
           coinProgress += 1;
           score += 50;
+
           if (coinProgress >= 3) {
             coinProgress -= 3;
-            life = Math.min(5, life + 1);
+            life = Math.min(
+              5,
+              life + 1,
+            );
           }
         }
       }
       bubbles = bubbles.filter((b) => b.life > 0 && b.y > -70);
+      if (
+        ridingBubbleId !== null &&
+        !bubbles.some((bubble) => bubble.id === ridingBubbleId)
+      ) {
+        ridingBubbleId = null;
+      }
+      waterBombs = waterBombs.filter(
+        (bomb) => bomb.life > 0,
+      );
+
+      for (const burst of waterBursts) {
+        burst.life -= dt;
+
+        // 약 0.28초 동안만 보이는 작은 "물방울 톡!" 이펙트.
+        // 최대 시각 지름은 약 38px.
+        burst.radius = Math.min(
+          19,
+          burst.radius + 1.15 * dt,
+        );
+      }
+
+      waterBursts = waterBursts.filter(
+        (burst) => burst.life > 0,
+      );
+
+      waterStreams = waterStreams.filter(
+        (stream) =>
+          stream.life > 0 &&
+          stream.y < H + 220 &&
+          stream.x > -320 &&
+          stream.x <
+            WORLD_W + 320,
+      );
+
+      if (
+        ridingWaterStreamId !== null &&
+        !waterStreams.some(
+          (stream) =>
+            stream.id ===
+              ridingWaterStreamId &&
+            stream.flowMode ===
+              "surface",
+        )
+      ) {
+        ridingWaterStreamId = null;
+      }
+
       coins = coins.filter((coin) => coin.life > 0 && coin.y < H + 70);
       bossExplosions = bossExplosions
         .map((explosion) => ({ ...explosion, life: explosion.life - dt }))
@@ -1710,10 +3872,39 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       bossBubbles = bossBubbles.filter((b) =>
         b.life > 0 && b.x > -100 && b.x < WORLD_W + 100 && b.y > -100 && b.y < H + 100
       );
-      enemies = enemies.filter((e) => !e.dead);
+      // 일반 몬스터가 어떤 방식으로 처치됐든,
+      // dead 상태로 배열에서 제거되기 직전에 코인을 반드시 1개 드랍한다.
+      // 기존 물풍선/물폭탄 처치 경로에서 이미 드랍했다면
+      // coinDropped 플래그 때문에 중복 드랍되지 않는다.
+      for (const enemy of enemies) {
+        if (
+          enemy.dead &&
+          !enemy.coinDropped
+        ) {
+          dropNormalMonsterCoin(
+            enemy,
+          );
+        }
+      }
+
+      enemies = enemies.filter(
+        (enemy) => !enemy.dead,
+      );
+
+      const allNormalMonstersCleared =
+        normalSpawned >= stageConfig.normalTotal &&
+        enemies.length === 0;
+      const allMidBossesCleared =
+        midSpawned >= stageConfig.midTotal &&
+        midBosses.length === 0;
+      const allHighBossesCleared =
+        highSpawned >= stageConfig.highTotal &&
+        highBosses.length === 0;
+
       if (
-        waveRemainingMs <= 0 && enemies.length === 0 &&
-        midBosses.length === 0 && highBosses.length === 0
+        allNormalMonstersCleared &&
+        allMidBossesCleared &&
+        allHighBossesCleared
       ) {
         const clearedStage = stage;
         const rankingPoints = getBubbleStageRankingPoints(clearedStage);
@@ -1781,52 +3972,41 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         0,
         WORLD_W - W,
       );
-      const theme = MAP_THEMES[(stage - 1) % MAP_THEMES.length];
-      const sky = ctx.createLinearGradient(0, 0, 0, H);
-      sky.addColorStop(0, theme.sky);
-      sky.addColorStop(1, theme.horizon);
-      ctx.fillStyle = sky;
-      ctx.fillRect(0, 0, W, H);
+      const theme = MAP_THEMES[
+        Math.min(MAP_THEMES.length - 1, Math.max(0, stage - 1))
+      ];
 
-      // 세로형 모바일에서는 전체 장면을 살짝 축소해 캐릭터 주변 지형과
-      // 상단 정보를 더 넓게 보여준다. 배경은 먼저 채워 검은 여백을 막는다.
+      // 이전 프레임의 save/scale/translate 상태가 어떤 이유로든 남더라도
+      // 새 프레임은 항상 정상 좌표계에서 시작하도록 강제 초기화한다.
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
+
+      drawStageBackground(ctx, stage, theme);
+
+      // 세로형 모바일에서는 게임 오브젝트와 HUD를 살짝 축소해
+      // 캐릭터 주변 지형과 상단 정보를 더 넓게 보여준다.
       ctx.save();
       ctx.translate(W / 2, H / 2);
       ctx.scale(mobileRenderScale, mobileRenderScale);
       ctx.translate(-W / 2, -H / 2);
 
-      // 멀리 보이는 달과 고정된 별빛
-      ctx.beginPath();
-      ctx.arc(W - 135, 120, 53, 0, Math.PI * 2);
-      ctx.fillStyle = theme.accent;
-      ctx.globalAlpha = 0.72;
-      ctx.fill();
-      ctx.globalAlpha = 1;
-      for (let i = 0; i < 42; i += 1) {
-        const starX = (i * 193 + 71) % W;
-        const starY = 70 + ((i * 97 + 31) % 520);
-        const size = i % 7 === 0 ? 4 : 2;
-        ctx.fillStyle = i % 5 === 0 ? theme.accent : "rgba(255,255,240,.55)";
-        ctx.fillRect(starX, starY, size, size);
-      }
-
-      // 원경 도시와 창문: 플레이 영역보다 뒤에만 표시
-      ctx.fillStyle = "rgba(4,8,12,.24)";
-      for (let i = 0; i < 14; i += 1) {
-        const buildingX = i * 126 - 25;
-        const buildingH = 75 + ((i * 47) % 145);
-        ctx.fillRect(buildingX, H - 42 - buildingH, 92, buildingH);
-        ctx.fillStyle = "rgba(255,224,143,.24)";
-        for (let wy = H - 62 - buildingH; wy < H - 75; wy += 28) {
-          ctx.fillRect(buildingX + 17, wy + 20, 8, 8);
-          ctx.fillRect(buildingX + 51, wy + 20, 8, 8);
-        }
-        ctx.fillStyle = "rgba(4,8,12,.24)";
-      }
-
       ctx.strokeStyle = "rgba(220,230,196,.06)"; ctx.lineWidth = 1;
       for (let y = 0; y < H; y += 6) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
-      const currentMonsterCount = enemies.length + midBosses.length + highBosses.length;
+      const currentMonsterCount =
+        enemies.length +
+        midBosses.length +
+        highBosses.length;
+
+      // HUD에 표시할 해당 스테이지 전체 적 수.
+      // 현재 stageConfig을 직접 사용해 미정의 변수 참조를 방지한다.
+      const stageMonsterTotal =
+        stageConfig.normalTotal +
+        stageConfig.midTotal +
+        stageConfig.highTotal;
+
       ctx.fillStyle = "#d8ddc5"; ctx.font = "700 23px monospace";
       ctx.fillText(`SCORE ${String(score).padStart(6, "0")}`, 24, 38);
       ctx.fillText(
@@ -1837,14 +4017,72 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
       ctx.fillText(`LIFE ${"●".repeat(Math.max(0, life))}`, 1500, 38);
       ctx.fillText(`COIN ${coinProgress}/3`, 1740, 38);
 
+      // 왼쪽 하단 물줄기 스킬 HUD
+      const waterCooldownMs = Math.max(0, waterShotReadyAt - now);
+      const waterSkillReady = waterCooldownMs <= 0;
+      const skillX = 26;
+      const skillY = H - 86;
+      ctx.save();
+      ctx.globalAlpha = waterSkillReady ? 1 : .82;
+      ctx.fillStyle = waterSkillReady
+        ? "rgba(31,132,177,.84)"
+        : "rgba(70,74,78,.82)";
+      roundedRectPath(ctx, skillX, skillY, 58, 58, 14);
+      ctx.fill();
+      ctx.strokeStyle = waterSkillReady
+        ? "rgba(176,241,255,.95)"
+        : "rgba(165,168,170,.7)";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // 물방울 아이콘
+      ctx.beginPath();
+      ctx.moveTo(skillX + 29, skillY + 11);
+      ctx.bezierCurveTo(
+        skillX + 17,
+        skillY + 27,
+        skillX + 15,
+        skillY + 34,
+        skillX + 29,
+        skillY + 45,
+      );
+      ctx.bezierCurveTo(
+        skillX + 43,
+        skillY + 34,
+        skillX + 41,
+        skillY + 27,
+        skillX + 29,
+        skillY + 11,
+      );
+      ctx.closePath();
+      ctx.fillStyle = waterSkillReady ? "#b9f2ff" : "#9a9da0";
+      ctx.fill();
+
+      if (!waterSkillReady) {
+        ctx.fillStyle = "#f2f2f2";
+        ctx.font = "900 17px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(
+          `${Math.ceil(waterCooldownMs / 1000)}`,
+          skillX + 29,
+          skillY + 37,
+        );
+      }
+      ctx.fillStyle = waterSkillReady ? "#dff9ff" : "#b8b8b8";
+      ctx.font = "900 12px monospace";
+      ctx.textAlign = "left";
+      ctx.fillText("SPACE×2", skillX + 68, skillY + 25);
+      ctx.fillText(waterSkillReady ? "READY" : "BOMB", skillX + 68, skillY + 45);
+      ctx.restore();
+
       ctx.textAlign = "center";
       ctx.fillStyle = "#f4f0dc";
       ctx.font = "900 25px monospace";
       ctx.fillText(`STAGE ${String(stage).padStart(2, "0")}`, W / 2, 31);
-      ctx.fillStyle = waveRemainingMs > 0 ? "#d9c6ff" : "#ffcf8b";
+      ctx.fillStyle = "#d9c6ff";
       ctx.font = "900 31px monospace";
       ctx.fillText(
-        waveRemainingMs > 0 ? formatCountdown(waveRemainingMs) : "FINAL CLEANUP",
+        formatStageTime(stageElapsedMs),
         W / 2,
         66,
       );
@@ -1868,83 +4106,13 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
 
       for (const p of platforms) {
         if (!isVisibleOnCamera(p)) continue;
+
         if (p.kind === "slide" && typeof p.endY === "number") {
-          const startCenterY = p.y + p.h / 2;
-          const endCenterY = p.endY + p.h / 2;
-
-          // 그림자부터 본체까지 동일한 중심선을 사용해 절단면 없이 연결한다.
-          ctx.save();
-          ctx.lineCap = "round";
-          ctx.lineJoin = "round";
-
-          ctx.beginPath();
-          ctx.moveTo(p.x + 7, startCenterY + 9);
-          ctx.lineTo(p.x + p.w + 7, endCenterY + 9);
-          ctx.strokeStyle = "rgba(0,0,0,.3)";
-          ctx.lineWidth = p.h + 9;
-          ctx.stroke();
-
-          ctx.beginPath();
-          ctx.moveTo(p.x, startCenterY);
-          ctx.lineTo(p.x + p.w, endCenterY);
-          ctx.strokeStyle = theme.platform;
-          ctx.lineWidth = p.h;
-          ctx.stroke();
-
-          // 미끄럼틀의 밝은 상단 레일과 어두운 하단 레일
-          ctx.beginPath();
-          ctx.moveTo(p.x, p.y);
-          ctx.lineTo(p.x + p.w, p.endY);
-          ctx.strokeStyle = theme.edge;
-          ctx.lineWidth = 7;
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(p.x, p.y + p.h);
-          ctx.lineTo(p.x + p.w, p.endY + p.h);
-          ctx.strokeStyle = "rgba(5,9,10,.45)";
-          ctx.lineWidth = 5;
-          ctx.stroke();
-
-          // 양쪽 플랫폼과 맞닿는 부분을 둥근 연결 패드로 덮는다.
-          ctx.fillStyle = theme.edge;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y + 2, 6, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.beginPath();
-          ctx.arc(p.x + p.w, p.endY + 2, 6, 0, Math.PI * 2);
-          ctx.fill();
-
-          // 경사면을 따라 배치된 작은 연결 볼트
-          ctx.fillStyle = theme.accent;
-          for (const progress of [.25, .5, .75]) {
-            const boltX = p.x + p.w * progress;
-            const boltY = p.y + (p.endY - p.y) * progress + 8;
-            ctx.fillRect(boltX - 2, boltY - 2, 4, 4);
-          }
-          ctx.restore();
-        } else {
-          // 발판 그림자와 두꺼운 본체
-          ctx.fillStyle = "rgba(0,0,0,.28)";
-          ctx.fillRect(p.x + 7, p.y + 9, p.w, p.h + 7);
-          ctx.fillStyle = theme.platform;
-          ctx.fillRect(p.x, p.y, p.w, p.h);
-          ctx.fillStyle = theme.edge;
-          ctx.fillRect(p.x, p.y, p.w, 6);
-          ctx.fillStyle = "rgba(255,255,255,.22)";
-          ctx.fillRect(p.x + 5, p.y + 7, 5, p.h - 10);
-          ctx.fillRect(p.x + p.w - 10, p.y + 7, 5, p.h - 10);
-
-          // 긴 발판에는 볼트와 짧은 지지대를 추가
-          if (p.y < H - 50) {
-            ctx.fillStyle = theme.accent;
-            for (let boltX = p.x + 40; boltX < p.x + p.w - 20; boltX += 90) {
-              ctx.fillRect(boltX, p.y + 10, 4, 4);
-            }
-            ctx.fillStyle = "rgba(8,14,16,.38)";
-            ctx.fillRect(p.x + 30, p.y + p.h, 13, 24);
-            ctx.fillRect(p.x + p.w - 43, p.y + p.h, 13, 24);
-          }
+          drawStageSlide(ctx, p, theme);
+          continue;
         }
+
+        drawStagePlatform(ctx, p, theme);
       }
       for (const explosion of bossExplosions) {
         if (
@@ -1991,12 +4159,590 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         ctx.lineWidth = explosion.kind === "high" ? 18 : 12;
         ctx.stroke();
       }
+      for (const bomb of waterBombs) {
+        if (!isVisibleOnCamera(bomb)) continue;
+
+        ctx.save();
+
+        const radius =
+          bomb.w / 2;
+
+        const gradient =
+          ctx.createRadialGradient(
+            bomb.x + radius * .7,
+            bomb.y + radius * .6,
+            4,
+            bomb.x + radius,
+            bomb.y + radius,
+            radius,
+          );
+
+        gradient.addColorStop(
+          0,
+          "rgba(235,254,255,.98)",
+        );
+        gradient.addColorStop(
+          .38,
+          "rgba(95,211,245,.94)",
+        );
+        gradient.addColorStop(
+          1,
+          "rgba(18,105,185,.88)",
+        );
+
+        ctx.beginPath();
+        ctx.arc(
+          bomb.x + radius,
+          bomb.y + radius,
+          radius,
+          0,
+          Math.PI * 2,
+        );
+        ctx.fillStyle = gradient;
+        ctx.fill();
+
+        ctx.strokeStyle =
+          "rgba(220,251,255,.96)";
+        ctx.lineWidth = 4;
+        ctx.stroke();
+
+        // 물폭탄 표면의 반사광
+        ctx.beginPath();
+        ctx.arc(
+          bomb.x + radius * .75,
+          bomb.y + radius * .72,
+          radius * .26,
+          Math.PI,
+          Math.PI * 1.7,
+        );
+        ctx.strokeStyle =
+          "rgba(255,255,255,.86)";
+        ctx.lineWidth = 4;
+        ctx.stroke();
+
+        // 포물선 이동감을 주는 뒤쪽 작은 물방울
+        ctx.globalAlpha = .58;
+        for (let i = 0; i < 4; i += 1) {
+          ctx.beginPath();
+          ctx.arc(
+            bomb.x +
+              radius -
+              bomb.dir *
+                (radius + 10 + i * 10),
+            bomb.y +
+              radius +
+              Math.sin(now / 90 + i) * 7,
+            3 + i,
+            0,
+            Math.PI * 2,
+          );
+          ctx.fillStyle =
+            "#bcefff";
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      for (const stream of waterStreams) {
+        if (!isVisibleOnCamera(stream)) continue;
+
+        ctx.save();
+
+        if (
+          stream.flowMode === "falling" ||
+          stream.flowMode === "wall"
+        ) {
+          // 떨어질 때는 1자로 길쭉한 세로 물기둥.
+          const verticalGradient =
+            ctx.createLinearGradient(
+              stream.x,
+              stream.y,
+              stream.x,
+              stream.y + stream.h,
+            );
+
+          verticalGradient.addColorStop(
+            0,
+            "rgba(226,253,255,.96)",
+          );
+          verticalGradient.addColorStop(
+            .36,
+            "rgba(96,206,242,.9)",
+          );
+          verticalGradient.addColorStop(
+            1,
+            "rgba(18,112,188,.76)",
+          );
+
+          roundedRectPath(
+            ctx,
+            stream.x,
+            stream.y,
+            stream.w,
+            stream.h,
+            Math.min(20, stream.w / 2),
+          );
+
+          ctx.fillStyle =
+            verticalGradient;
+          ctx.fill();
+
+          ctx.strokeStyle =
+            "rgba(224,253,255,.94)";
+          ctx.lineWidth = 3;
+          ctx.stroke();
+
+          // 세로로 흐르는 흰 물결
+          ctx.globalAlpha = .74;
+          ctx.strokeStyle = "#eaffff";
+          ctx.lineWidth = 4;
+          ctx.lineCap = "round";
+
+          for (let i = 0; i < 3; i += 1) {
+            const lineX =
+              stream.x +
+              stream.w *
+                (.28 + i * .22);
+
+            ctx.beginPath();
+            ctx.moveTo(
+              lineX,
+              stream.y + 12,
+            );
+            ctx.bezierCurveTo(
+              lineX + Math.sin(now / 90 + i) * 4,
+              stream.y + stream.h * .35,
+              lineX - Math.sin(now / 100 + i) * 4,
+              stream.y + stream.h * .7,
+              lineX,
+              stream.y + stream.h - 12,
+            );
+            ctx.stroke();
+          }
+        } else {
+          // 땅을 만난 뒤에는 얇고 길게 펴지며 발판 표면을 흐른다.
+          const waterGradient =
+            ctx.createLinearGradient(
+              stream.x,
+              stream.y,
+              stream.x,
+              stream.y + stream.h,
+            );
+
+          waterGradient.addColorStop(
+            0,
+            "rgba(222,252,255,.96)",
+          );
+          waterGradient.addColorStop(
+            .38,
+            "rgba(83,198,239,.9)",
+          );
+          waterGradient.addColorStop(
+            1,
+            "rgba(19,118,189,.76)",
+          );
+
+          ctx.fillStyle =
+            waterGradient;
+          ctx.fillRect(
+            stream.x,
+            stream.y,
+            stream.w,
+            stream.h,
+          );
+
+          ctx.strokeStyle =
+            "rgba(219,251,255,.92)";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(
+            stream.x,
+            stream.y,
+            stream.w,
+            stream.h,
+          );
+
+          const centerY =
+            stream.y +
+            stream.h / 2;
+
+          ctx.globalAlpha = .8;
+          ctx.strokeStyle = "#e8fdff";
+          ctx.lineWidth = 4;
+          ctx.lineCap = "round";
+          ctx.beginPath();
+
+          const segmentCount =
+            Math.max(
+              5,
+              Math.floor(
+                stream.w / 34,
+              ),
+            );
+
+          for (
+            let i = 0;
+            i <= segmentCount;
+            i += 1
+          ) {
+            const px =
+              stream.x +
+              (stream.w * i) /
+                segmentCount;
+
+            const py =
+              centerY -
+              4 +
+              Math.sin(
+                now / 90 +
+                  i * .85,
+              ) *
+                4;
+
+            if (i === 0) {
+              ctx.moveTo(px, py);
+            } else {
+              ctx.lineTo(px, py);
+            }
+          }
+
+          ctx.stroke();
+
+          ctx.globalAlpha = .86;
+          ctx.fillStyle =
+            "rgba(181,239,255,.86)";
+
+          const crestWidth = 20;
+          const crestHeight = 14;
+
+          ctx.fillRect(
+            stream.dir > 0
+              ? stream.x +
+                stream.w -
+                crestWidth
+              : stream.x,
+            stream.y - 4,
+            crestWidth,
+            crestHeight,
+          );
+
+          // 뒤쪽 작은 물방울
+          ctx.globalAlpha = .52;
+          for (
+            let i = 0;
+            i < 5;
+            i += 1
+          ) {
+            ctx.beginPath();
+            ctx.arc(
+              stream.dir > 0
+                ? stream.x -
+                    7 -
+                    i * 10
+                : stream.x +
+                    stream.w +
+                    7 +
+                    i * 10,
+              centerY +
+                Math.sin(
+                  now / 110 + i,
+                ) *
+                  6,
+              2.5 + i * .55,
+              0,
+              Math.PI * 2,
+            );
+            ctx.fillStyle =
+              "#bcefff";
+            ctx.fill();
+          }
+        }
+
+        ctx.restore();
+      }
+
+      // 더블스페이스 물폭탄 전용 착지 이펙트.
+      // 물폭탄이 실제 착지/직격한 지점에서 작은 물방울이 "톡!" 터지듯 표현한다.
+      for (const burst of waterBursts) {
+        const progress =
+          1 - burst.life / burst.maxLife;
+
+        const alpha =
+          Math.max(0, 1 - progress);
+
+        const r =
+          Math.min(19, burst.radius);
+
+        ctx.save();
+
+        // 1) 착지 순간 작은 동그란 물방울 코어
+        if (progress < .42) {
+          const coreProgress =
+            progress / .42;
+
+          const coreRadius =
+            Math.max(
+              1.5,
+              8.5 *
+                (1 - coreProgress * .72),
+            );
+
+          const coreGradient =
+            ctx.createRadialGradient(
+              burst.x - coreRadius * .3,
+              burst.y - coreRadius * .72,
+              1,
+              burst.x,
+              burst.y - coreRadius * .24,
+              coreRadius,
+            );
+
+          coreGradient.addColorStop(
+            0,
+            "rgba(247,255,255,.99)",
+          );
+          coreGradient.addColorStop(
+            .38,
+            "rgba(110,222,250,.97)",
+          );
+          coreGradient.addColorStop(
+            1,
+            "rgba(28,140,217,.86)",
+          );
+
+          ctx.globalAlpha =
+            alpha * .98;
+          ctx.fillStyle =
+            coreGradient;
+
+          ctx.beginPath();
+          ctx.arc(
+            burst.x,
+            burst.y -
+              coreRadius * .38,
+            coreRadius,
+            0,
+            Math.PI * 2,
+          );
+          ctx.fill();
+        }
+
+        // 2) 가운데에서 동글동글한 물기둥 3개가 짧게 솟음
+        const popPhase =
+          Math.sin(
+            Math.min(
+              1,
+              progress * 1.35,
+            ) * Math.PI,
+          );
+
+        const popStalks = [
+          [-.34, .53, .13],
+          [0, .82, .16],
+          [.34, .52, .13],
+        ] as const;
+
+        for (const [
+          offset,
+          height,
+          width,
+        ] of popStalks) {
+          const stalkX =
+            burst.x +
+            r * offset;
+
+          const stalkTop =
+            burst.y -
+            r *
+              height *
+              popPhase;
+
+          ctx.globalAlpha =
+            alpha * .9;
+          ctx.strokeStyle =
+            "rgba(98,211,248,.95)";
+          ctx.lineWidth =
+            Math.max(
+              2,
+              r * width,
+            );
+          ctx.lineCap =
+            "round";
+
+          ctx.beginPath();
+          ctx.moveTo(
+            stalkX,
+            burst.y - 1,
+          );
+          ctx.quadraticCurveTo(
+            stalkX +
+              r *
+                offset *
+                .14,
+            burst.y -
+              r *
+                height *
+                .5 *
+                popPhase,
+            stalkX,
+            stalkTop,
+          );
+          ctx.stroke();
+
+          ctx.fillStyle =
+            "rgba(222,252,255,.97)";
+          ctx.beginPath();
+          ctx.arc(
+            stalkX,
+            stalkTop,
+            Math.max(
+              1.7,
+              r * width * .65,
+            ),
+            0,
+            Math.PI * 2,
+          );
+          ctx.fill();
+        }
+
+        // 3) 좌우로 튀는 둥근 물방울 8개
+        for (
+          let i = 0;
+          i < 8;
+          i += 1
+        ) {
+          const side =
+            i < 4 ? -1 : 1;
+          const local =
+            i % 4;
+
+          const horizontal =
+            r *
+            (.28 +
+              progress * .62 +
+              local * .075);
+
+          const vertical =
+            r *
+            (.18 +
+              local * .1) *
+            popPhase;
+
+          const dropX =
+            burst.x +
+            side * horizontal;
+
+          const dropY =
+            burst.y -
+            vertical -
+            2;
+
+          const dropRadius =
+            Math.max(
+              1.2,
+              2.7 -
+                progress * 1.35 +
+                (local % 2) * .25,
+            );
+
+          ctx.globalAlpha =
+            alpha *
+            (.72 +
+              (local % 2) * .14);
+
+          ctx.fillStyle =
+            local % 2 === 0
+              ? "rgba(231,254,255,.97)"
+              : "rgba(79,199,242,.92)";
+
+          ctx.beginPath();
+          ctx.ellipse(
+            dropX,
+            dropY,
+            dropRadius,
+            dropRadius * 1.12,
+            0,
+            0,
+            Math.PI * 2,
+          );
+          ctx.fill();
+        }
+
+        // 4) 착지 지점에서 아주 작은 원형 물결이 한 번 퍼짐
+        const rippleProgress =
+          Math.min(
+            1,
+            progress * 1.2,
+          );
+
+        ctx.globalAlpha =
+          alpha * .56;
+        ctx.strokeStyle =
+          "rgba(173,240,255,.91)";
+        ctx.lineWidth =
+          Math.max(
+            1,
+            2.2 - progress,
+          );
+
+        ctx.beginPath();
+        ctx.ellipse(
+          burst.x,
+          burst.y + 2,
+          6 +
+            13 *
+              rippleProgress,
+          2.3 +
+            2.8 *
+              rippleProgress,
+          0,
+          0,
+          Math.PI * 2,
+        );
+        ctx.stroke();
+
+        // 5) 아주 작은 물웅덩이가 잠깐 남았다가 사라짐
+        ctx.globalAlpha =
+          alpha * .3;
+        ctx.fillStyle =
+          "rgba(70,186,236,.52)";
+
+        ctx.beginPath();
+        ctx.ellipse(
+          burst.x,
+          burst.y + 3,
+          5 +
+            9 *
+              rippleProgress,
+          1.7 +
+            1.7 *
+              rippleProgress,
+          0,
+          0,
+          Math.PI * 2,
+        );
+        ctx.fill();
+
+        ctx.restore();
+      }
+
       for (const b of bubbles) {
         if (!isVisibleOnCamera(b)) continue;
         const radius = b.w / 2;
         const trappedEnemy = b.enemyId
           ? enemies.find((enemy) => enemy.id === b.enemyId && !enemy.dead)
           : undefined;
+        const isRiddenBubble = ridingBubbleId === b.id && !trappedEnemy;
+        const bubbleCenterX = b.x + radius;
+        const bubbleCenterY = b.y + radius;
+
+        ctx.save();
+        if (isRiddenBubble) {
+          // 탑승 중에는 위쪽이 눌린 듯 세로로 살짝 납작해진다.
+          ctx.translate(bubbleCenterX, bubbleCenterY + 5);
+          ctx.scale(1.06, .82);
+          ctx.translate(-bubbleCenterX, -bubbleCenterY);
+        }
 
         ctx.beginPath();
         ctx.arc(b.x + radius, b.y + radius, radius - 3, 0, Math.PI * 2);
@@ -2034,6 +4780,10 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         ctx.strokeStyle = "white";
         ctx.lineWidth = 4;
         ctx.stroke();
+
+        // 버블 탑승 시 적용한 scale/translate가 다음 버블 및 다음 프레임으로
+        // 절대 누적되지 않도록 반드시 원래 캔버스 상태로 복구한다.
+        ctx.restore();
       }
       for (const b of bossBubbles) {
         if (!isVisibleOnCamera(b)) continue;
@@ -2068,12 +4818,16 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
         ctx.fillStyle = "#ffd34f";
         ctx.fill();
         ctx.strokeStyle = "#fff0a0";
-        ctx.lineWidth = 4;
+        ctx.lineWidth = 8;
         ctx.stroke();
+
+        // 커진 코인에 맞춰 중앙 표시도 확대.
         ctx.fillStyle = "#a46a18";
-        ctx.font = "900 16px monospace";
+        ctx.font = "900 54px monospace";
         ctx.textAlign = "center";
-        ctx.fillText("C", 0, 6);
+        ctx.textBaseline = "middle";
+        ctx.fillText("C", 0, 3);
+        ctx.textBaseline = "alphabetic";
         ctx.restore();
       }
       for (const boss of midBosses) {
@@ -2137,6 +4891,48 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
           }
           ctx.restore();
         }
+        if (squirrelFallTimer > 0 && !player.grounded && ridingBubbleId === null) {
+        // 날다람쥐처럼 몸을 좌우로 펼치고 납작하게 떨어지는 연출.
+        ctx.save();
+        ctx.translate(
+          player.x + player.w / 2,
+          player.y + player.h / 2,
+        );
+        ctx.scale(1.28, 0.72);
+        ctx.rotate(player.vx * 0.008);
+        ctx.translate(
+          -(player.x + player.w / 2),
+          -(player.y + player.h / 2),
+        );
+
+        drawLizard(
+          ctx,
+          player.x,
+          player.y + 8,
+          player.face,
+          (now / 130) % 1,
+          now - fireAt < 180,
+        );
+
+        // 양옆에 펼친 막처럼 보이는 실루엣
+        ctx.globalAlpha = 0.42;
+        ctx.fillStyle = "#9eddbd";
+        ctx.beginPath();
+        ctx.moveTo(player.x + 16, player.y + 42);
+        ctx.lineTo(player.x - 18, player.y + 58);
+        ctx.lineTo(player.x + 18, player.y + 67);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(player.x + player.w - 16, player.y + 42);
+        ctx.lineTo(player.x + player.w + 18, player.y + 58);
+        ctx.lineTo(player.x + player.w - 18, player.y + 67);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.restore();
+      } else {
         drawLizard(
           ctx,
           player.x,
@@ -2145,6 +4941,7 @@ export default function HooBubbleGame({ onExit, onRecordSaved }: Props) {
           (now / 130) % 1,
           now - fireAt < 180,
         );
+      }
       }
       if (healingEffect > 0) {
         const pulse = .72 + Math.sin(now / 90) * .18;
