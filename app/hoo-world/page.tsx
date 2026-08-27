@@ -2078,6 +2078,12 @@ export default function HooWorldPage() {
 
     previousMovementTimeRef.current = 0;
 
+    /*
+     * playerPositionRef는 현재 화면에서 실제로 이동한
+     * 캐릭터의 최종 좌표를 가지고 있다.
+     *
+     * 이 값을 포커스 진입 좌표의 단일 기준점으로 사용한다.
+     */
     const currentPosition = {
       x: playerPositionRef.current.x,
       y: playerPositionRef.current.y,
@@ -2085,22 +2091,12 @@ export default function HooWorldPage() {
 
     try {
       /*
-       * 현재 좌표와 바라보는 방향을 정지 상태로 먼저 송출한다.
-       */
-      await updatePosition(
-        currentPosition.x,
-        currentPosition.y,
-        playerFacingRef.current,
-        false,
-      );
-
-      await updateStatus(
-        "focusing",
-      );
-
-      /*
-       * 메인 페이지와 FocusMode가
-       * 같은 위치에서 이어서 시작할 수 있도록 저장한다.
+       * 중요:
+       * updateStatus("focusing")보다 먼저 현재 좌표를 저장한다.
+       *
+       * Presence 훅의 focusing 처리도 이 handoff 값을 읽기 때문에
+       * 이전 포커스 좌표나 기본 리스폰 좌표가 끼어들지 않고
+       * 방금 이동을 멈춘 실제 위치를 그대로 사용하게 된다.
        */
       window.sessionStorage.setItem(
         "hoo-world-focus-position",
@@ -2114,8 +2110,47 @@ export default function HooWorldPage() {
         "true",
       );
 
+      /*
+       * 현재 실제 좌표와 바라보는 방향을
+       * 정지 상태로 Broadcast에 마지막 한 번 확정한다.
+       */
+      await updatePosition(
+        currentPosition.x,
+        currentPosition.y,
+        playerFacingRef.current,
+        false,
+      );
+
+      /*
+       * 최신 좌표가 저장된 뒤 focusing Presence를 갱신하므로
+       * 다른 이용자와 늦게 들어온 이용자 모두 같은 좌표를 본다.
+       */
+      await updateStatus(
+        "focusing",
+      );
+
       window.location.assign("/");
     } catch (error) {
+      /*
+       * 포커스 진입에 실패했다면
+       * 실패한 handoff가 다음 진입에 남지 않도록 정리한다.
+       */
+      window.sessionStorage.removeItem(
+        "hoo-world-focus-position",
+      );
+
+      window.sessionStorage.removeItem(
+        "hoo-world-open-focus",
+      );
+
+      window.sessionStorage.removeItem(
+        "hoo-world-focus-field-id",
+      );
+
+      window.sessionStorage.removeItem(
+        "hoo-world-focus-facing",
+      );
+
       console.error(
         "HOO WORLD 포커스모드 연결에 실패했습니다.",
         error,
