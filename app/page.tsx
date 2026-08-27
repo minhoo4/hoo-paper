@@ -1073,14 +1073,25 @@ const {
 });
 
 /*
+ * HOO WORLD -> Focus Mode 페이지 전환 중
+ * FocusMode가 초기 false 상태를 먼저 알리는 경우에도
+ * focusing Presence가 즉시 idle로 되돌아가지 않도록 보호한다.
+ */
+const hooWorldFocusPendingRef =
+  useRef(false);
+
+const hooWorldFocusActiveRef =
+  useRef(false);
+
+/*
  * HOO WORLD에서 포커스모드로 넘어온 경우
  * 메인 Presence가 연결되는 즉시
  * 월드에서 마지막으로 서 있던 좌표와
  * focusing 상태를 복원한다.
  *
- * FocusMode 내부 이벤트를 기다리지 않기 때문에
- * 페이지 전환 순간 캐릭터가 사라지거나
- * 기본 위치로 이동하는 현상을 막는다.
+ * FocusMode 내부 이벤트보다 먼저 복원하므로
+ * 페이지 전환 직후 캐릭터가 idle로 되돌아가거나
+ * 월드에서 사라지는 시간을 최소화한다.
  */
 useEffect(() => {
   if (
@@ -1099,13 +1110,16 @@ useEffect(() => {
     return;
   }
 
-  /*
-   * null 체크가 끝난 값을
-   * 확정 string으로 고정한다.
-   */
   const savedPositionJson:
     string =
     savedPosition;
+
+  /*
+   * FocusMode가 실제 running=true를 알리기 전까지
+   * 초기 false 이벤트는 무시해야 한다.
+   */
+  hooWorldFocusPendingRef.current =
+    true;
 
   let cancelled = false;
 
@@ -1149,9 +1163,16 @@ useEffect(() => {
         return;
       }
 
+      /*
+       * 월드에서 멈춘 좌표를 먼저 확정한다.
+       * moving=false로 보내 포커스 캐릭터가
+       * 이동 중 상태로 남지 않게 한다.
+       */
       await updateHooWorldPosition(
         x,
         y,
+        "down",
+        false,
       );
 
       if (cancelled) {
@@ -1164,7 +1185,7 @@ useEffect(() => {
     } catch {
       /*
        * 손상된 임시 좌표는 무시하고
-       * 기존 Presence 상태를 유지한다.
+       * 현재 Presence 연결 자체는 유지한다.
        */
     }
   }
@@ -1180,7 +1201,6 @@ useEffect(() => {
   updateHooWorldPosition,
   updateHooWorldStatus,
 ]);
-
 
 
 const today = useMemo(
@@ -15734,12 +15754,18 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
     }
 
     void (async () => {
-      /*
-       * HOO WORLD에서 포커스모드로 넘어온 경우:
-       * 실제 집중 타이머가 시작되는 순간
-       * 월드에서 멈춘 위치를 먼저 Presence에 복원한다.
-       */
       if (isRunning) {
+        /*
+         * 실제 집중 시작이 확인되면
+         * 페이지 전환 대기 상태를 종료하고
+         * focusing 상태를 확정한다.
+         */
+        hooWorldFocusPendingRef.current =
+          false;
+
+        hooWorldFocusActiveRef.current =
+          true;
+
         const savedPosition =
           window.sessionStorage.getItem(
             "hoo-world-focus-position",
@@ -15765,10 +15791,14 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
                 };
 
               const x =
-                Number(position.x);
+                Number(
+                  position.x,
+                );
 
               const y =
-                Number(position.y);
+                Number(
+                  position.y,
+                );
 
               if (
                 Number.isFinite(x) &&
@@ -15777,33 +15807,57 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
                 await updateHooWorldPosition(
                   x,
                   y,
+                  "down",
+                  false,
                 );
               }
             }
           } catch {
             /*
-             * 임시 저장 좌표가 손상된 경우에는
-             * 기존 Presence 위치를 그대로 사용한다.
+             * 임시 좌표가 손상된 경우에는
+             * 현재 Presence 위치를 그대로 사용한다.
              */
           }
         }
-      }
 
-      await updateHooWorldStatus(
-        isRunning
-          ? "focusing"
-          : "idle",
-      );
+        await updateHooWorldStatus(
+          "focusing",
+        );
+
+        return;
+      }
 
       /*
-       * 포커스모드가 종료되거나 중단되면
-       * 이번 전환에 사용한 임시 좌표는 정리한다.
+       * HOO WORLD에서 Focus Mode로 이동한 직후
+       * FocusMode 초기화 과정에서 false가 먼저 발생할 수 있다.
+       *
+       * 실제 running=true가 한 번 확인되기 전까지는
+       * 이 false를 집중 종료로 취급하지 않는다.
        */
-      if (!isRunning) {
-        window.sessionStorage.removeItem(
-          "hoo-world-focus-position",
-        );
+      if (
+        hooWorldFocusPendingRef.current &&
+        !hooWorldFocusActiveRef.current
+      ) {
+        return;
       }
+
+      hooWorldFocusPendingRef.current =
+        false;
+
+      hooWorldFocusActiveRef.current =
+        false;
+
+      await updateHooWorldStatus(
+        "idle",
+      );
+
+      window.sessionStorage.removeItem(
+        "hoo-world-focus-position",
+      );
+
+      window.sessionStorage.removeItem(
+        "hoo-world-open-focus",
+      );
     })();
   }}
 />
