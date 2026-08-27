@@ -521,6 +521,18 @@ const fieldIdRef =
       >(),
     );
 
+  /*
+   * 필드 Presence가 순간적으로 비는 경우에도
+   * directory Presence에 남아 있는 이용자는 계속 표시한다.
+   *
+   * 특히 Focus Mode 이용자는 새 입장자가 과거 Broadcast를
+   * 받을 수 없으므로 directory의 durable snapshot이 fallback이 된다.
+   */
+  const directoryPlayersRef =
+    useRef<
+      HooWorldPresencePlayer[]
+    >([]);
+
   const nicknameRef =
     useRef<string | null>(
       nickname,
@@ -550,6 +562,9 @@ const fieldIdRef =
         null;
 
       movementSnapshotByUserRef.current.clear();
+
+      directoryPlayersRef.current =
+        [];
 
       return;
     }
@@ -895,6 +910,45 @@ const fieldIdRef =
           : operatorSkinResult.data ===
               true;
 
+      /*
+       * Focus Mode 전환 중이거나 이미 focusing 상태라면
+       * 매 Presence payload 생성 직전에 handoff 좌표를 다시 확인한다.
+       *
+       * 재연결/track 타이밍이 겹쳐도 기본 리스폰(50, 78)이
+       * 잠깐 송출되는 것을 막는다.
+       */
+      if (
+        statusRef.current ===
+        "focusing"
+      ) {
+        const focusHandoff =
+          readHooWorldFocusHandoff();
+
+        if (focusHandoff) {
+          positionRef.current = {
+            x: focusHandoff.x,
+            y: focusHandoff.y,
+          };
+
+          movingRef.current =
+            false;
+
+          if (
+            focusHandoff.facing
+          ) {
+            facingRef.current =
+              focusHandoff.facing;
+          }
+
+          if (
+            focusHandoff.fieldId
+          ) {
+            preferredFieldIdRef.current =
+              focusHandoff.fieldId;
+          }
+        }
+      }
+
       const now =
         new Date().toISOString();
 
@@ -1005,7 +1059,7 @@ const fieldIdRef =
             return;
           }
 
-          const presencePlayers =
+          const fieldPresencePlayers =
             normalizePresencePlayers(
               nextChannel.presenceState<
                 HooWorldPresencePlayer
@@ -1014,6 +1068,66 @@ const fieldIdRef =
               (player) =>
                 player.fieldId ===
                 nextFieldId,
+            );
+
+          /*
+           * 같은 필드의 directory Presence를 fallback으로 합친다.
+           *
+           * Supabase field Presence sync가 순간적으로 비어도
+           * directory에 정상적으로 살아 있는 사용자는 사라지지 않는다.
+           *
+           * 새로 HOO WORLD에 들어온 사람도 이미 focusing 중인 사용자의
+           * x/y/status/facing/moving을 directory snapshot으로 즉시 받는다.
+           */
+          const mergedPlayerMap =
+            new Map<
+              string,
+              HooWorldPresencePlayer
+            >();
+
+          for (
+            const player of
+            directoryPlayersRef.current
+          ) {
+            if (
+              player.fieldId ===
+              nextFieldId
+            ) {
+              mergedPlayerMap.set(
+                player.userId,
+                player,
+              );
+            }
+          }
+
+          for (
+            const player of
+            fieldPresencePlayers
+          ) {
+            const directoryPlayer =
+              mergedPlayerMap.get(
+                player.userId,
+              );
+
+            /*
+             * field Presence가 더 최신이면 field 값을 사용하고,
+             * directory가 더 최신이면 directory 값을 유지한다.
+             */
+            if (
+              !directoryPlayer ||
+              player.onlineAt >=
+                directoryPlayer.onlineAt
+            ) {
+              mergedPlayerMap.set(
+                player.userId,
+                player,
+              );
+            }
+          }
+
+          const presencePlayers =
+            Array.from(
+              mergedPlayerMap.values(),
             );
 
           const activeUserIds =
@@ -1302,6 +1416,9 @@ const fieldIdRef =
                 >() as HooWorldPresenceState,
               );
 
+            directoryPlayersRef.current =
+              directoryPlayers;
+
             setTotalOnlineCount(
               directoryPlayers.length,
             );
@@ -1455,6 +1572,9 @@ const fieldIdRef =
 
       fieldChannel = null;
       directoryChannel = null;
+
+      directoryPlayersRef.current =
+        [];
 
       if (
         currentFieldChannel
@@ -1784,6 +1904,34 @@ movementChannel.on(
     ) {
       movingRef.current =
         false;
+
+      /*
+       * Focus Mode 버튼을 누른 바로 그 좌표를
+       * Presence payload의 단일 기준점으로 확정한다.
+       */
+      const focusHandoff =
+        readHooWorldFocusHandoff();
+
+      if (focusHandoff) {
+        positionRef.current = {
+          x: focusHandoff.x,
+          y: focusHandoff.y,
+        };
+
+        if (
+          focusHandoff.facing
+        ) {
+          facingRef.current =
+            focusHandoff.facing;
+        }
+
+        if (
+          focusHandoff.fieldId
+        ) {
+          preferredFieldIdRef.current =
+            focusHandoff.fieldId;
+        }
+      }
     }
 
     if (!enabled) {
