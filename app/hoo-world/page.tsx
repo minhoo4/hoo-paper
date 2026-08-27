@@ -783,6 +783,11 @@ export default function HooWorldPage() {
   ] = useState(false);
 
   const [
+    isEnteringFocusMode,
+    setIsEnteringFocusMode,
+  ] = useState(false);
+
+  const [
     selectedAccessoryId,
     setSelectedAccessoryId,
   ] = useState<string | null>(
@@ -850,6 +855,8 @@ export default function HooWorldPage() {
     onlineCount,
     isConnected,
     status,
+    updateStatus,
+    updatePosition,
   } = useHooWorldPresence({
     enabled: true,
     nickname,
@@ -1932,6 +1939,81 @@ export default function HooWorldPage() {
       );
     };
   }, []);
+
+  async function enterFocusModeFromHooWorld() {
+    if (isEnteringFocusMode) {
+      return;
+    }
+
+    setIsEnteringFocusMode(true);
+
+    /*
+     * 포커스 전환 순간 좌표를 정확하게 고정하기 위해
+     * 이동 입력과 RAF를 먼저 정지한다.
+     */
+    movementInputRef.current.left = false;
+    movementInputRef.current.right = false;
+    movementInputRef.current.up = false;
+    movementInputRef.current.down = false;
+
+    if (
+      movementFrameRef.current !== null
+    ) {
+      cancelAnimationFrame(
+        movementFrameRef.current,
+      );
+
+      movementFrameRef.current = null;
+    }
+
+    previousMovementTimeRef.current = 0;
+
+    const currentPosition = {
+      x: playerPositionRef.current.x,
+      y: playerPositionRef.current.y,
+    };
+
+    try {
+      /*
+       * 현재 좌표와 바라보는 방향을 정지 상태로 먼저 송출한다.
+       */
+      await updatePosition(
+        currentPosition.x,
+        currentPosition.y,
+        playerFacingRef.current,
+        false,
+      );
+
+      await updateStatus(
+        "focusing",
+      );
+
+      /*
+       * 메인 페이지와 FocusMode가
+       * 같은 위치에서 이어서 시작할 수 있도록 저장한다.
+       */
+      window.sessionStorage.setItem(
+        "hoo-world-focus-position",
+        JSON.stringify(
+          currentPosition,
+        ),
+      );
+
+      window.sessionStorage.setItem(
+        "hoo-world-open-focus",
+        "true",
+      );
+
+      window.location.assign("/");
+    } catch (error) {
+      console.error(
+        "HOO WORLD 포커스모드 연결에 실패했습니다.",
+        error,
+      );
+
+      setIsEnteringFocusMode(false);
+    }
+  }
 
   return (
     <main className="relative h-[100dvh] min-h-[640px] w-full overflow-hidden bg-[#7fa75d] text-[#2d3329]">
@@ -3458,6 +3540,29 @@ export default function HooWorldPage() {
           </div>
         </div>
       </header>
+
+            <button
+        type="button"
+        onClick={() => {
+          void enterFocusModeFromHooWorld();
+        }}
+        disabled={isEnteringFocusMode}
+        className="fixed bottom-5 right-5 z-[100] flex h-12 items-center gap-2 rounded-2xl border border-white/35 bg-[#1d2f24] px-5 text-sm font-black text-white shadow-[0_8px_24px_rgba(20,35,24,0.38)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-[#294132] disabled:cursor-wait disabled:opacity-60 sm:bottom-6 sm:right-6"
+        aria-label="포커스모드 시작"
+      >
+        <span
+          aria-hidden="true"
+          className="text-base"
+        >
+          💻
+        </span>
+
+        <span>
+          {isEnteringFocusMode
+            ? "연결 중..."
+            : "포커스모드"}
+        </span>
+      </button>
 
       <div className="absolute bottom-4 left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/35 bg-black/55 px-5 py-2.5 text-[11px] font-black text-white shadow-lg backdrop-blur-xl sm:text-xs">
         {status ===
