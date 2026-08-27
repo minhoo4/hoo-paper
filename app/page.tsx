@@ -856,6 +856,19 @@ const [
   setIsHooWorldJoinPromptOpen,
 ] = useState(false);
 
+/*
+ * /hoo-world에서 Focus Mode로 넘어온 사용자는
+ * HOO WORLD 권한 localStorage와 별개로
+ * Focus Mode가 끝날 때까지 Presence를 유지한다.
+ *
+ * 직접 /hoo-world에 들어온 사용자도
+ * 포커스 전환 후 월드에서 사라지지 않게 하는 보호 상태다.
+ */
+const [
+  isHooWorldFocusPresencePinned,
+  setIsHooWorldFocusPresencePinned,
+] = useState(false);
+
 const HOO_WORLD_PERMISSION_KEY =
   "hoo-world-permission";
 
@@ -979,9 +992,56 @@ const HOO_WORLD_PROMPT_DISABLED_KEY =
 ───────────────────────────── */
 
 useEffect(() => {
+  /*
+   * /hoo-world -> Focus Mode handoff가 살아 있다면
+   * localStorage 권한 여부와 관계없이 이번 Focus 세션 동안은
+   * HOO WORLD Presence를 반드시 유지한다.
+   *
+   * /hoo-world 페이지 자체는 Presence 접속이 가능하므로,
+   * 여기서 권한 체크 때문에 연결을 끊으면
+   * 포커스 중인 캐릭터가 다른 이용자 화면에서 사라진다.
+   */
+  const hasFocusHandoff =
+    window.sessionStorage.getItem(
+      "hoo-world-open-focus",
+    ) === "true" &&
+    Boolean(
+      window.sessionStorage.getItem(
+        "hoo-world-focus-position",
+      ),
+    );
+
+  if (hasFocusHandoff) {
+    setIsHooWorldFocusPresencePinned(
+      true,
+    );
+
+    setIsHooWorldJoinPromptOpen(
+      false,
+    );
+
+    /*
+     * 로그인 정보 로딩이 아직 끝나지 않아도
+     * Presence 훅 자체는 pinned 상태로 살아 있게 둔다.
+     * 훅 내부에서 실제 Supabase user가 확인되는 즉시 접속한다.
+     */
+    if (!isLoggedIn) {
+      return;
+    }
+  }
+
   if (!isLoggedIn) {
     setIsHooWorldConnected(null);
     setIsHooWorldJoinPromptOpen(false);
+    return;
+  }
+
+  /*
+   * Focus handoff 중에는 일반 HOO WORLD 권한 모달을 띄우지 않는다.
+   * 포커스 종료 후 아래 onFocusRunningChange에서
+   * 저장된 권한 상태로 정상 복귀한다.
+   */
+  if (hasFocusHandoff) {
     return;
   }
 
@@ -1051,9 +1111,18 @@ function handleDisableHooWorldPrompt() {
 /*
  * HOO WORLD 실시간 Presence
  *
- * isHooWorldConnected가 true일 때만
- * Supabase Realtime 채널에 접속한다.
+ * 일반 상태:
+ * - HOO WORLD 권한을 수락한 사용자가 접속한다.
+ *
+ * Focus handoff 상태:
+ * - /hoo-world에서 Focus Mode로 넘어온 사용자는
+ *   권한 state가 아직 복원되지 않았거나 별도 권한을 수락하지 않았어도
+ *   Focus가 끝날 때까지 Presence를 유지한다.
  */
+const shouldEnableHooWorldPresence =
+  isHooWorldConnected === true ||
+  isHooWorldFocusPresencePinned;
+
 const {
   players: hooWorldPlayers,
   onlineCount: hooWorldOnlineCount,
@@ -1066,7 +1135,7 @@ const {
     updateHooWorldPosition,
 } = useHooWorldPresence({
   enabled:
-    isHooWorldConnected === true,
+    shouldEnableHooWorldPresence,
 
   nickname:
     loggedInNickname,
@@ -1095,7 +1164,7 @@ const hooWorldFocusActiveRef =
  */
 useEffect(() => {
   if (
-    isHooWorldConnected !== true ||
+    !shouldEnableHooWorldPresence ||
     !isHooWorldPresenceConnected
   ) {
     return;
@@ -1109,6 +1178,14 @@ useEffect(() => {
   if (!savedPosition) {
     return;
   }
+
+  /*
+   * 저장된 Focus 좌표가 확인된 순간부터
+   * Focus 종료 이벤트가 올 때까지 Presence를 고정 유지한다.
+   */
+  setIsHooWorldFocusPresencePinned(
+    true,
+  );
 
   const savedPositionJson:
     string =
@@ -1196,7 +1273,7 @@ useEffect(() => {
     cancelled = true;
   };
 }, [
-  isHooWorldConnected,
+  shouldEnableHooWorldPresence,
   isHooWorldPresenceConnected,
   updateHooWorldPosition,
   updateHooWorldStatus,
@@ -15747,8 +15824,34 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
   onFocusRunningChange={(
     isRunning,
   ) => {
+    /*
+     * /hoo-world에서 넘어온 Focus handoff는
+     * HOO WORLD 일반 권한과 독립적으로 처리한다.
+     *
+     * 직접 /hoo-world에 진입한 사용자는
+     * isHooWorldConnected가 false/null일 수도 있기 때문에
+     * 기존 권한 guard만 사용하면 Focus 시작 신호를 놓칠 수 있다.
+     */
+    const hasFocusHandoff =
+      window.sessionStorage.getItem(
+        "hoo-world-open-focus",
+      ) === "true" &&
+      Boolean(
+        window.sessionStorage.getItem(
+          "hoo-world-focus-position",
+        ),
+      );
+
+    if (isRunning && hasFocusHandoff) {
+      setIsHooWorldFocusPresencePinned(
+        true,
+      );
+    }
+
     if (
-      isHooWorldConnected !== true
+      isHooWorldConnected !== true &&
+      !isHooWorldFocusPresencePinned &&
+      !hasFocusHandoff
     ) {
       return;
     }
@@ -15765,6 +15868,10 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
 
         hooWorldFocusActiveRef.current =
           true;
+
+        setIsHooWorldFocusPresencePinned(
+          true,
+        );
 
         const savedPosition =
           window.sessionStorage.getItem(
@@ -15851,12 +15958,69 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
         "idle",
       );
 
+      /*
+       * Focus가 실제로 종료된 뒤에만 pinned Presence를 해제한다.
+       * 이후에는 기존 localStorage 권한 상태로 정상 복귀한다.
+       */
+      setIsHooWorldFocusPresencePinned(
+        false,
+      );
+
       window.sessionStorage.removeItem(
         "hoo-world-focus-position",
       );
 
       window.sessionStorage.removeItem(
         "hoo-world-open-focus",
+      );
+
+      const savedPermission =
+        window.localStorage.getItem(
+          HOO_WORLD_PERMISSION_KEY,
+        );
+
+      const promptDisabled =
+        window.localStorage.getItem(
+          HOO_WORLD_PROMPT_DISABLED_KEY,
+        ) === "true";
+
+      if (
+        savedPermission ===
+        "accepted"
+      ) {
+        setIsHooWorldConnected(
+          true,
+        );
+
+        setIsHooWorldJoinPromptOpen(
+          false,
+        );
+
+        return;
+      }
+
+      if (
+        savedPermission ===
+          "declined" ||
+        promptDisabled
+      ) {
+        setIsHooWorldConnected(
+          false,
+        );
+
+        setIsHooWorldJoinPromptOpen(
+          false,
+        );
+
+        return;
+      }
+
+      setIsHooWorldConnected(
+        null,
+      );
+
+      setIsHooWorldJoinPromptOpen(
+        true,
       );
     })();
   }}
