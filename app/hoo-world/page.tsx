@@ -794,6 +794,13 @@ export default function HooWorldPage() {
     null,
   );
 
+  const [
+    currentUserId,
+    setCurrentUserId,
+  ] = useState<string | null>(
+    null,
+  );
+
   const currentUserIdRef =
     useRef<string | null>(
       null,
@@ -852,6 +859,7 @@ export default function HooWorldPage() {
     );
 
   const {
+    players,
     onlineCount,
     isConnected,
     status,
@@ -861,6 +869,24 @@ export default function HooWorldPage() {
     enabled: true,
     nickname,
   });
+
+  /*
+   * 현재 이용자를 제외한 같은 필드의 다른 이용자.
+   * Focus Mode 이용자도 Presence가 유지되는 동안
+   * status="focusing" 상태로 이 배열에 그대로 남는다.
+   */
+  const remotePlayers = useMemo(
+    () =>
+      players.filter(
+        (player) =>
+          player.userId !==
+          currentUserId,
+      ),
+    [
+      players,
+      currentUserId,
+    ],
+  );
 
 
   /*
@@ -885,6 +911,9 @@ export default function HooWorldPage() {
             null;
 
           if (!cancelled) {
+            setCurrentUserId(
+              null,
+            );
             setSelectedAccessoryId(
               null,
             );
@@ -897,6 +926,10 @@ export default function HooWorldPage() {
 
         currentUserIdRef.current =
           user.id;
+
+        setCurrentUserId(
+          user.id,
+        );
 
         const [
           profileResult,
@@ -2013,6 +2046,87 @@ export default function HooWorldPage() {
 
       setIsEnteringFocusMode(false);
     }
+  }
+
+  function getRemotePlayerPosition(
+    userId: string,
+    index: number,
+  ) {
+    const remotePlayer =
+      remotePlayers.find(
+        (player) =>
+          player.userId === userId,
+      );
+
+    const remoteX =
+      Number(
+        remotePlayer?.x,
+      );
+
+    const remoteY =
+      Number(
+        remotePlayer?.y,
+      );
+
+    if (
+      Number.isFinite(remoteX) &&
+      Number.isFinite(remoteY)
+    ) {
+      return {
+        x: Math.max(
+          0,
+          Math.min(
+            100,
+            remoteX,
+          ),
+        ),
+        y: Math.max(
+          0,
+          Math.min(
+            100,
+            remoteY,
+          ),
+        ),
+      };
+    }
+
+    /*
+     * 아직 좌표 패킷을 받지 못한 이용자도
+     * 화면에서 사라지지 않도록 안정적인 임시 위치를 사용한다.
+     */
+    let hash = 0;
+
+    for (
+      let charIndex = 0;
+      charIndex < userId.length;
+      charIndex += 1
+    ) {
+      hash =
+        (
+          hash * 31 +
+          userId.charCodeAt(
+            charIndex,
+          )
+        ) >>> 0;
+    }
+
+    const fallbackPositions = [
+      { x: 39, y: 69 },
+      { x: 47, y: 67 },
+      { x: 55, y: 68 },
+      { x: 63, y: 70 },
+      { x: 35, y: 58 },
+      { x: 45, y: 56 },
+      { x: 56, y: 56 },
+      { x: 65, y: 58 },
+      { x: 43, y: 46 },
+      { x: 58, y: 46 },
+    ];
+
+    return fallbackPositions[
+      (hash + index) %
+        fallbackPositions.length
+    ];
   }
 
   return (
@@ -3294,6 +3408,78 @@ export default function HooWorldPage() {
 
       {/* 전체 종이결 / 회화풍 톤 */}
       <div className="pointer-events-none absolute inset-0 z-[70] opacity-[0.045] mix-blend-multiply [background-image:radial-gradient(circle_at_20%_30%,#5b674d_0_0.7px,transparent_0.9px),radial-gradient(circle_at_70%_40%,#ffffff_0_0.8px,transparent_1px),radial-gradient(circle_at_45%_78%,#6f634c_0_0.6px,transparent_0.9px)] [background-size:11px_13px,17px_15px,23px_19px]" />
+
+      {/* ─────────────────────────
+          다른 이용자 캐릭터
+
+          - 일반 이용자: 현재 캐릭터로 표시
+          - Focus Mode: status="focusing"을 그대로 전달해
+            노트북 포커스 캐릭터로 표시
+          - Broadcast x/y를 받아 실제 이동 좌표를 따라간다.
+      ───────────────────────── */}
+
+      {remotePlayers.map(
+        (
+          remotePlayer,
+          index,
+        ) => {
+          const position =
+            getRemotePlayerPosition(
+              remotePlayer.userId,
+              index,
+            );
+
+          const remoteFacing:
+            HooWorldPlayerFacing =
+              remotePlayer.facing ===
+                "left" ||
+              remotePlayer.facing ===
+                "right"
+                ? remotePlayer.facing
+                : "down";
+
+          return (
+            <div
+              key={
+                remotePlayer.userId
+              }
+              className="pointer-events-none absolute left-0 top-0 z-20 will-change-transform"
+              style={{
+                transform: `translate3d(${position.x}vw, ${position.y}vh, 0) translate(-50%, -50%)`,
+                transition:
+                  remotePlayer.moving
+                    ? "transform 80ms linear"
+                    : "transform 120ms ease-out",
+              }}
+            >
+              <div
+                className="origin-center"
+                style={{
+                  transform:
+                    "scale(0.65)",
+                }}
+              >
+                <HooWorldPlayer
+                  nickname={
+                    remotePlayer.nickname
+                  }
+                  status={
+                    remotePlayer.status
+                  }
+                  facing={
+                    remoteFacing
+                  }
+                  characterSlot={
+                    remotePlayer.characterSlot ??
+                    4
+                  }
+                  accessoryIds={[]}
+                />
+              </div>
+            </div>
+          );
+        },
+      )}
 
       {/* ─────────────────────────
           내 캐릭터
