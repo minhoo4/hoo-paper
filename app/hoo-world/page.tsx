@@ -871,6 +871,27 @@ export default function HooWorldPage() {
   });
 
   /*
+   * 이동 RAF 안에서는 매 렌더마다 바뀔 수 있는 함수 참조 대신
+   * 항상 최신 updatePosition을 ref로 호출한다.
+   *
+   * 이렇게 하면 이동 이벤트 리스너를 매번 다시 등록하지 않고도
+   * 실시간 Broadcast 함수를 최신 상태로 유지할 수 있다.
+   */
+  const updatePositionRef =
+    useRef(updatePosition);
+
+  updatePositionRef.current =
+    updatePosition;
+
+  /*
+   * 실시간 좌표 송출 주기를 제한한다.
+   * 50ms = 초당 최대 약 20회 전송.
+   * 로컬 이동은 기존처럼 RAF 60fps를 유지한다.
+   */
+  const lastMovementBroadcastAtRef =
+    useRef(0);
+
+  /*
    * 현재 이용자를 제외한 같은 필드의 다른 이용자.
    * Focus Mode 이용자도 Presence가 유지되는 동안
    * status="focusing" 상태로 이 배열에 그대로 남는다.
@@ -1794,6 +1815,29 @@ export default function HooWorldPage() {
           currentTime,
           didMove,
         );
+
+        /*
+         * 다른 이용자에게는 Presence sync를 기다리지 않고
+         * Broadcast 채널로 좌표를 즉시 전송한다.
+         *
+         * 50ms 간격으로 x/y + 방향 + 이동 상태를 보내서
+         * 상대 화면에서 거의 실시간으로 따라오게 한다.
+         */
+        if (
+          currentTime -
+            lastMovementBroadcastAtRef.current >=
+          50
+        ) {
+          lastMovementBroadcastAtRef.current =
+            currentTime;
+
+          void updatePositionRef.current(
+            current.x,
+            current.y,
+            playerFacingRef.current,
+            didMove,
+          );
+        }
       } else {
         resetPlayerWalkMotion();
       }
@@ -1865,6 +1909,23 @@ export default function HooWorldPage() {
           0;
 
         resetPlayerWalkMotion();
+
+        /*
+         * 마지막 키를 놓는 순간 정지 좌표를 즉시 한 번 더 보내
+         * 상대 화면의 걷기 모션도 바로 멈춘다.
+         */
+        const current =
+          playerPositionRef.current;
+
+        lastMovementBroadcastAtRef.current =
+          0;
+
+        void updatePositionRef.current(
+          current.x,
+          current.y,
+          playerFacingRef.current,
+          false,
+        );
       }
     }
 
@@ -1877,6 +1938,22 @@ export default function HooWorldPage() {
       resetPlayerWalkMotion();
 
       stopMovementFrame();
+
+      /*
+       * 창 전환/포커스 이탈 시에도 정지 상태를 즉시 확정한다.
+       */
+      const current =
+        playerPositionRef.current;
+
+      lastMovementBroadcastAtRef.current =
+        0;
+
+      void updatePositionRef.current(
+        current.x,
+        current.y,
+        playerFacingRef.current,
+        false,
+      );
     }
 
     function handleResize() {
