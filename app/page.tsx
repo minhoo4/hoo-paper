@@ -1072,10 +1072,123 @@ const {
     loggedInNickname,
 });
 
+/*
+ * HOO WORLD에서 포커스모드로 넘어온 경우
+ * 메인 Presence가 연결되는 즉시
+ * 월드에서 마지막으로 서 있던 좌표와
+ * focusing 상태를 복원한다.
+ *
+ * FocusMode 내부 이벤트를 기다리지 않기 때문에
+ * 페이지 전환 순간 캐릭터가 사라지거나
+ * 기본 위치로 이동하는 현상을 막는다.
+ */
+useEffect(() => {
+  if (
+    isHooWorldConnected !== true ||
+    !isHooWorldPresenceConnected
+  ) {
+    return;
+  }
+
+  const savedPosition =
+    window.sessionStorage.getItem(
+      "hoo-world-focus-position",
+    );
+
+  if (!savedPosition) {
+    return;
+  }
+
+  /*
+   * null 체크가 끝난 값을
+   * 확정 string으로 고정한다.
+   */
+  const savedPositionJson:
+    string =
+    savedPosition;
+
+  let cancelled = false;
+
+  async function restoreHooWorldFocusState() {
+    try {
+      const parsedPosition:
+        unknown =
+        JSON.parse(
+          savedPositionJson,
+        );
+
+      if (
+        !parsedPosition ||
+        typeof parsedPosition !==
+          "object"
+      ) {
+        return;
+      }
+
+      const position =
+        parsedPosition as {
+          x?: unknown;
+          y?: unknown;
+        };
+
+      const x =
+        Number(
+          position.x,
+        );
+
+      const y =
+        Number(
+          position.y,
+        );
+
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        cancelled
+      ) {
+        return;
+      }
+
+      await updateHooWorldPosition(
+        x,
+        y,
+      );
+
+      if (cancelled) {
+        return;
+      }
+
+      await updateHooWorldStatus(
+        "focusing",
+      );
+    } catch {
+      /*
+       * 손상된 임시 좌표는 무시하고
+       * 기존 Presence 상태를 유지한다.
+       */
+    }
+  }
+
+  void restoreHooWorldFocusState();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  isHooWorldConnected,
+  isHooWorldPresenceConnected,
+  updateHooWorldPosition,
+  updateHooWorldStatus,
+]);
+
+
+
 const today = useMemo(
   () => new Date(),
   [],
 );
+
+
 
 
 /* ─────────────────────────────

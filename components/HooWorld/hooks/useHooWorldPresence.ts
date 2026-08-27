@@ -59,7 +59,29 @@ export type HooWorldPresencePlayer = {
    */
   x?: number;
   y?: number;
+
+  /*
+   * 다른 이용자의 실시간 이동 방향.
+   *
+   * 기존 Presence 세션에는 값이 없을 수 있으므로
+   * optional로 유지한다.
+   */
+  facing?:
+    | "left"
+    | "right"
+    | "up"
+    | "down";
+
+  /*
+   * 현재 캐릭터가 실제로 이동 중인지 여부.
+   *
+   * true  = 걷는 중
+   * false = 정지
+   */
+  moving?: boolean;
 };
+
+
 
 
 type UseHooWorldPresenceOptions = {
@@ -270,15 +292,34 @@ export function useHooWorldPresence({
       null,
     );
 
-  const fieldChannelRef =
-    useRef<RealtimeChannel | null>(
-      null,
-    );
+ const fieldChannelRef =
+  useRef<RealtimeChannel | null>(
+    null,
+  );
 
-  const fieldIdRef =
-    useRef<number | null>(
-      null,
-    );
+/*
+ * 캐릭터 이동은 Presence track과 분리한다.
+ *
+ * Presence:
+ * - 온라인 여부
+ * - 스킨
+ * - 포커스 상태
+ *
+ * Broadcast:
+ * - 실시간 좌표
+ * - 이동 방향
+ * - 이동 중 여부
+ */
+const movementChannelRef =
+  useRef<RealtimeChannel | null>(
+    null,
+  );
+
+const fieldIdRef =
+  useRef<number | null>(
+    null,
+  );
+
 
   const joinedAtRef =
     useRef<string | null>(
@@ -1126,6 +1167,134 @@ export function useHooWorldPresence({
   ]);
 
   /*
+ * HOO WORLD 실시간 이동 전용 Broadcast
+ *
+ * Presence와 이동 스트림을 분리해서
+ * 빠른 좌표 갱신 때문에 Presence 연결이
+ * 과도하게 갱신되지 않도록 한다.
+ */
+useEffect(() => {
+  if (
+    !enabled ||
+    !isConnected ||
+    fieldId === null
+  ) {
+    return;
+  }
+
+  const movementChannel =
+    supabase.channel(
+      `hoo-world-field-${fieldId}-movement`,
+    );
+
+movementChannel.on(
+  "broadcast",
+  {
+    event: "player-move",
+  },
+  ({
+    payload,
+  }: {
+    payload: {
+      userId?: string;
+      x?: number;
+      y?: number;
+      facing?:
+        | "left"
+        | "right"
+        | "up"
+        | "down";
+      moving?: boolean;
+    };
+  }) => {
+    const userId =
+      payload?.userId;
+
+    const x =
+      Number(
+        payload?.x,
+      );
+
+    const y =
+      Number(
+        payload?.y,
+      );
+
+    const facing =
+      payload?.facing;
+
+    const moving =
+      payload?.moving ===
+      true;
+
+    if (
+      !userId ||
+      userId ===
+        userIdRef.current ||
+      !Number.isFinite(x) ||
+      !Number.isFinite(y)
+    ) {
+      return;
+    }
+
+    setPlayers(
+      (currentPlayers) =>
+        currentPlayers.map(
+          (player) =>
+            player.userId ===
+            userId
+              ? {
+                  ...player,
+                  x,
+                  y,
+                  facing:
+                    facing ??
+                    player.facing ??
+                    "down",
+                  moving,
+                }
+              : player,
+        ),
+    );
+  },
+);
+
+
+
+  movementChannel.subscribe(
+    (subscriptionStatus) => {
+      if (
+        subscriptionStatus ===
+        "SUBSCRIBED"
+      ) {
+        movementChannelRef.current =
+          movementChannel;
+      }
+    },
+  );
+
+  return () => {
+    if (
+      movementChannelRef.current ===
+      movementChannel
+    ) {
+      movementChannelRef.current =
+        null;
+    }
+
+    void supabase.removeChannel(
+      movementChannel,
+    );
+  };
+}, [
+  enabled,
+  fieldId,
+  isConnected,
+  supabase,
+]);
+
+
+  /*
    * 닉네임 변경 때문에 Realtime effect 전체를 끊었다가 다시 연결하지 않는다.
    * 이미 연결된 Presence payload만 가볍게 갱신한다.
    */
@@ -1387,166 +1556,105 @@ export function useHooWorldPresence({
     }
   }
 
-  async function updatePosition(
-    x: number,
-    y: number,
+async function updatePosition(
+  x: number,
+  y: number,
+  facing:
+    | "left"
+    | "right"
+    | "up"
+    | "down" = "down",
+  moving = true,
+) {
+  if (
+    !Number.isFinite(x) ||
+    !Number.isFinite(y)
   ) {
-    if (
-      !Number.isFinite(x) ||
-      !Number.isFinite(y)
-    ) {
-      return;
-    }
+    return;
+  }
 
-    const nextX =
-      Math.max(
-        0,
-        Math.min(
-          100,
-          x,
-        ),
-      );
-
-    const nextY =
-      Math.max(
-        0,
-        Math.min(
-          100,
-          y,
-        ),
-      );
-
-    positionRef.current = {
-      x: nextX,
-      y: nextY,
-    };
-
-    if (!enabled) {
-      return;
-    }
-
-    const nextFieldId =
-      fieldIdRef.current;
-
-    const directoryChannel =
-      directoryChannelRef.current;
-
-    const fieldChannel =
-      fieldChannelRef.current;
-
-    if (
-      nextFieldId === null ||
-      !directoryChannel ||
-      !fieldChannel
-    ) {
-      return;
-    }
-
-    const {
-      data: {
-        user,
-      },
-    } =
-      await supabase.auth.getUser();
-
-    if (!user) {
-      return;
-    }
-
-    const [
-      profileResult,
-      operatorSkinResult,
-    ] = await Promise.all([
-      supabase
-        .from("profiles")
-        .select(
-          "hoo_world_accessory_slot",
-        )
-        .eq(
-          "id",
-          user.id,
-        )
-        .maybeSingle(),
-
-      supabase.rpc(
-        "has_hoo_world_operator_skin",
+  const nextX =
+    Math.max(
+      0,
+      Math.min(
+        100,
+        x,
       ),
-    ]);
+    );
 
-    const rawCharacterSlot =
-      Number(
-        profileResult.data
-          ?.hoo_world_accessory_slot,
-      );
+  const nextY =
+    Math.max(
+      0,
+      Math.min(
+        100,
+        y,
+      ),
+    );
 
-    const characterSlot =
-      Number.isInteger(
-        rawCharacterSlot,
-      ) &&
-      rawCharacterSlot >= 1 &&
-      rawCharacterSlot <= 7
-        ? rawCharacterSlot
-        : 4;
+  /*
+   * 현재 클라이언트의 마지막 위치는
+   * 항상 로컬 ref에 즉시 반영한다.
+   *
+   * 이후 포커스모드 전환이나
+   * Presence 상태 갱신에서도
+   * 이 좌표를 그대로 사용할 수 있다.
+   */
+  positionRef.current = {
+    x: nextX,
+    y: nextY,
+  };
 
-    const operatorSkin =
-      operatorSkinResult.error
-        ? false
-        : operatorSkinResult.data ===
-            true;
+  if (!enabled) {
+    return;
+  }
 
-    const now =
-      new Date().toISOString();
+  const movementChannel =
+    movementChannelRef.current;
 
-    const payload:
-      HooWorldPresencePlayer =
-      {
+  const currentUserId =
+    userIdRef.current;
+
+  if (
+    !movementChannel ||
+    !currentUserId
+  ) {
+    return;
+  }
+
+  try {
+    /*
+     * 빠른 이동 상태는 Presence가 아니라
+     * 같은 필드의 Broadcast 채널로 전송한다.
+     *
+     * 좌표 + 방향 + 이동 여부를 함께 보내서
+     * 다른 이용자 화면에서도 같은 움직임을
+     * 재현할 수 있도록 한다.
+     */
+    await movementChannel.send({
+      type: "broadcast",
+      event: "player-move",
+      payload: {
         userId:
-          user.id,
-
-        nickname:
-          nicknameRef.current?.trim() ||
-          user.email?.split(
-            "@",
-          )[0] ||
-          "HOO",
-
-        status:
-          statusRef.current,
-
-        fieldId:
-          nextFieldId,
-
-        joinedAt:
-          joinedAtRef.current ??
-          now,
-
-        onlineAt:
-          now,
-
-        characterSlot,
-
-        operatorSkin,
-
+          currentUserId,
         x:
           nextX,
-
         y:
           nextY,
-      };
-
-    try {
-      await Promise.all([
-        directoryChannel.track(
-          payload,
-        ),
-        fieldChannel.track(
-          payload,
-        ),
-      ]);
-    } catch {
-      setIsConnected(false);
-    }
+        facing,
+        moving,
+      },
+    });
+  } catch {
+    /*
+     * 한 번의 이동 패킷 실패는
+     * 전체 HOO WORLD 연결 실패로 처리하지 않는다.
+     *
+     * 다음 이동 상태 전송에서
+     * 자연스럽게 다시 동기화한다.
+     */
   }
+}
+
 
   return {
     players,

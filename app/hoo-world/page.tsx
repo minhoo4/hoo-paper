@@ -783,11 +783,6 @@ export default function HooWorldPage() {
   ] = useState(false);
 
   const [
-    isEnteringFocusMode,
-    setIsEnteringFocusMode,
-  ] = useState(false);
-
-  const [
     selectedAccessoryId,
     setSelectedAccessoryId,
   ] = useState<string | null>(
@@ -852,79 +847,13 @@ export default function HooWorldPage() {
     );
 
   const {
-    players,
     onlineCount,
     isConnected,
     status,
-    updateStatus,
-    updatePosition,
   } = useHooWorldPresence({
     enabled: true,
     nickname,
   });
-
-  /*
-   * 다른 이용자는 Presence에 연결되어 있기만 하면
-   * /hoo-world 페이지를 직접 열지 않았어도 월드에 표시한다.
-   *
-   * 위치는 userId를 기준으로 결정해 새로고침해도
-   * 같은 이용자가 비슷한 위치에 보이도록 한다.
-   */
-  const remotePlayers =
-    useMemo(
-      () =>
-        players.filter(
-          (player) =>
-            player.userId !==
-            currentUserIdRef.current,
-        ),
-      [
-        players,
-      ],
-    );
-
-  function getRemotePlayerPosition(
-    userId: string,
-    index: number,
-  ) {
-    let hash = 0;
-
-    for (
-      let charIndex = 0;
-      charIndex < userId.length;
-      charIndex += 1
-    ) {
-      hash =
-        (
-          hash * 31 +
-          userId.charCodeAt(
-            charIndex,
-          )
-        ) >>>
-        0;
-    }
-
-    const positions = [
-      { x: 39, y: 69 },
-      { x: 47, y: 67 },
-      { x: 55, y: 68 },
-      { x: 63, y: 70 },
-      { x: 35, y: 58 },
-      { x: 45, y: 56 },
-      { x: 56, y: 56 },
-      { x: 65, y: 58 },
-      { x: 43, y: 46 },
-      { x: 58, y: 46 },
-    ];
-
-    return positions[
-      (
-        hash +
-        index
-      ) %
-        positions.length
-    ];
-  }
 
 
   /*
@@ -1054,83 +983,69 @@ export default function HooWorldPage() {
     supabase,
   ]);
 
- async function saveAccessorySlot(
-  accessoryId: string | null,
-) {
-  const userId =
-    currentUserIdRef.current;
-
-  if (!userId) {
-    return;
-  }
-
-  const slotNumber =
-    accessoryId === null
-      ? null
-      : Number(
-          accessoryId,
-        );
-
-  if (
-    slotNumber !== null &&
-    (
-      !Number.isInteger(
-        slotNumber,
-      ) ||
-      slotNumber < 1 ||
-      slotNumber >
-        HOO_WORLD_ACCESSORY_SLOT_COUNT
-    )
+  async function saveAccessorySlot(
+    accessoryId: string | null,
   ) {
-    return;
-  }
+    const userId =
+      currentUserIdRef.current;
 
-  const previousAccessoryId =
-    selectedAccessoryId;
+    if (!userId) {
+      return;
+    }
 
-  setSelectedAccessoryId(
-    accessoryId,
-  );
+    const slotNumber =
+      accessoryId === null
+        ? null
+        : Number(
+            accessoryId,
+          );
 
-  const {
-    error,
-  } =
-    await supabase
-      .from("profiles")
-      .update({
-        hoo_world_accessory_slot:
+    if (
+      slotNumber !== null &&
+      (
+        !Number.isInteger(
           slotNumber,
-      })
-      .eq(
-        "id",
-        userId,
-      );
+        ) ||
+        slotNumber < 1 ||
+        slotNumber >
+          HOO_WORLD_ACCESSORY_SLOT_COUNT
+      )
+    ) {
+      return;
+    }
 
-  if (error) {
-    console.error(
-      "HOO WORLD 이미지 슬롯 저장에 실패했습니다.",
-      error,
-    );
+    const previousAccessoryId =
+      selectedAccessoryId;
 
     setSelectedAccessoryId(
-      previousAccessoryId,
+      accessoryId,
     );
 
-    return;
+    const {
+      error,
+    } =
+      await supabase
+        .from("profiles")
+        .update({
+          hoo_world_accessory_slot:
+            slotNumber,
+        })
+        .eq(
+          "id",
+          userId,
+        );
+
+    if (error) {
+      console.error(
+        "HOO WORLD 이미지 슬롯 저장에 실패했습니다.",
+        error,
+      );
+
+      setSelectedAccessoryId(
+        previousAccessoryId,
+      );
+    }
   }
-
-  /*
-   * DB에 저장된 최신 스킨 슬롯을
-   * 현재 Presence에도 즉시 다시 송출한다.
-   *
-   * 현재 상태(idle/focusing 등)는 유지하면서
-   * characterSlot만 최신값으로 갱신된다.
-   */
-  await updateStatus(
-    status,
-  );
-}
-
 
   /*
    * HOO WORLD 캐릭터 키보드 이동
@@ -2017,80 +1932,6 @@ export default function HooWorldPage() {
       );
     };
   }, []);
-
-  async function enterFocusModeFromHooWorld() {
-    if (isEnteringFocusMode) {
-      return;
-    }
-
-    setIsEnteringFocusMode(true);
-
-    /*
-     * 이동 입력과 RAF를 먼저 정지해서
-     * 포커스 전환 순간의 좌표를 정확하게 고정한다.
-     */
-    movementInputRef.current.left = false;
-    movementInputRef.current.right = false;
-    movementInputRef.current.up = false;
-    movementInputRef.current.down = false;
-
-    if (
-      movementFrameRef.current !== null
-    ) {
-      cancelAnimationFrame(
-        movementFrameRef.current,
-      );
-
-      movementFrameRef.current = null;
-    }
-
-    previousMovementTimeRef.current = 0;
-
-    const currentPosition = {
-      x: playerPositionRef.current.x,
-      y: playerPositionRef.current.y,
-    };
-
-    try {
-      /*
-       * 월드에서 멈춘 위치를 Presence에 먼저 확정한 뒤
-       * focusing 상태로 전환한다.
-       */
-      await updatePosition(
-        currentPosition.x,
-        currentPosition.y,
-      );
-
-      await updateStatus(
-        "focusing",
-      );
-
-      /*
-       * 메인 페이지와 FocusMode가
-       * 같은 좌표/진입 요청을 이어받는다.
-       */
-      window.sessionStorage.setItem(
-        "hoo-world-focus-position",
-        JSON.stringify(
-          currentPosition,
-        ),
-      );
-
-      window.sessionStorage.setItem(
-        "hoo-world-open-focus",
-        "true",
-      );
-
-      window.location.assign("/");
-    } catch (error) {
-      console.error(
-        "HOO WORLD 포커스모드 연결에 실패했습니다.",
-        error,
-      );
-
-      setIsEnteringFocusMode(false);
-    }
-  }
 
   return (
     <main className="relative h-[100dvh] min-h-[640px] w-full overflow-hidden bg-[#7fa75d] text-[#2d3329]">
@@ -3373,64 +3214,6 @@ export default function HooWorldPage() {
       <div className="pointer-events-none absolute inset-0 z-[70] opacity-[0.045] mix-blend-multiply [background-image:radial-gradient(circle_at_20%_30%,#5b674d_0_0.7px,transparent_0.9px),radial-gradient(circle_at_70%_40%,#ffffff_0_0.8px,transparent_1px),radial-gradient(circle_at_45%_78%,#6f634c_0_0.6px,transparent_0.9px)] [background-size:11px_13px,17px_15px,23px_19px]" />
 
       {/* ─────────────────────────
-          다른 HOO WORLD 이용자
-          권한을 수락하고 Presence에 연결된 이용자는
-          메인/포커스 화면에 있어도 이곳에 표시된다.
-      ───────────────────────── */}
-
-      {remotePlayers.map(
-        (
-          remotePlayer,
-          index,
-        ) => {
-          const position =
-            getRemotePlayerPosition(
-              remotePlayer.userId,
-              index,
-            );
-
-          return (
-            <div
-              key={
-                remotePlayer.userId
-              }
-              className="pointer-events-none absolute left-0 top-0 z-20"
-              style={{
-                transform: `translate3d(${position.x}vw, ${position.y}vh, 0) translate(-50%, -50%)`,
-              }}
-            >
-              <div
-                className="origin-center"
-                style={{
-                  transform:
-                    "scale(0.58)",
-                }}
-              >
-                <HooWorldPlayer
-                  nickname={
-                    remotePlayer.nickname
-                  }
-                  status={
-                    remotePlayer.status
-                  }
-                  facing="down"
-                  characterSlot={
-                    remotePlayer.characterSlot ??
-                    4
-                  }
-                  operatorSkin={
-                    remotePlayer.operatorSkin ===
-                    true
-                  }
-                  accessoryIds={[]}
-                />
-              </div>
-            </div>
-          );
-        },
-      )}
-
-      {/* ─────────────────────────
           내 캐릭터
       ───────────────────────── */}
 
@@ -3675,31 +3458,6 @@ export default function HooWorldPage() {
           </div>
         </div>
       </header>
-
-      <button
-        type="button"
-        onClick={() => {
-          void enterFocusModeFromHooWorld();
-        }}
-        disabled={
-          isEnteringFocusMode
-        }
-        className="absolute bottom-5 right-5 z-50 flex h-12 items-center gap-2 rounded-2xl border border-white/35 bg-[#1d2f24]/88 px-5 text-sm font-black text-white shadow-[0_8px_24px_rgba(20,35,24,0.28)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-[#294132] disabled:cursor-wait disabled:opacity-60 sm:bottom-6 sm:right-6"
-        aria-label="포커스모드 시작"
-      >
-        <span
-          aria-hidden="true"
-          className="text-base"
-        >
-          💻
-        </span>
-
-        <span>
-          {isEnteringFocusMode
-            ? "연결 중..."
-            : "포커스모드"}
-        </span>
-      </button>
 
       <div className="absolute bottom-4 left-1/2 z-40 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/35 bg-black/55 px-5 py-2.5 text-[11px] font-black text-white shadow-lg backdrop-blur-xl sm:text-xs">
         {status ===
