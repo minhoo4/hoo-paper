@@ -15938,11 +15938,23 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
        * HOO WORLD에서 Focus Mode로 이동한 직후
        * FocusMode 초기화 과정에서 false가 먼저 발생할 수 있다.
        *
-       * 실제 running=true가 한 번 확인되기 전까지는
-       * 이 false를 집중 종료로 취급하지 않는다.
+       * 이 시점에는 부모의 Presence 복원 effect보다
+       * FocusMode 내부의 초기 false 이벤트가 먼저 올 수 있다.
+       *
+       * sessionStorage의 handoff 자체가 살아 있다면
+       * 아직 running=true를 받지 않았더라도
+       * 절대로 집중 종료로 처리하지 않는다.
+       *
+       * 여기서 idle 처리/좌표 삭제를 해버리면
+       * 메인 Presence가 기본 리스폰 좌표로 연결되면서
+       * 다른 이용자 화면에 10초가량 늦게 나타나거나
+       * 리스폰 위치에서 "집중 중"으로 보일 수 있다.
        */
       if (
-        hooWorldFocusPendingRef.current &&
+        (
+          hasFocusHandoff ||
+          hooWorldFocusPendingRef.current
+        ) &&
         !hooWorldFocusActiveRef.current
       ) {
         return;
