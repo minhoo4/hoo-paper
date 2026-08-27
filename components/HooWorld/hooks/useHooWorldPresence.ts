@@ -1024,6 +1024,37 @@ const fieldIdRef =
         nextFieldId,
       );
 
+      /*
+       * 새 필드 채널의 SUBSCRIBED를 기다리기 전에
+       * directory Presence에 먼저 현재 사용자를 등록한다.
+       *
+       * 기존 구조에서는 field subscribe가 느리거나 재연결 중이면
+       * directory.track()도 함께 늦어져서,
+       * 새로 HOO WORLD에 들어온 이용자가
+       * 이미 포커스 중인 이용자를 온라인 목록에서 보지 못할 수 있었다.
+       *
+       * directory에는 x/y/status/facing/moving까지 포함된
+       * durable snapshot을 먼저 올려 둔다.
+       * 따라서 늦게 입장한 이용자도 첫 directory sync에서
+       * 포커스 중 이용자와 마지막 좌표를 바로 받을 수 있다.
+       */
+      const payload =
+        await makePayload(
+          nextFieldId,
+        );
+
+      if (
+        !payload ||
+        !active ||
+        !directoryChannel
+      ) {
+        return false;
+      }
+
+      await directoryChannel.track(
+        payload,
+      );
+
       const nextChannel =
         supabase.channel(
           `hoo-world-field-${nextFieldId}`,
@@ -1287,23 +1318,13 @@ const fieldIdRef =
         return false;
       }
 
-      const payload =
-        await makePayload(
-          nextFieldId,
-        );
-
-      if (!payload) {
-        return false;
-      }
-
-      await Promise.all([
-        directoryChannel.track(
-          payload,
-        ),
-        nextChannel.track(
-          payload,
-        ),
-      ]);
+      /*
+       * directory에는 위에서 이미 같은 payload를 등록했다.
+       * field Presence에는 채널 구독이 완료된 뒤 동일 snapshot을 등록한다.
+       */
+      await nextChannel.track(
+        payload,
+      );
 
       if (
         active &&
