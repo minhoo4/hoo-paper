@@ -7,11 +7,18 @@ import {
   useRef,
   useState,
 } from "react";
+
 import { createPortal } from "react-dom";
 import FocusMode from "@/components/FocusMode/FocusMode";
+
 import HooCommunityPanel from "@/components/HooCommunityPanel";
 
+import {
+  useHooWorldPresence,
+} from "@/components/HooWorld/hooks/useHooWorldPresence";
+
 import BackgroundSettings from "@/components/BackgroundSettings";
+
 import PushNotificationButton from "./PushNotificationButton";
 
 import Hoo2048Game from "@/components/Hoo2048Game";
@@ -810,24 +817,51 @@ export default function Home() {
     [],
   );
 
-  const [
-    isLoggedIn,
-    setIsLoggedIn,
-  ] = useState(false);
+ const [
+  isLoggedIn,
+  setIsLoggedIn,
+] = useState(false);
 
-  const [
-    loggedInNickname,
-    setLoggedInNickname,
-  ] = useState<string | null>(
-    null,
-  );
+const [
+  loggedInNickname,
+  setLoggedInNickname,
+] = useState<string | null>(
+  null,
+);
 
-  const [
-    profileImageUrl,
-    setProfileImageUrl,
-  ] = useState<string | null>(
-    null,
-  );
+const [
+  profileImageUrl,
+  setProfileImageUrl,
+] = useState<string | null>(
+  null,
+);
+
+/*
+ * HOO WORLD 권한 설정
+ *
+ * null  = 로그인/권한 확인 중
+ * true  = HOO WORLD 권한 수락
+ * false = HOO WORLD 권한 미수락
+ *
+ * 권한을 수락한 사용자는 /hoo-world 페이지에
+ * 직접 들어가지 않아도 Presence에 계속 존재한다.
+ */
+const [
+  isHooWorldConnected,
+  setIsHooWorldConnected,
+] = useState<boolean | null>(null);
+
+const [
+  isHooWorldJoinPromptOpen,
+  setIsHooWorldJoinPromptOpen,
+] = useState(false);
+
+const HOO_WORLD_PERMISSION_KEY =
+  "hoo-world-permission";
+
+const HOO_WORLD_PROMPT_DISABLED_KEY =
+  "hoo-world-prompt-disabled";
+
 
   useEffect(() => {
     let cancelled = false;
@@ -934,14 +968,115 @@ export default function Home() {
       cancelled = true;
       subscription.unsubscribe();
     };
-  }, [
-    supabase,
-  ]);
 
-  const today = useMemo(
-    () => new Date(),
-    [],
+
+ }, [
+  supabase,
+]);
+
+/* ─────────────────────────────
+   HOO WORLD 권한 상태
+───────────────────────────── */
+
+useEffect(() => {
+  if (!isLoggedIn) {
+    setIsHooWorldConnected(null);
+    setIsHooWorldJoinPromptOpen(false);
+    return;
+  }
+
+  const savedPermission =
+    window.localStorage.getItem(
+      HOO_WORLD_PERMISSION_KEY,
+    );
+
+  if (savedPermission === "accepted") {
+    setIsHooWorldConnected(true);
+    setIsHooWorldJoinPromptOpen(false);
+    return;
+  }
+
+  const promptDisabled =
+    window.localStorage.getItem(
+      HOO_WORLD_PROMPT_DISABLED_KEY,
+    ) === "true";
+
+  if (
+    savedPermission === "declined" ||
+    promptDisabled
+  ) {
+    setIsHooWorldConnected(false);
+    setIsHooWorldJoinPromptOpen(false);
+    return;
+  }
+
+  setIsHooWorldConnected(null);
+  setIsHooWorldJoinPromptOpen(true);
+}, [isLoggedIn]);
+
+function handleJoinHooWorld() {
+  window.localStorage.setItem(
+    HOO_WORLD_PERMISSION_KEY,
+    "accepted",
   );
+
+  window.localStorage.removeItem(
+    HOO_WORLD_PROMPT_DISABLED_KEY,
+  );
+
+  setIsHooWorldConnected(true);
+  setIsHooWorldJoinPromptOpen(false);
+}
+
+function handleSkipHooWorld() {
+  setIsHooWorldConnected(false);
+  setIsHooWorldJoinPromptOpen(false);
+}
+
+function handleDisableHooWorldPrompt() {
+  window.localStorage.setItem(
+    HOO_WORLD_PERMISSION_KEY,
+    "declined",
+  );
+
+  window.localStorage.setItem(
+    HOO_WORLD_PROMPT_DISABLED_KEY,
+    "true",
+  );
+
+  setIsHooWorldConnected(false);
+  setIsHooWorldJoinPromptOpen(false);
+}
+
+/*
+ * HOO WORLD 실시간 Presence
+ *
+ * isHooWorldConnected가 true일 때만
+ * Supabase Realtime 채널에 접속한다.
+ */
+const {
+  players: hooWorldPlayers,
+  onlineCount: hooWorldOnlineCount,
+  isConnected:
+    isHooWorldPresenceConnected,
+  status: hooWorldStatus,
+  updateStatus:
+    updateHooWorldStatus,
+  updatePosition:
+    updateHooWorldPosition,
+} = useHooWorldPresence({
+  enabled:
+    isHooWorldConnected === true,
+
+  nickname:
+    loggedInNickname,
+});
+
+const today = useMemo(
+  () => new Date(),
+  [],
+);
+
 
 /* ─────────────────────────────
    프로필 닉네임 실시간 반영
@@ -13617,7 +13752,7 @@ setSecretPinInput("");
               </button>
             </article>
 
-            {/* HOO BUBBLE 카드 */}
+                      {/* HOO BUBBLE 카드 */}
             <article className="relative z-20 order-5 flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#59634e] bg-[#141713] p-4 text-white shadow-sm sm:rounded-[28px] sm:p-6">
               <div className="pointer-events-none absolute inset-0 opacity-[0.08] [background-image:repeating-linear-gradient(0deg,transparent,transparent_5px,#dfe7d2_6px)]" />
 
@@ -13630,6 +13765,7 @@ setSecretPinInput("");
                   <p className="text-[11px] font-black tracking-[0.16em] text-[#aab59a]">
                     CLASSIC BUBBLE ACTION
                   </p>
+
                   <h3 className="font-mono text-2xl font-black tracking-[0.06em] text-white">
                     HOO BUBBLE
                   </h3>
@@ -13638,19 +13774,30 @@ setSecretPinInput("");
 
               <div className="relative mt-4 space-y-3 rounded-2xl border border-[#aab59a]/20 bg-black/25 p-4 sm:mt-6">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-bold text-white/45">주인공</span>
+                  <span className="text-xs font-bold text-white/45">
+                    주인공
+                  </span>
+
                   <strong className="text-right text-sm font-black text-[#dfe7d2]">
                     하찮은 두 발 도마뱀
                   </strong>
                 </div>
+
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-bold text-white/45">조작 방식</span>
+                  <span className="text-xs font-bold text-white/45">
+                    조작 방식
+                  </span>
+
                   <strong className="text-right text-sm font-black text-white">
                     4방향 · 버블 발사
                   </strong>
                 </div>
+
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-bold text-white/45">플레이</span>
+                  <span className="text-xs font-bold text-white/45">
+                    플레이
+                  </span>
+
                   <strong className="text-right text-sm font-black text-white">
                     버블 포획 · 연속 스테이지
                   </strong>
@@ -13671,6 +13818,79 @@ setSecretPinInput("");
                 className="relative z-30 mt-auto w-full touch-manipulation rounded-2xl border border-[#cfd8c2]/60 bg-[#59634e] py-3.5 font-mono text-sm font-black tracking-[0.08em] text-white transition hover:scale-[1.02] hover:bg-[#6b765e] active:scale-[0.98]"
               >
                 HOO BUBBLE 플레이
+              </button>
+            </article>
+
+            {/* HOO WORLD 카드 */}
+            <article className="relative order-6 flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#b8d6aa] bg-gradient-to-b from-[#f5fbef] to-[#e3f0d8] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
+              <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/45" />
+              <div className="pointer-events-none absolute -bottom-12 -left-8 h-36 w-36 rounded-full bg-[#bdd9aa]/30" />
+
+              <div className="relative flex items-center gap-4">
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[#b8d6aa] bg-white/80 text-3xl shadow-sm">
+                  🏡
+                </span>
+
+                <div>
+                  <p className="text-[11px] font-black tracking-[0.16em] text-[#79906d]">
+                    HEALING LIFE WORLD
+                  </p>
+
+                  <h3 className="text-2xl font-black text-[#34452f]">
+                    HOO WORLD
+                  </h3>
+                </div>
+              </div>
+
+              <p className="relative mt-5 text-sm font-bold leading-6 text-[#6c8063]">
+                나만의 작은 집을 꾸미고,
+                다른 이용자들과 함께 머무는
+                HOO의 생활 공간입니다.
+              </p>
+
+              <div className="relative mt-5 space-y-3 rounded-2xl border border-white/70 bg-white/65 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-[#84977b]">
+                    현재 접속
+                  </span>
+
+                  <strong className="text-sm font-black text-[#40553a]">
+                    {isHooWorldPresenceConnected
+                      ? `${hooWorldOnlineCount}명`
+                      : "오프라인"}
+                  </strong>
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-[#84977b]">
+                    콘텐츠
+                  </span>
+
+                  <strong className="text-right text-sm font-black text-[#40553a]">
+                    하우징 · 생활 · 멀티
+                  </strong>
+                </div>
+
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-xs font-bold text-[#84977b]">
+                    성장
+                  </span>
+
+                  <strong className="text-right text-sm font-black text-[#40553a]">
+                    HOO COIN
+                  </strong>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href =
+                    "/hoo-world";
+                }}
+                className="relative z-10 mt-auto w-full rounded-2xl border border-[#8fb27f] bg-[#6f9360] py-3.5 text-sm font-black tracking-[0.06em] text-white transition hover:scale-[1.02] hover:bg-[#628653] active:scale-[0.98]"
+              >
+                HOO WORLD 입장
               </button>
             </article>
 
@@ -15286,9 +15506,45 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
           </>
         )}
       </div>
-    </section>
+       </section>
   )}
 </div>
+
+{isHooWorldConnected === true && (
+  <button
+    type="button"
+    onClick={() => {
+      window.location.href =
+        "/hoo-world";
+    }}
+    className="fixed right-4 top-4 z-[10020] rounded-2xl border border-white/20 bg-black/65 px-4 py-3 text-left text-white shadow-xl backdrop-blur-xl transition hover:bg-black/75 active:scale-[0.98] sm:right-6 sm:top-6"
+  >
+    <div className="flex items-center gap-2">
+      <span
+        className={`h-2.5 w-2.5 rounded-full ${
+          isHooWorldPresenceConnected
+            ? "bg-emerald-400"
+            : "bg-amber-400"
+        }`}
+      />
+
+      <div>
+        <p className="text-[10px] font-black tracking-[0.16em] text-white/60">
+          HOO WORLD
+        </p>
+
+        <p className="mt-0.5 text-sm font-bold">
+          {isHooWorldPresenceConnected
+            ? `온라인 ${hooWorldOnlineCount}명`
+            : "접속 중..."}
+        </p>
+      </div>
+    </div>
+  </button>
+)}
+
+
+
 <FocusMode
   isLoggedIn={
     isLoggedIn
@@ -15354,13 +15610,159 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
   floatingButtonsTarget={
     floatingButtonsTarget
   }
+
+  onFocusRunningChange={(
+    isRunning,
+  ) => {
+    if (
+      isHooWorldConnected !== true
+    ) {
+      return;
+    }
+
+    void (async () => {
+      /*
+       * HOO WORLD에서 포커스모드로 넘어온 경우:
+       * 실제 집중 타이머가 시작되는 순간
+       * 월드에서 멈춘 위치를 먼저 Presence에 복원한다.
+       */
+      if (isRunning) {
+        const savedPosition =
+          window.sessionStorage.getItem(
+            "hoo-world-focus-position",
+          );
+
+        if (savedPosition) {
+          try {
+            const parsedPosition:
+              unknown =
+              JSON.parse(
+                savedPosition,
+              );
+
+            if (
+              parsedPosition &&
+              typeof parsedPosition ===
+                "object"
+            ) {
+              const position =
+                parsedPosition as {
+                  x?: unknown;
+                  y?: unknown;
+                };
+
+              const x =
+                Number(position.x);
+
+              const y =
+                Number(position.y);
+
+              if (
+                Number.isFinite(x) &&
+                Number.isFinite(y)
+              ) {
+                await updateHooWorldPosition(
+                  x,
+                  y,
+                );
+              }
+            }
+          } catch {
+            /*
+             * 임시 저장 좌표가 손상된 경우에는
+             * 기존 Presence 위치를 그대로 사용한다.
+             */
+          }
+        }
+      }
+
+      await updateHooWorldStatus(
+        isRunning
+          ? "focusing"
+          : "idle",
+      );
+
+      /*
+       * 포커스모드가 종료되거나 중단되면
+       * 이번 전환에 사용한 임시 좌표는 정리한다.
+       */
+      if (!isRunning) {
+        window.sessionStorage.removeItem(
+          "hoo-world-focus-position",
+        );
+      }
+    })();
+  }}
 />
-  
 
 
 
+{isLoggedIn &&
+  isHooWorldJoinPromptOpen && (
+    <div className="fixed inset-0 z-[20000] flex items-center justify-center bg-black/65 px-4 backdrop-blur-sm">
+      <section className="w-full max-w-[430px] rounded-[30px] border border-white/20 bg-[#17171c]/95 p-6 text-white shadow-[0_30px_100px_rgba(0,0,0,0.55)]">
+        <div className="text-center">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-[#7467d8] text-3xl shadow-[0_12px_35px_rgba(116,103,216,0.4)]">
+            🏡
+          </div>
 
-    <style jsx global>{`
+          <p className="mt-5 text-[11px] font-black tracking-[0.2em] text-[#a99eff]">
+            HOO WORLD
+          </p>
+
+          <h2 className="mt-2 text-2xl font-black">
+            HOO WORLD에 접속할까요?
+          </h2>
+
+          <p className="mt-3 text-sm font-semibold leading-6 text-white/65">
+            접속하면 다른 이용자들과 같은 공간에서
+            함께 시간을 보낼 수 있어요.
+          </p>
+
+          <p className="mt-2 text-sm font-semibold leading-6 text-white/65">
+            포커스모드를 시작하면 캐릭터도 자리에 앉아
+            함께 집중하기 시작합니다.
+          </p>
+        </div>
+
+        <div className="mt-7 space-y-2">
+          <button
+            type="button"
+            onClick={handleJoinHooWorld}
+            className="min-h-13 w-full rounded-2xl bg-[#7467d8] px-5 py-3.5 text-sm font-black text-white transition hover:bg-[#6659c8] active:scale-[0.98]"
+          >
+            HOO WORLD 접속하기
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSkipHooWorld}
+            className="min-h-13 w-full rounded-2xl border border-white/15 bg-white/10 px-5 py-3.5 text-sm font-bold text-white transition hover:bg-white/15 active:scale-[0.98]"
+          >
+            이번에는 접속하지 않기
+          </button>
+
+          <button
+            type="button"
+            onClick={
+              handleDisableHooWorldPrompt
+            }
+            className="w-full px-4 py-3 text-xs font-semibold text-white/45 transition hover:text-white/75"
+          >
+            다음부터 묻지 않기
+          </button>
+        </div>
+
+        <p className="mt-3 text-center text-[11px] leading-5 text-white/35">
+          이 설정은 나중에 HOO WORLD에서
+          언제든 다시 변경할 수 있습니다.
+        </p>
+      </section>
+    </div>
+  )}
+
+<style jsx global>{`
+
       /*
        * HOO Dark Translucent UI
        * 패널 배경만 어둡게 투명해지고 글자·버튼·윤곽선은 항상 선명합니다.

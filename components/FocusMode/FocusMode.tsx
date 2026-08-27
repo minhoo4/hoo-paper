@@ -100,6 +100,14 @@ type FocusModeProps = {
     x: number;
     y: number;
   };
+
+  onFocusRunningChange?: (
+    isRunning: boolean,
+  ) => void;
+
+  onFocusModeActiveChange?: (
+    isActive: boolean,
+  ) => void;
 };
 
 
@@ -139,7 +147,10 @@ export default function FocusMode({
   floatingButtonsDirection,
   showFloatingButtons,
   floatingButtonsTarget,
+  onFocusRunningChange,
+  onFocusModeActiveChange,
 }: FocusModeProps) {
+
 
 
   const supabase = useMemo(
@@ -286,6 +297,40 @@ const [
 
 const [isRunning, setIsRunning] =
   useState(false);
+
+useEffect(() => {
+  onFocusRunningChange?.(
+    isRunning,
+  );
+}, [
+  isRunning,
+  onFocusRunningChange,
+]);
+
+useEffect(() => {
+  const shouldOpenFromHooWorld =
+    window.sessionStorage.getItem(
+      "hoo-world-open-focus",
+    ) === "true";
+
+  const isFocusModeActive =
+    shouldOpenFromHooWorld ||
+    (
+      isOpen &&
+      view === "setup"
+    ) ||
+    isRunning;
+
+  onFocusModeActiveChange?.(
+    isFocusModeActive,
+  );
+}, [
+  isOpen,
+  view,
+  isRunning,
+  onFocusModeActiveChange,
+]);
+
 
   const [
     quickMemoInput,
@@ -1066,6 +1111,31 @@ function handleProfileLauncherClick() {
     setView("setup");
   }
 
+  /*
+   * HOO WORLD에서 포커스모드 버튼을 눌러 메인으로 돌아온 경우
+   * FocusMode를 즉시 연다.
+   *
+   * sessionStorage를 사용하므로 일반적인 메인화면 진입에는
+   * 영향을 주지 않고, 한 번 처리한 요청은 바로 삭제한다.
+   */
+  useEffect(() => {
+    const shouldOpenFromHooWorld =
+      window.sessionStorage.getItem(
+        "hoo-world-open-focus",
+      ) === "true";
+
+    if (!shouldOpenFromHooWorld) {
+      return;
+    }
+
+    window.sessionStorage.removeItem(
+      "hoo-world-open-focus",
+    );
+
+    setIsOpen(true);
+    setView("setup");
+  }, []);
+
  function closeFocusMode() {
   setIsOpen(false);
   setIsRunning(false);
@@ -1462,42 +1532,111 @@ function handleProfileLauncherClick() {
   }
 
   function saveFocusHistory(
-    actualSeconds: number,
-  ) {
-    const safeActualSeconds =
-      Math.max(
-        0,
-        Math.min(
-          initialSeconds,
-          Math.floor(actualSeconds),
-        ),
-      );
+  actualSeconds: number,
+) {
+  const safeActualSeconds =
+    Math.max(
+      0,
+      Math.min(
+        initialSeconds,
+        Math.floor(actualSeconds),
+      ),
+    );
 
-    if (safeActualSeconds < 1) {
-      return false;
-    }
-
-    try {
-      saveFocusHistoryRecord({
-        goal: trimmedGoal,
-        plannedSeconds:
-          initialSeconds,
-        actualSeconds:
-          safeActualSeconds,
-        startedAt:
-          focusStartedAt,
-      });
-
-      return true;
-    } catch (error) {
-      console.error(
-        "집중 기록 저장 실패",
-        error,
-      );
-
-      return false;
-    }
+  if (safeActualSeconds < 1) {
+    return false;
   }
+
+  try {
+    saveFocusHistoryRecord({
+      goal: trimmedGoal,
+      plannedSeconds:
+        initialSeconds,
+      actualSeconds:
+        safeActualSeconds,
+      startedAt:
+        focusStartedAt,
+    });
+
+    /*
+     * 로그인한 이용자의 집중시간을
+     * 후코인 서버 보상 시스템으로 전달한다.
+     *
+     * 10분(600초)당 후코인 1개.
+     *
+     * 실제 코인 지급과 중복 방지는
+     * 서버 API에서 최종 검증한다.
+     */
+    if (
+      isLoggedIn &&
+      focusStartedAt
+    ) {
+      void fetch(
+        "/api/hoo-coins/focus",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+
+          body: JSON.stringify({
+            startedAt:
+              focusStartedAt,
+
+            actualSeconds:
+              safeActualSeconds,
+          }),
+        },
+      )
+        .then(async (response) => {
+          if (!response.ok) {
+            const message =
+              await response.text();
+
+            throw new Error(
+              message ||
+                "후코인 지급 요청 실패",
+            );
+          }
+
+          return response.json();
+        })
+        .then((result) => {
+          window.dispatchEvent(
+            new CustomEvent(
+              "hoo-coin-updated",
+              {
+                detail: result,
+              },
+            ),
+          );
+        })
+        .catch((error) => {
+          /*
+           * 후코인 지급 실패가
+           * 기존 포커스 기록 저장을
+           * 방해하지 않도록 분리한다.
+           */
+          console.error(
+            "포커스 후코인 지급 실패:",
+            error,
+          );
+        });
+    }
+
+    return true;
+  } catch (error) {
+    console.error(
+      "집중 기록 저장 실패",
+      error,
+    );
+
+    return false;
+  }
+}
+
 
  function toggleTimer() {
   if (isRunning) {
