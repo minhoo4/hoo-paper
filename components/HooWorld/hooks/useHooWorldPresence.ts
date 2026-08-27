@@ -98,6 +98,148 @@ const HOO_WORLD_FIELD_CAPACITY = 25;
 const HOO_WORLD_DIRECTORY_CHANNEL =
   "hoo-world-directory";
 
+const HOO_WORLD_FOCUS_POSITION_KEY =
+  "hoo-world-focus-position";
+
+const HOO_WORLD_FOCUS_OPEN_KEY =
+  "hoo-world-open-focus";
+
+const HOO_WORLD_FOCUS_FIELD_KEY =
+  "hoo-world-focus-field-id";
+
+const HOO_WORLD_FOCUS_FACING_KEY =
+  "hoo-world-focus-facing";
+
+type HooWorldFocusHandoff = {
+  x: number;
+  y: number;
+  fieldId?: number;
+  facing?:
+    | "left"
+    | "right"
+    | "up"
+    | "down";
+};
+
+type HooWorldMovementSnapshot = {
+  joinedAt: string;
+  x: number;
+  y: number;
+  facing:
+    | "left"
+    | "right"
+    | "up"
+    | "down";
+  moving: boolean;
+};
+
+function readHooWorldFocusHandoff():
+  HooWorldFocusHandoff | null {
+  if (
+    typeof window === "undefined" ||
+    window.sessionStorage.getItem(
+      HOO_WORLD_FOCUS_OPEN_KEY,
+    ) !== "true"
+  ) {
+    return null;
+  }
+
+  const savedPosition =
+    window.sessionStorage.getItem(
+      HOO_WORLD_FOCUS_POSITION_KEY,
+    );
+
+  if (!savedPosition) {
+    return null;
+  }
+
+  try {
+    const parsed:
+      unknown =
+      JSON.parse(
+        savedPosition,
+      );
+
+    if (
+      !parsed ||
+      typeof parsed !== "object"
+    ) {
+      return null;
+    }
+
+    const position =
+      parsed as {
+        x?: unknown;
+        y?: unknown;
+      };
+
+    const x =
+      Number(
+        position.x,
+      );
+
+    const y =
+      Number(
+        position.y,
+      );
+
+    if (
+      !Number.isFinite(x) ||
+      !Number.isFinite(y)
+    ) {
+      return null;
+    }
+
+    const rawFieldId =
+      Number(
+        window.sessionStorage.getItem(
+          HOO_WORLD_FOCUS_FIELD_KEY,
+        ),
+      );
+
+    const storedFacing =
+      window.sessionStorage.getItem(
+        HOO_WORLD_FOCUS_FACING_KEY,
+      );
+
+    const facing:
+      HooWorldFocusHandoff["facing"] =
+      storedFacing === "left" ||
+      storedFacing === "right" ||
+      storedFacing === "up" ||
+      storedFacing === "down"
+        ? storedFacing
+        : undefined;
+
+    return {
+      x: Math.max(
+        0,
+        Math.min(
+          100,
+          x,
+        ),
+      ),
+      y: Math.max(
+        0,
+        Math.min(
+          100,
+          y,
+        ),
+      ),
+      fieldId:
+        Number.isInteger(
+          rawFieldId,
+        ) &&
+        rawFieldId >= 1
+          ? rawFieldId
+          : undefined,
+      facing,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function normalizePresencePlayers(
   presenceState: HooWorldPresenceState,
 ): HooWorldPresencePlayer[] {
@@ -342,6 +484,43 @@ const fieldIdRef =
       y: 78,
     });
 
+  /*
+   * Broadcast는 과거 메시지를 새 입장자에게 재전송하지 않는다.
+   * 따라서 방향/정지 상태도 Presence에 남길 수 있도록
+   * 현재 이동 스냅샷을 ref에 보관한다.
+   */
+  const facingRef =
+    useRef<
+      | "left"
+      | "right"
+      | "up"
+      | "down"
+    >("down");
+
+  const movingRef =
+    useRef(false);
+
+  /*
+   * HOO WORLD -> Focus Mode 전환 때 사용하던 필드.
+   * 페이지가 바뀌어 훅이 다시 생성되어도 같은 필드로 복귀한다.
+   */
+  const preferredFieldIdRef =
+    useRef<number | null>(
+      null,
+    );
+
+  /*
+   * Presence sync가 느린 좌표로 최신 Broadcast 좌표를
+   * 되돌리지 못하도록 원격 이동 스냅샷을 보관한다.
+   */
+  const movementSnapshotByUserRef =
+    useRef(
+      new Map<
+        string,
+        HooWorldMovementSnapshot
+      >(),
+    );
+
   const nicknameRef =
     useRef<string | null>(
       nickname,
@@ -367,7 +546,48 @@ const fieldIdRef =
       fieldIdRef.current =
         null;
 
+      preferredFieldIdRef.current =
+        null;
+
+      movementSnapshotByUserRef.current.clear();
+
       return;
+    }
+
+    /*
+     * HOO WORLD에서 Focus Mode로 넘어온 경우
+     * Realtime 연결보다 먼저 마지막 월드 좌표와 focusing 상태를 복원한다.
+     *
+     * 첫 Presence payload부터 정확한 좌표/focusing으로 송출되므로
+     * 기본 리스폰 좌표(50, 78)를 잠깐 거치는 현상을 막는다.
+     */
+    const focusHandoff =
+      readHooWorldFocusHandoff();
+
+    if (focusHandoff) {
+      positionRef.current = {
+        x: focusHandoff.x,
+        y: focusHandoff.y,
+      };
+
+      statusRef.current =
+        "focusing";
+
+      setStatus(
+        "focusing",
+      );
+
+      movingRef.current =
+        false;
+
+      if (focusHandoff.facing) {
+        facingRef.current =
+          focusHandoff.facing;
+      }
+
+      preferredFieldIdRef.current =
+        focusHandoff.fieldId ??
+        null;
     }
 
     let active = true;
@@ -698,6 +918,10 @@ const fieldIdRef =
         operatorSkin,
         x: positionRef.current.x,
         y: positionRef.current.y,
+        facing:
+          facingRef.current,
+        moving:
+          movingRef.current,
       };
     }
 
@@ -781,7 +1005,7 @@ const fieldIdRef =
             return;
           }
 
-          const nextPlayers =
+          const presencePlayers =
             normalizePresencePlayers(
               nextChannel.presenceState<
                 HooWorldPresencePlayer
@@ -790,6 +1014,73 @@ const fieldIdRef =
               (player) =>
                 player.fieldId ===
                 nextFieldId,
+            );
+
+          const activeUserIds =
+            new Set(
+              presencePlayers.map(
+                (player) =>
+                  player.userId,
+              ),
+            );
+
+          for (
+            const userId of
+            movementSnapshotByUserRef.current.keys()
+          ) {
+            if (
+              !activeUserIds.has(
+                userId,
+              )
+            ) {
+              movementSnapshotByUserRef.current.delete(
+                userId,
+              );
+            }
+          }
+
+          /*
+           * 동일 joinedAt 세션에서 이미 Broadcast 좌표를 받았다면
+           * 느린 Presence sync가 최신 위치를 과거 좌표로 되돌리지 않는다.
+           *
+           * joinedAt이 바뀐 경우에는 재접속한 새 세션이므로
+           * 이전 Broadcast 스냅샷을 버리고 새 Presence를 사용한다.
+           */
+          const nextPlayers =
+            presencePlayers.map(
+              (player) => {
+                const snapshot =
+                  movementSnapshotByUserRef.current.get(
+                    player.userId,
+                  );
+
+                if (!snapshot) {
+                  return player;
+                }
+
+                if (
+                  snapshot.joinedAt !==
+                  player.joinedAt
+                ) {
+                  movementSnapshotByUserRef.current.delete(
+                    player.userId,
+                  );
+
+                  return player;
+                }
+
+                return {
+                  ...player,
+                  x:
+                    snapshot.x,
+                  y:
+                    snapshot.y,
+                  facing:
+                    snapshot.facing,
+                  moving:
+                    snapshot.moving,
+                };
+              },
             );
 
           setPlayers(
@@ -1063,14 +1354,34 @@ const fieldIdRef =
         const directoryPlayers =
           getDirectoryPlayers();
 
-        const initialFieldId =
-          findAvailableFieldId(
+        const preferredFieldId =
+          preferredFieldIdRef.current;
+
+        const fieldCounts =
+          countPlayersByField(
             directoryPlayers,
-            {
-              excludeUserId:
-                user.id,
-            },
+            user.id,
           );
+
+        const canUsePreferredField =
+          preferredFieldId !== null &&
+          (
+            fieldCounts.get(
+              preferredFieldId,
+            ) ?? 0
+          ) <
+            HOO_WORLD_FIELD_CAPACITY;
+
+        const initialFieldId =
+          canUsePreferredField
+            ? preferredFieldId
+            : findAvailableFieldId(
+                directoryPlayers,
+                {
+                  excludeUserId:
+                    user.id,
+                },
+              );
 
         const joined =
           await joinField(
@@ -1238,8 +1549,41 @@ movementChannel.on(
     }
 
     setPlayers(
-      (currentPlayers) =>
-        currentPlayers.map(
+      (currentPlayers) => {
+        const currentPlayer =
+          currentPlayers.find(
+            (player) =>
+              player.userId ===
+              userId,
+          );
+
+        if (!currentPlayer) {
+          return currentPlayers;
+        }
+
+        const resolvedFacing:
+          | "left"
+          | "right"
+          | "up"
+          | "down" =
+          facing ??
+          currentPlayer.facing ??
+          "down";
+
+        movementSnapshotByUserRef.current.set(
+          userId,
+          {
+            joinedAt:
+              currentPlayer.joinedAt,
+            x,
+            y,
+            facing:
+              resolvedFacing,
+            moving,
+          },
+        );
+
+        return currentPlayers.map(
           (player) =>
             player.userId ===
             userId
@@ -1248,13 +1592,12 @@ movementChannel.on(
                   x,
                   y,
                   facing:
-                    facing ??
-                    player.facing ??
-                    "down",
+                    resolvedFacing,
                   moving,
                 }
               : player,
-        ),
+        );
+      },
     );
   },
 );
@@ -1390,6 +1733,12 @@ movementChannel.on(
 
           y:
             positionRef.current.y,
+
+          facing:
+            facingRef.current,
+
+          moving:
+            movingRef.current,
         };
 
       try {
@@ -1429,6 +1778,14 @@ movementChannel.on(
     statusRef.current =
       nextStatus;
 
+    if (
+      nextStatus ===
+      "focusing"
+    ) {
+      movingRef.current =
+        false;
+    }
+
     if (!enabled) {
       return;
     }
@@ -1448,6 +1805,46 @@ movementChannel.on(
       !fieldChannel
     ) {
       return;
+    }
+
+    /*
+     * 페이지 전환 후 새 훅이 첫 Presence부터 같은 필드와 방향을 사용하도록
+     * Focus Mode handoff 메타데이터를 세션에 보관한다.
+     */
+    if (
+      typeof window !==
+      "undefined"
+    ) {
+      if (
+        nextStatus ===
+        "focusing"
+      ) {
+        preferredFieldIdRef.current =
+          nextFieldId;
+
+        window.sessionStorage.setItem(
+          HOO_WORLD_FOCUS_FIELD_KEY,
+          String(
+            nextFieldId,
+          ),
+        );
+
+        window.sessionStorage.setItem(
+          HOO_WORLD_FOCUS_FACING_KEY,
+          facingRef.current,
+        );
+      } else {
+        preferredFieldIdRef.current =
+          null;
+
+        window.sessionStorage.removeItem(
+          HOO_WORLD_FOCUS_FIELD_KEY,
+        );
+
+        window.sessionStorage.removeItem(
+          HOO_WORLD_FOCUS_FACING_KEY,
+        );
+      }
     }
 
     const {
@@ -1540,6 +1937,12 @@ movementChannel.on(
 
         y:
           positionRef.current.y,
+
+        facing:
+          facingRef.current,
+
+        moving:
+          movingRef.current,
       };
 
     try {
@@ -1551,6 +1954,37 @@ movementChannel.on(
           payload,
         ),
       ]);
+
+      /*
+       * 이미 월드에 있는 이용자는 Broadcast로 즉시 정지 좌표를 받는다.
+       * Presence sync를 기다리지 않고 포커스 시작 지점에서 바로 멈춘다.
+       */
+      if (
+        nextStatus ===
+        "focusing"
+      ) {
+        const movementChannel =
+          movementChannelRef.current;
+
+        if (movementChannel) {
+          await movementChannel.send({
+            type: "broadcast",
+            event: "player-move",
+            payload: {
+              userId:
+                user.id,
+              x:
+                positionRef.current.x,
+              y:
+                positionRef.current.y,
+              facing:
+                facingRef.current,
+              moving:
+                false,
+            },
+          });
+        }
+      }
     } catch {
       setIsConnected(false);
     }
@@ -1603,6 +2037,12 @@ async function updatePosition(
     x: nextX,
     y: nextY,
   };
+
+  facingRef.current =
+    facing;
+
+  movingRef.current =
+    moving;
 
   if (!enabled) {
     return;
