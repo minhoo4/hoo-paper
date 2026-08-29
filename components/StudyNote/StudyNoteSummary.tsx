@@ -929,11 +929,18 @@ export default function StudyNoteSummary() {
   return (
     <article className="flex h-[660px] min-h-[660px] max-h-[660px] min-w-0 flex-col overflow-hidden rounded-[30px] border border-white/20 bg-[#15171d]/95 text-white shadow-[0_25px_80px_rgba(0,0,0,0.34)] backdrop-blur-xl">
       <header className="shrink-0 border-b border-white/10 px-6 py-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+        <div className="relative min-h-[72px]">
+          <div
+            className={`min-w-0 ${
+              summaryView === "home"
+                ? "pr-[210px]"
+                : "pr-[96px]"
+            }`}
+          >
             <p className="text-[10px] font-black tracking-[0.18em] text-[#8f91a8]">
               HOO STUDY NOTE
             </p>
+
             <h2 className="mt-1 truncate text-[22px] font-black tracking-[-0.04em] text-white">
               후터디노트 정리본
             </h2>
@@ -954,18 +961,33 @@ export default function StudyNoteSummary() {
                 {summaryView === "reader" && selectedNote && (
                   <>
                     <span>›</span>
-                    <span className="max-w-[130px] truncate">{selectedNote.title}</span>
+                    <span className="max-w-[130px] truncate">
+                      {selectedNote.title}
+                    </span>
                   </>
                 )}
               </div>
             )}
           </div>
 
-          {summaryView !== "home" && (
+          {summaryView === "home" ? (
+            <a
+              href="/study-note"
+              style={{
+                position: "absolute",
+                right: 0,
+                top: "50%",
+                transform: "translateY(-50%)",
+              }}
+              className="shrink-0 rounded-xl border border-white/80 bg-white/5 px-8 py-5 text-[15px] font-black text-white shadow-[0_10px_30px_rgba(0,0,0,0.2)] transition hover:bg-white/10 active:scale-95"
+            >
+              HOO노트 입장
+            </a>
+          ) : (
             <button
               type="button"
               onClick={goBack}
-              className="shrink-0 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-[10px] font-black text-white/80 transition hover:bg-white/15"
+              className="absolute right-0 top-0 shrink-0 rounded-full border border-white/10 bg-white/10 px-4 py-2 text-[10px] font-black text-white/80 transition hover:bg-white/15"
             >
               ← 뒤로가기
             </button>
