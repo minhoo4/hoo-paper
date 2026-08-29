@@ -4,7 +4,7 @@
   "short_name": "HOO터디 노트",
   "description": "HOO 계정과 연동되는 설치형 HOO터디 노트",
   "start_url": "/study-note",
-  "scope": "/study-note/",
+  "scope": "/study-note",
   "display": "standalone",
   "background_color": "#111316",
   "theme_color": "#111316",
