@@ -105,6 +105,19 @@ export default function PwaInstallButton() {
       const promptEvent =
         event as BeforeInstallPromptEvent;
 
+      /*
+       * 중요:
+       * beforeinstallprompt 이벤트가 발생했다고 해서
+       * 여기서 곧바로 prompt()를 실행하면 안 된다.
+       *
+       * 메인 HOO -> /study-note 이동 과정에서 사용자의
+       * 클릭 권한(user activation)이 끊기기 때문에
+       * 브라우저가 자동 설치창 호출을 차단할 수 있다.
+       *
+       * 따라서 설치 이벤트만 보관하고,
+       * 사용자가 /study-note의 "Hoo노트 설치" 버튼을
+       * 직접 눌렀을 때 installStudyNote()에서 prompt()를 실행한다.
+       */
       setInstallPrompt(
         promptEvent,
       );
@@ -116,56 +129,16 @@ export default function PwaInstallButton() {
           false,
         );
 
-        const shouldInstallImmediately =
+        if (
           new URLSearchParams(
             window.location.search,
-          ).get("install") === "1";
-
-        if (
-          shouldInstallImmediately
+          ).get("install") === "1"
         ) {
-          /*
-           * 메인 HOO 화면의 "Hoo노트 설치"에서 넘어온 경우
-           * /study-note 도착 즉시 전용 설치 프롬프트를 실행한다.
-           *
-           * 브라우저가 자동 프롬프트를 허용하지 않는 환경에서는
-           * 기존 Hoo노트 설치 버튼이 그대로 남아 수동 설치가 가능하다.
-           */
           window.history.replaceState(
             {},
             "",
             "/study-note",
           );
-
-          void (async () => {
-            try {
-              await promptEvent.prompt();
-
-              const choice =
-                await promptEvent.userChoice;
-
-              if (
-                choice.outcome ===
-                "accepted"
-              ) {
-                window.localStorage.setItem(
-                  HOO_STUDY_NOTE_INSTALLED_KEY,
-                  "true",
-                );
-
-                setIsStudyNoteInstalled(
-                  true,
-                );
-              }
-            } catch (error) {
-              console.warn(
-                "HOO터디 노트 자동 설치 프롬프트 실행 실패:",
-                error,
-              );
-            } finally {
-              setInstallPrompt(null);
-            }
-          })();
         }
 
         return;
