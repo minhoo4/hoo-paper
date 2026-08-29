@@ -18,6 +18,7 @@ import {
 } from "@/components/HooWorld/hooks/useHooWorldPresence";
 
 import BackgroundSettings from "@/components/BackgroundSettings";
+import StudyNoteSummary from "@/components/StudyNote/StudyNoteSummary";
 
 import PushNotificationButton from "./PushNotificationButton";
 
@@ -478,16 +479,6 @@ function parseDateKey(dateKey: string) {
   };
 }
 
-function formatTimer(totalSeconds: number) {
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  return [hours, minutes, seconds]
-    .map((value) => String(value).padStart(2, "0"))
-    .join(":");
-}
-
 const SCHEDULE_STICKER_COLORS: Array<{
   value: ScheduleStickerColor;
   label: string;
@@ -878,89 +869,150 @@ const HOO_WORLD_PROMPT_DISABLED_KEY =
 
   useEffect(() => {
     let cancelled = false;
+    let loadSequence = 0;
 
     async function loadLoginProfile() {
+      const currentSequence = ++loadSequence;
+
       try {
         const {
-          data: {
-            session,
-          },
+          data: { session },
           error: sessionError,
-        } =
-          await supabase.auth.getSession();
+        } = await supabase.auth.getSession();
 
-        if (sessionError) {
-          throw sessionError;
-        }
-
-        const user =
-          session?.user ?? null;
-
-        if (!user) {
-          if (!cancelled) {
-            setIsLoggedIn(false);
-            setLoggedInNickname(null);
-            setProfileImageUrl(null);
-          }
-
+        if (
+          cancelled ||
+          currentSequence !== loadSequence
+        ) {
           return;
         }
+
+        if (sessionError) {
+          console.warn(
+            "로그인 세션 확인에 실패했습니다.",
+            {
+              message: sessionError.message,
+              name: sessionError.name,
+            },
+          );
+
+          setIsLoggedIn(false);
+          setLoggedInNickname(null);
+          setProfileImageUrl(null);
+          return;
+        }
+
+        const user = session?.user ?? null;
+
+        if (!user) {
+          setIsLoggedIn(false);
+          setLoggedInNickname(null);
+          setProfileImageUrl(null);
+          return;
+        }
+
+        /*
+         * 세션이 확인된 순간부터 로그인 상태는 유지한다.
+         * profiles 조회 실패가 전체 로그인 실패로 번지지 않게 한다.
+         */
+        setIsLoggedIn(true);
+
+        const fallbackNickname =
+          user.email?.split("@")[0] ??
+          "MY PROFILE";
+
+        setLoggedInNickname(
+          fallbackNickname,
+        );
+
+        setProfileImageUrl(null);
 
         const {
           data: profile,
           error: profileError,
-        } =
-          await supabase
-            .from("profiles")
-            .select(
-              `
-                nickname,
-                profile_image_url
-              `,
-            )
-            .eq(
-              "id",
-              user.id,
-            )
-            .maybeSingle();
+        } = await supabase
+          .from("profiles")
+          .select(
+            `
+              nickname,
+              profile_image_url
+            `,
+          )
+          .eq(
+            "id",
+            user.id,
+          )
+          .maybeSingle();
 
-        if (profileError) {
-          throw profileError;
-        }
-
-        if (cancelled) {
+        if (
+          cancelled ||
+          currentSequence !== loadSequence
+        ) {
           return;
         }
 
-        setIsLoggedIn(true);
+        /*
+         * profile row가 없거나 일시적으로 조회에 실패해도
+         * Supabase Auth 세션 자체는 유효하므로 로그아웃 처리하지 않는다.
+         */
+        if (profileError) {
+          console.warn(
+            "프로필 정보를 불러오지 못해 로그인 기본값을 사용합니다.",
+            {
+              message: profileError.message,
+              code: profileError.code,
+              details: profileError.details,
+              hint: profileError.hint,
+            },
+          );
+          return;
+        }
 
         setLoggedInNickname(
           typeof profile?.nickname ===
             "string" &&
-            profile.nickname.trim()
+          profile.nickname.trim()
             ? profile.nickname.trim()
-            : user.email?.split("@")[0] ??
-                "MY PROFILE",
+            : fallbackNickname,
         );
 
         setProfileImageUrl(
           typeof profile?.profile_image_url ===
             "string" &&
-            profile.profile_image_url.trim()
+          profile.profile_image_url.trim()
             ? profile.profile_image_url.trim()
             : null,
         );
-      } catch (error) {
-        console.error(
-          "로그인 사용자 정보를 불러오지 못했습니다.",
-          error,
-        );
-
-        if (!cancelled) {
-          setIsLoggedIn(false);
-          setLoggedInNickname(null);
-          setProfileImageUrl(null);
+      } catch (error: unknown) {
+        if (
+          cancelled ||
+          currentSequence !== loadSequence
+        ) {
+          return;
         }
+
+        const loginError = error as {
+          message?: string;
+          code?: string;
+          details?: string;
+          hint?: string;
+        };
+
+        /*
+         * 개발 모드 전체 화면 오류 오버레이를 피하고
+         * 로그인 UI는 가능한 기존/기본 상태를 유지한다.
+         */
+        console.warn(
+          "로그인 사용자 정보 확인 중 문제가 발생했습니다.",
+          {
+            message:
+              loginError?.message ??
+              "알 수 없는 로그인 프로필 오류",
+            code: loginError?.code ?? "",
+            details: loginError?.details ?? "",
+            hint: loginError?.hint ?? "",
+          },
+        );
       }
     }
 
@@ -979,13 +1031,12 @@ const HOO_WORLD_PROMPT_DISABLED_KEY =
 
     return () => {
       cancelled = true;
+      loadSequence += 1;
       subscription.unsubscribe();
     };
-
-
- }, [
-  supabase,
-]);
+  }, [
+    supabase,
+  ]);
 
 /* ─────────────────────────────
    HOO WORLD 권한 상태
@@ -1893,22 +1944,6 @@ useEffect(() => {
   const [editingMemoId, setEditingMemoId] = useState<
     string | null
   >(null);
-
-  /* 타이머 */
-
-  const [timerHours, setTimerHours] = useState(0);
-  const [timerMinutes, setTimerMinutes] = useState(0);
-  const [timerSeconds, setTimerSeconds] = useState(0);
-
-  const [timerRemaining, setTimerRemaining] =
-    useState(0);
-
-  const [timerInitialSeconds, setTimerInitialSeconds] =
-    useState(0);
-
-  const [isTimerRunning, setIsTimerRunning] =
-    useState(false);
-
 
 /* 미니게임 화면 */
 
@@ -8272,35 +8307,6 @@ useEffect(() => {
   }, [favorites, isLoaded]);
 
   /* ─────────────────────────────
-     타이머 작동
-  ───────────────────────────── */
-
-  useEffect(() => {
-    if (!isTimerRunning) {
-      return;
-    }
-
-    const timerInterval = window.setInterval(() => {
-      setTimerRemaining((previousSeconds) => {
-     if (previousSeconds <= 1) {
-  window.clearInterval(timerInterval);
-  setIsTimerRunning(false);
-
-  playTimerAlarm();
-
-  return 0;
-}
-
-        return previousSeconds - 1;
-      });
-    }, 1000);
-
-    return () => {
-      window.clearInterval(timerInterval);
-    };
-  }, [isTimerRunning]);
-
-  /* ─────────────────────────────
      스도쿠 타이머
   ───────────────────────────── */
 
@@ -10271,135 +10277,6 @@ function toggleSearchBar() {
         null;
     }, 900);
 }
-  /* ─────────────────────────────
-     타이머
-  ───────────────────────────── */
-
-  function playTimerAlarm() {
-  const AudioContextClass =
-    window.AudioContext ||
-    (
-      window as typeof window & {
-        webkitAudioContext?: typeof AudioContext;
-      }
-    ).webkitAudioContext;
-
-  if (!AudioContextClass) {
-    return;
-  }
-
-  const audioContext = new AudioContextClass();
-
-  function beep(
-    startTime: number,
-    frequency: number,
-    duration: number,
-  ) {
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(
-      frequency,
-      startTime,
-    );
-
-    gainNode.gain.setValueAtTime(0, startTime);
-    gainNode.gain.linearRampToValueAtTime(
-      0.18,
-      startTime + 0.01,
-    );
-    gainNode.gain.linearRampToValueAtTime(
-      0,
-      startTime + duration,
-    );
-
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-
-    oscillator.start(startTime);
-    oscillator.stop(startTime + duration);
-  }
-
-  const now = audioContext.currentTime;
-
-  beep(now, 880, 0.13);
-  beep(now + 0.18, 1100, 0.16);
-
-  window.setTimeout(() => {
-    void audioContext.close();
-  }, 700);
-}
-  function applyTimerSetting() {
-    const safeHours = Math.max(
-      0,
-      Math.min(99, Number(timerHours) || 0),
-    );
-
-    const safeMinutes = Math.max(
-      0,
-      Math.min(59, Number(timerMinutes) || 0),
-    );
-
-    const safeSeconds = Math.max(
-      0,
-      Math.min(59, Number(timerSeconds) || 0),
-    );
-
-    const totalSeconds =
-      safeHours * 3600 +
-      safeMinutes * 60 +
-      safeSeconds;
-
-    setTimerHours(safeHours);
-    setTimerMinutes(safeMinutes);
-    setTimerSeconds(safeSeconds);
-
-    setTimerInitialSeconds(totalSeconds);
-    setTimerRemaining(totalSeconds);
-    setIsTimerRunning(false);
-  }
-
-  function startOrPauseTimer() {
-    if (!isTimerRunning && timerRemaining === 0) {
-      const totalSeconds =
-        timerHours * 3600 +
-        timerMinutes * 60 +
-        timerSeconds;
-
-      if (totalSeconds <= 0) {
-        return;
-      }
-
-      setTimerInitialSeconds(totalSeconds);
-      setTimerRemaining(totalSeconds);
-    }
-
-    setIsTimerRunning((previous) => !previous);
-  }
-
-  function resetTimer() {
-    setIsTimerRunning(false);
-
-    setTimerHours(0);
-    setTimerMinutes(0);
-    setTimerSeconds(0);
-
-    setTimerInitialSeconds(0);
-    setTimerRemaining(0);
-  }
-
-  const timerProgress =
-    timerInitialSeconds > 0
-      ? Math.max(
-          0,
-          Math.min(
-            100,
-            (timerRemaining / timerInitialSeconds) * 100,
-          ),
-        )
-      : 0;
-
   function startSudokuGame(difficulty: SudokuDifficulty) {
       console.log("START SUDOKU:", difficulty);
     const game = generateSudokuGame(difficulty);
@@ -13221,7 +13098,7 @@ setSecretPinInput("");
               </div>
             </section>
 
-            {/* 두 번째 패널: 메모 + 타이머 */}
+            {/* 두 번째 패널: 메모 + 후터디노트 정리본 */}
 
         <section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
              <div className="mx-auto grid w-full max-w-[1380px] items-stretch gap-7 xl:grid-cols-[1.35fr_0.65fr]">
@@ -13432,135 +13309,7 @@ setSecretPinInput("");
                   </div>
                 </article>
 
-                <article className="rounded-[30px] border border-white/55 bg-[#dcd8ff]/90 p-6 shadow-[0_25px_80px_rgba(5,35,26,0.3)] backdrop-blur-xl">
-                  <p className="text-xs font-black tracking-[0.18em] text-[#77709c]">
-                    HOO TIMER
-                  </p>
-
-                  <h2 className="mt-1 text-2xl font-black">
-                    자유 타이머
-                  </h2>
-
-                  <div className="mt-7 rounded-[28px] bg-white/75 p-6 text-center shadow-inner">
-                    <p
-                      className={`text-5xl font-black tracking-[0.05em] ${
-                        timerRemaining === 0
-                          ? "text-[#e45e7e]"
-                          : "text-[#4e4767]"
-                      }`}
-                    >
-                      {formatTimer(timerRemaining)}
-                    </p>
-
-                    <div className="mt-5 h-3 overflow-hidden rounded-full bg-[#ddd8ef]">
-                      <div
-                        className="h-full rounded-full bg-[#7467d8] transition-all duration-500"
-                        style={{
-                          width: `${timerProgress}%`,
-                        }}
-                      />
-                    </div>
-
-                    <p className="mt-3 text-xs font-black text-[#8e87a2]">
-                      {timerRemaining === 0
-                        ? "시간이 끝났는!"
-                        : isTimerRunning
-                          ? "타이머가 작동 중이예요."
-                          : "타이머가 잠시 쉬고 있어요."}
-                    </p>
-                  </div>
-
-                  <div className="mt-6 grid grid-cols-3 gap-2">
-                    <label className="text-center">
-                      <span className="text-xs font-black text-[#77709c]">
-                        시
-                      </span>
-
-                      <input
-                        type="number"
-                        min={0}
-                        max={99}
-                        value={timerHours}
-                        disabled={isTimerRunning}
-                        onChange={(event) =>
-                          setTimerHours(
-                            Number(event.target.value),
-                          )
-                        }
-                        className="mt-2 w-full rounded-2xl border border-[#c8c1e9] bg-white/80 px-2 py-3 text-center text-lg font-black outline-none disabled:opacity-50"
-                      />
-                    </label>
-
-                    <label className="text-center">
-                      <span className="text-xs font-black text-[#77709c]">
-                        분
-                      </span>
-
-                      <input
-                        type="number"
-                        min={0}
-                        max={59}
-                        value={timerMinutes}
-                        disabled={isTimerRunning}
-                        onChange={(event) =>
-                          setTimerMinutes(
-                            Number(event.target.value),
-                          )
-                        }
-                        className="mt-2 w-full rounded-2xl border border-[#c8c1e9] bg-white/80 px-2 py-3 text-center text-lg font-black outline-none disabled:opacity-50"
-                      />
-                    </label>
-
-                    <label className="text-center">
-                      <span className="text-xs font-black text-[#77709c]">
-                        초
-                      </span>
-
-                      <input
-                        type="number"
-                        min={0}
-                        max={59}
-                        value={timerSeconds}
-                        disabled={isTimerRunning}
-                        onChange={(event) =>
-                          setTimerSeconds(
-                            Number(event.target.value),
-                          )
-                        }
-                        className="mt-2 w-full rounded-2xl border border-[#c8c1e9] bg-white/80 px-2 py-3 text-center text-lg font-black outline-none disabled:opacity-50"
-                      />
-                    </label>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={applyTimerSetting}
-                    disabled={isTimerRunning}
-                    className="mt-3 w-full rounded-2xl bg-white/80 py-3 text-sm font-black text-[#665e82] transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-45"
-                  >
-                    입력한 시간 적용
-                  </button>
-
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={startOrPauseTimer}
-                      className="rounded-2xl bg-[#7467d8] py-3 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#6255c7]"
-                    >
-                      {isTimerRunning
-                        ? "일시정지"
-                        : "시작"}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={resetTimer}
-                      className="rounded-2xl bg-[#f0edff] py-3 text-sm font-black text-[#665e82] transition hover:scale-[1.02]"
-                    >
-                      초기화
-                    </button>
-                  </div>
-                </article>
+                <StudyNoteSummary />
               </div>
             </section>
 
@@ -14445,7 +14194,7 @@ setSecretPinInput("");
         ? "투두리스트 화면으로 이동"
         : horizontalPage === 1
           ? "캘린더 화면으로 이동"
-          : "메모와 타이머 화면으로 이동"
+          : "메모와 후터디노트 정리본 화면으로 이동"
     }
   >
     <span className="h-0 w-0 border-y-[15px] border-r-[23px] border-y-transparent border-r-white/55 drop-shadow-[0_3px_8px_rgba(0,0,0,0.55)] transition duration-300 group-hover:-translate-x-1 group-hover:border-r-white/95" />
@@ -14461,7 +14210,7 @@ setSecretPinInput("");
       horizontalPage === -1
         ? "캘린더 화면으로 이동"
         : horizontalPage === 0
-          ? "메모와 타이머 화면으로 이동"
+          ? "메모와 후터디노트 정리본 화면으로 이동"
           : "미니게임 화면으로 이동"
     }
   >

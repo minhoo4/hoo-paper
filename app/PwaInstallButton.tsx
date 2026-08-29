@@ -16,6 +16,9 @@ type BeforeInstallPromptEvent =
     }>;
   };
 
+const HOO_STUDY_NOTE_INSTALLED_KEY =
+  "hoo-study-note-installed";
+
 export default function PwaInstallButton() {
   const [
     installPrompt,
@@ -35,7 +38,34 @@ export default function PwaInstallButton() {
     setIsInstalled,
   ] = useState(true);
 
+  const [
+    isStudyNotePage,
+    setIsStudyNotePage,
+  ] = useState(false);
+
+  const [
+    isStudyNoteInstalled,
+    setIsStudyNoteInstalled,
+  ] = useState(true);
+
   useEffect(() => {
+    const currentIsStudyNotePage =
+      window.location.pathname ===
+        "/study-note" ||
+      window.location.pathname.startsWith(
+        "/study-note/",
+      );
+
+    setIsStudyNotePage(
+      currentIsStudyNotePage,
+    );
+
+    setIsStudyNoteInstalled(
+      window.localStorage.getItem(
+        HOO_STUDY_NOTE_INSTALLED_KEY,
+      ) === "true",
+    );
+
     const iosNavigator =
       navigator as Navigator & {
         standalone?: boolean;
@@ -48,7 +78,15 @@ export default function PwaInstallButton() {
       iosNavigator.standalone ===
         true;
 
-    setIsInstalled(standalone);
+    /*
+     * 기존 HOO 설치 여부 판단은 그대로 유지한다.
+     * /study-note에서는 별도의 HOO터디 노트 설치 상태를 사용한다.
+     */
+    setIsInstalled(
+      currentIsStudyNotePage
+        ? false
+        : standalone,
+    );
 
     const userAgent =
       window.navigator.userAgent.toLowerCase();
@@ -68,12 +106,34 @@ export default function PwaInstallButton() {
         event as BeforeInstallPromptEvent,
       );
 
-      setIsInstalled(false);
+      if (
+        currentIsStudyNotePage
+      ) {
+        setIsStudyNoteInstalled(
+          false,
+        );
+      } else {
+        setIsInstalled(false);
+      }
     }
 
     function handleAppInstalled() {
       setInstallPrompt(null);
-      setIsInstalled(true);
+
+      if (
+        currentIsStudyNotePage
+      ) {
+        window.localStorage.setItem(
+          HOO_STUDY_NOTE_INSTALLED_KEY,
+          "true",
+        );
+
+        setIsStudyNoteInstalled(
+          true,
+        );
+      } else {
+        setIsInstalled(true);
+      }
     }
 
     window.addEventListener(
@@ -124,22 +184,109 @@ export default function PwaInstallButton() {
     }
   }
 
+  async function installStudyNote() {
+    /*
+     * 메인 HOO 화면에서는 다른 manifest를 직접 설치할 수 없으므로
+     * HOO터디 노트 전용 manifest가 연결된 /study-note로 이동한다.
+     * 이동한 페이지에서 같은 버튼을 한 번 더 누르면
+     * HOO터디 노트 전용 설치 프롬프트가 열린다.
+     */
+    if (!isStudyNotePage) {
+      window.location.assign(
+        "/study-note?install=1",
+      );
+      return;
+    }
+
+    if (installPrompt) {
+      await installPrompt.prompt();
+
+      const choice =
+        await installPrompt.userChoice;
+
+      if (
+        choice.outcome ===
+        "accepted"
+      ) {
+        window.localStorage.setItem(
+          HOO_STUDY_NOTE_INSTALLED_KEY,
+          "true",
+        );
+
+        setIsStudyNoteInstalled(
+          true,
+        );
+      }
+
+      setInstallPrompt(null);
+      return;
+    }
+
+    if (isIos) {
+      window.alert(
+        "Safari 하단의 공유 버튼을 누른 뒤 ‘홈 화면에 추가’를 선택해주세요.",
+      );
+      return;
+    }
+
+    window.alert(
+      "이 페이지가 완전히 열린 뒤 다시 ‘Hoo노트 설치’를 눌러주세요. 설치 버튼이 계속 나타나지 않으면 브라우저 주소창의 설치 아이콘을 사용해주세요.",
+    );
+  }
+
+  const showHooInstall =
+    !isStudyNotePage &&
+    !isInstalled &&
+    Boolean(
+      installPrompt ||
+        isIos,
+    );
+
+  const showStudyNoteInstall =
+    !isStudyNoteInstalled;
+
   if (
-    isInstalled ||
-    (!installPrompt && !isIos)
+    !showHooInstall &&
+    !showStudyNoteInstall
   ) {
     return null;
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => {
-        void installHoo();
-      }}
-      className="fixed right-3 top-[calc(12px+var(--hoo-safe-top))] z-[10000] min-h-10 rounded-xl border border-white/30 bg-[#7467d8] px-4 py-2 text-xs font-black text-white shadow-xl backdrop-blur-md transition active:scale-95 sm:right-6 sm:top-6 sm:text-sm"
-    >
-      HOO 설치
-    </button>
+    <div className="fixed right-3 top-[calc(132px+var(--hoo-safe-top))] z-[10000] flex w-[112px] flex-col gap-2 sm:right-6 sm:top-[136px]">
+      {showHooInstall ? (
+        <button
+          type="button"
+          onClick={() => {
+            void installHoo();
+          }}
+          className="min-h-10 w-full rounded-xl border border-white/30 bg-[#7467d8] px-3 py-2 text-xs font-black text-white shadow-xl backdrop-blur-md transition active:scale-95 sm:text-sm"
+        >
+          HOO 설치
+        </button>
+      ) : !isStudyNotePage ? (
+        /*
+         * HOO가 이미 설치되어 버튼이 사라진 경우에도
+         * Hoo노트 설치 버튼은 기존 HOO 설치 버튼의
+         * 바로 아래 위치를 유지한다.
+         */
+        <div
+          aria-hidden="true"
+          className="min-h-10 w-full"
+        />
+      ) : null}
+
+      {showStudyNoteInstall && (
+        <button
+          type="button"
+          onClick={() => {
+            void installStudyNote();
+          }}
+          className="min-h-10 w-full rounded-xl border border-white/30 bg-[#7467d8] px-2 py-2 text-[11px] font-black text-white shadow-xl backdrop-blur-md transition active:scale-95 sm:text-xs"
+        >
+          Hoo노트 설치
+        </button>
+      )}
+    </div>
   );
 }
