@@ -102,8 +102,11 @@ export default function PwaInstallButton() {
     ) {
       event.preventDefault();
 
+      const promptEvent =
+        event as BeforeInstallPromptEvent;
+
       setInstallPrompt(
-        event as BeforeInstallPromptEvent,
+        promptEvent,
       );
 
       if (
@@ -112,9 +115,63 @@ export default function PwaInstallButton() {
         setIsStudyNoteInstalled(
           false,
         );
-      } else {
-        setIsInstalled(false);
+
+        const shouldInstallImmediately =
+          new URLSearchParams(
+            window.location.search,
+          ).get("install") === "1";
+
+        if (
+          shouldInstallImmediately
+        ) {
+          /*
+           * 메인 HOO 화면의 "Hoo노트 설치"에서 넘어온 경우
+           * /study-note 도착 즉시 전용 설치 프롬프트를 실행한다.
+           *
+           * 브라우저가 자동 프롬프트를 허용하지 않는 환경에서는
+           * 기존 Hoo노트 설치 버튼이 그대로 남아 수동 설치가 가능하다.
+           */
+          window.history.replaceState(
+            {},
+            "",
+            "/study-note",
+          );
+
+          void (async () => {
+            try {
+              await promptEvent.prompt();
+
+              const choice =
+                await promptEvent.userChoice;
+
+              if (
+                choice.outcome ===
+                "accepted"
+              ) {
+                window.localStorage.setItem(
+                  HOO_STUDY_NOTE_INSTALLED_KEY,
+                  "true",
+                );
+
+                setIsStudyNoteInstalled(
+                  true,
+                );
+              }
+            } catch (error) {
+              console.warn(
+                "HOO터디 노트 자동 설치 프롬프트 실행 실패:",
+                error,
+              );
+            } finally {
+              setInstallPrompt(null);
+            }
+          })();
+        }
+
+        return;
       }
+
+      setIsInstalled(false);
     }
 
     function handleAppInstalled() {
