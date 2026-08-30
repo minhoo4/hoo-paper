@@ -300,27 +300,112 @@ function formatStudyNoteFocusDuration(totalSeconds: number) {
 
 function openStudyNoteDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
-    const request = window.indexedDB.open(STUDY_DB_NAME, STUDY_DB_VERSION);
-
-    request.onupgradeneeded = () => {
-      const database = request.result;
-
+    const ensureStores = (database: IDBDatabase) => {
       if (!database.objectStoreNames.contains(STUDY_NOTE_STORE)) {
-        const store = database.createObjectStore(STUDY_NOTE_STORE, { keyPath: "id" });
-        store.createIndex("updatedAt", "updatedAt", { unique: false });
-        store.createIndex("date", "date", { unique: false });
-        store.createIndex("category", "category", { unique: false });
+        const store = database.createObjectStore(STUDY_NOTE_STORE, {
+          keyPath: "id",
+        });
+        store.createIndex("updatedAt", "updatedAt", {
+          unique: false,
+        });
+        store.createIndex("date", "date", {
+          unique: false,
+        });
+        store.createIndex("category", "category", {
+          unique: false,
+        });
       }
 
       if (!database.objectStoreNames.contains(STUDY_TOMBSTONE_STORE)) {
-        database.createObjectStore(STUDY_TOMBSTONE_STORE, { keyPath: "id" });
+        database.createObjectStore(STUDY_TOMBSTONE_STORE, {
+          keyPath: "id",
+        });
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error ?? new Error("IndexedDB를 열 수 없습니다."));
+    const openDatabase = (
+      version?: number,
+      isRepair = false,
+    ) => {
+      const request =
+        typeof version === "number"
+          ? window.indexedDB.open(
+              STUDY_DB_NAME,
+              version,
+            )
+          : window.indexedDB.open(
+              STUDY_DB_NAME,
+            );
+
+      request.onupgradeneeded = () => {
+        ensureStores(request.result);
+      };
+
+      request.onsuccess = () => {
+        const database = request.result;
+
+        const hasNotesStore =
+          database.objectStoreNames.contains(
+            STUDY_NOTE_STORE,
+          );
+
+        const hasTombstoneStore =
+          database.objectStoreNames.contains(
+            STUDY_TOMBSTONE_STORE,
+          );
+
+        if (
+          hasNotesStore &&
+          hasTombstoneStore
+        ) {
+          resolve(database);
+          return;
+        }
+
+        if (isRepair) {
+          database.close();
+          reject(
+            new Error(
+              "HOO터디 노트 IndexedDB 스토어를 복구하지 못했습니다.",
+            ),
+          );
+          return;
+        }
+
+        const repairVersion =
+          Math.max(
+            database.version + 1,
+            STUDY_DB_VERSION,
+          );
+
+        database.close();
+
+        openDatabase(
+          repairVersion,
+          true,
+        );
+      };
+
+      request.onerror = () =>
+        reject(
+          request.error ??
+            new Error(
+              "IndexedDB를 열 수 없습니다.",
+            ),
+        );
+
+      request.onblocked = () => {
+        console.warn(
+          "HOO터디 노트 IndexedDB 업그레이드가 다른 탭에 의해 대기 중입니다.",
+        );
+      };
+    };
+
+    openDatabase();
   });
 }
+
+
 
 async function loadNotesFromIndexedDb() {
   const database = await openStudyNoteDb();

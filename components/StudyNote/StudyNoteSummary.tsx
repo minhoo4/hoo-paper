@@ -330,10 +330,10 @@ export default function StudyNoteSummary() {
         try {
           const database = await new Promise<IDBDatabase>(
             (resolve, reject) => {
-              const request = window.indexedDB.open(
-                "hoo-study-note-db",
-                3,
-              );
+             const request = window.indexedDB.open(
+  "hoo-study-note-db",
+);
+
 
               request.onsuccess = () =>
                 resolve(request.result);
