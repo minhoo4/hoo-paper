@@ -6947,10 +6947,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
 
     /*
-     * 정리본과 완전히 같은 조회 조건으로 서버 노트를 먼저 가져온다.
-     * 이 함수는 업로드/사진 원본 다운로드와 분리되어 있어서,
-     * 동기화 도중 사진 처리나 upsert가 지연되어도 노트 목록 자체는
-     * 즉시 현재 기기에 복원된다.
+     * HOO 메인 정리본과 같은 조건으로 현재 계정의 활성 노트를 직접 읽는다.
+     * 이 단계는 "서버 -> 현재 기기 복원" 전용이며 업로드와 분리한다.
      */
     const {
       data: remoteRows,
@@ -6985,8 +6983,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
     const currentTombstones =
       await loadStudyNoteTombstones();
 
-    const locallyDeletedIds = new Set(
-      currentTombstones.map((item) => item.id),
+    const tombstoneById = new Map(
+      currentTombstones.map((item) => [
+        item.id,
+        item,
+      ]),
     );
 
     const localById = new Map(
@@ -6997,16 +6998,48 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
 
     const remoteNotes: StudyNoteRecord[] = [];
+    const activeRemoteIds = new Set<string>();
+    const staleTombstoneIds = new Set<string>();
 
     for (const rawRow of remoteRows ?? []) {
       if (
         !rawRow ||
         typeof rawRow.id !== "string" ||
-        !rawRow.id ||
-        locallyDeletedIds.has(rawRow.id)
+        !rawRow.id
       ) {
         continue;
       }
+
+      const remoteUpdatedAt =
+        typeof rawRow.updated_at === "string" &&
+        rawRow.updated_at
+          ? rawRow.updated_at
+          : new Date(0).toISOString();
+
+      /*
+       * 다른 기기에서 이미 살아 있는 서버 노트를 예전 로컬 tombstone이
+       * 영구적으로 가리는 문제를 막는다.
+       *
+       * - 로컬 삭제 시각이 서버 수정 시각보다 더 최신이면 삭제 의도를 유지
+       * - 서버 수정 시각이 같거나 더 최신이면 서버 기록을 복원하고 오래된 tombstone 제거
+       */
+      const localTombstone =
+        tombstoneById.get(rawRow.id);
+
+      if (localTombstone) {
+        const deletedAt =
+          Date.parse(localTombstone.deletedAt) || 0;
+        const serverUpdatedAt =
+          Date.parse(remoteUpdatedAt) || 0;
+
+        if (deletedAt > serverUpdatedAt) {
+          continue;
+        }
+
+        staleTombstoneIds.add(rawRow.id);
+      }
+
+      activeRemoteIds.add(rawRow.id);
 
       const existingLocalNote =
         localById.get(rawRow.id);
@@ -7141,9 +7174,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
           existingLocalImage?.src ?? "";
 
         /*
-         * 최초 목록 복원 단계에서는 큰 Blob을 내려받지 않는다.
-         * private Storage의 signed URL만 만들어 즉시 표시하고,
-         * 기존 syncStudyNotes가 이후 정상적인 로컬 캐시/업로드 처리를 맡는다.
+         * 다른 기기에서는 원본 data URL이 없으므로 Storage의 signed URL을 사용한다.
+         * 사진 URL 생성 실패가 노트 본문 복원을 막지 않도록 개별적으로 처리한다.
          */
         if (!imageSource && storagePath) {
           try {
@@ -7259,18 +7291,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
         });
       }
 
-      const updatedAt =
-        typeof rawRow.updated_at ===
-          "string" &&
-        rawRow.updated_at
-          ? rawRow.updated_at
-          : new Date(0).toISOString();
-
       remoteNotes.push({
         id: rawRow.id,
         date:
           typeof rawRow.note_date ===
-          "string"
+          "string" &&
+          rawRow.note_date
             ? rawRow.note_date
             : getLocalDateValue(),
         title:
@@ -7289,8 +7315,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
             ? nextBlocks
             : [createTextBlock()],
         lastPageHtml,
-        createdAt: updatedAt,
-        updatedAt,
+        createdAt: remoteUpdatedAt,
+        updatedAt: remoteUpdatedAt,
         version: Math.max(
           1,
           Number(rawRow.version) || 1,
@@ -7305,11 +7331,27 @@ export default function StudyNote({ active }: StudyNoteProps) {
       ]),
     );
 
+    const remainingTombstones =
+      currentTombstones.filter(
+        (item) =>
+          !staleTombstoneIds.has(item.id),
+      );
+
+    const remainingTombstoneIds = new Set(
+      remainingTombstones.map(
+        (item) => item.id,
+      ),
+    );
+
     const mergedNotes: StudyNoteRecord[] = [];
     const handledIds = new Set<string>();
 
     for (const localNote of currentLocalNotes) {
-      if (locallyDeletedIds.has(localNote.id)) {
+      if (
+        remainingTombstoneIds.has(
+          localNote.id,
+        )
+      ) {
         continue;
       }
 
@@ -7433,7 +7475,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
     for (const remoteNote of remoteNotes) {
       if (
         handledIds.has(remoteNote.id) ||
-        locallyDeletedIds.has(remoteNote.id)
+        remainingTombstoneIds.has(
+          remoteNote.id,
+        )
       ) {
         continue;
       }
@@ -7447,18 +7491,21 @@ export default function StudyNote({ active }: StudyNoteProps) {
       ),
     );
 
+    /*
+     * 가장 중요:
+     * IndexedDB 저장 성공 여부와 관계없이 서버 노트를 먼저 화면에 띄운다.
+     * 이전 구현은 IndexedDB 저장을 await한 뒤 setNotes를 실행해서,
+     * 로컬 DB 저장 문제가 있으면 정리본에는 있지만 HOO노트에는 0개로 남을 수 있었다.
+     */
     notesRef.current = mergedNotes;
-    await replaceNotesInIndexedDb(
-      mergedNotes,
-    );
-
     setNotes(mergedNotes);
 
     setSelectedNoteId((previousId) => {
       if (
         previousId &&
         mergedNotes.some(
-          (note) => note.id === previousId,
+          (note) =>
+            note.id === previousId,
         )
       ) {
         return previousId;
@@ -7467,11 +7514,48 @@ export default function StudyNote({ active }: StudyNoteProps) {
       return mergedNotes[0]?.id ?? null;
     });
 
-    if (remoteNotes.length > 0) {
-      setSaveLabel(
-        `클라우드 불러옴 · ${remoteNotes.length}개`,
+    setTombstones(
+      remainingTombstones,
+    );
+
+    try {
+      await Promise.all([
+        replaceNotesInIndexedDb(
+          mergedNotes,
+        ),
+        replaceStudyNoteTombstones(
+          remainingTombstones,
+        ),
+      ]);
+    } catch (localSaveError) {
+      console.warn(
+        "HOO터디 노트 클라우드 복원 후 로컬 캐시 저장 실패:",
+        localSaveError,
       );
     }
+
+    if (remoteNotes.length > 0) {
+      setSaveLabel(
+        `클라우드 복원 · ${remoteNotes.length}개`,
+      );
+    } else {
+      setSaveLabel("클라우드 기록 없음");
+    }
+
+    /*
+     * activeRemoteIds는 서버가 실제로 반환한 활성 기록 확인용이다.
+     * 개발자 콘솔에서 현재 계정의 서버 복원 수를 즉시 확인할 수 있다.
+     */
+    console.info(
+      "HOO터디 노트 서버 복원 완료:",
+      {
+        userId: user.id,
+        remoteCount:
+          activeRemoteIds.size,
+        restoredCount:
+          mergedNotes.length,
+      },
+    );
   }
 
   async function syncStudyNotes(
