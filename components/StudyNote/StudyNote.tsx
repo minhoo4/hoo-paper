@@ -977,16 +977,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }, [supabase]);
 
   useEffect(() => {
-    /*
-     * 로컬 hydration과 Supabase 세션 복원이 모두 끝난 뒤에만
-     * 최초 클라우드 동기화를 시작한다.
-     *
-     * 기존에는 isHydrated만 보고 최초 sync를 실행해서,
-     * 페이지 진입 직후 Supabase 세션이 아직 복원되기 전이면
-     * syncStudyNotes()가 "로그인 후 동기화"로 종료될 수 있었다.
-     * 이후 getSession()이 로그인 이메일을 복원해도 이 effect가
-     * 다시 실행되지 않아 다른 기기의 서버 노트가 0개로 남을 수 있었다.
-     */
     if (!isHydrated || !signedInEmail) {
       return;
     }
@@ -996,7 +986,21 @@ export default function StudyNote({ active }: StudyNoteProps) {
         return;
       }
 
-      void syncStudyNotes();
+      /*
+       * 서버 -> 로컬 복원을 먼저 독립적으로 완료한다.
+       * 그 뒤 기존 양방향 sync를 실행하므로 사진 처리나 upsert가
+       * 느려도 서버에 존재하는 노트 목록은 먼저 화면에 나타난다.
+       */
+      void pullStudyNotesFromCloud()
+        .catch((error) => {
+          console.warn(
+            "HOO터디 노트 클라우드 우선 복원 실패:",
+            error,
+          );
+        })
+        .finally(() => {
+          void syncStudyNotes();
+        });
     };
 
     const handleVisibilityChange = () => {
@@ -1005,11 +1009,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
       }
     };
 
-    /*
-     * signedInEmail이 복원되는 순간 다시 실행되므로
-     * 로그인된 새 기기에서도 Supabase -> IndexedDB 병합을
-     * 최초 진입 시 반드시 한 번 수행한다.
-     */
     const initialSyncTimer =
       window.setTimeout(
         syncFromCloud,
@@ -1055,7 +1054,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
       );
     };
 
-    // syncStudyNotes는 notesRef를 사용하므로 함수 자체는 dependency에서 제외한다.
+    // cloud pull/sync 함수는 현재 render의 최신 ref/state를 사용한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHydrated, signedInEmail]);
 
@@ -6926,6 +6925,552 @@ export default function StudyNote({ active }: StudyNoteProps) {
       event.preventDefault();
       event.stopPropagation();
       finishImageResizeMode();
+    }
+  }
+
+  async function pullStudyNotesFromCloud() {
+    if (!navigator.onLine) {
+      return;
+    }
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError) {
+      throw userError;
+    }
+
+    if (!user) {
+      return;
+    }
+
+    /*
+     * 정리본과 완전히 같은 조회 조건으로 서버 노트를 먼저 가져온다.
+     * 이 함수는 업로드/사진 원본 다운로드와 분리되어 있어서,
+     * 동기화 도중 사진 처리나 upsert가 지연되어도 노트 목록 자체는
+     * 즉시 현재 기기에 복원된다.
+     */
+    const {
+      data: remoteRows,
+      error: remoteLoadError,
+    } = await supabase
+      .from("hoo_study_notes")
+      .select(`
+        id,
+        note_date,
+        title,
+        category,
+        blocks,
+        version,
+        updated_at
+      `)
+      .eq("user_id", user.id)
+      .is("deleted_at", null)
+      .order("updated_at", {
+        ascending: false,
+      })
+      .limit(1000);
+
+    if (remoteLoadError) {
+      throw remoteLoadError;
+    }
+
+    const currentLocalNotes =
+      notesRef.current.length > 0
+        ? notesRef.current
+        : await loadNotesFromIndexedDb();
+
+    const currentTombstones =
+      await loadStudyNoteTombstones();
+
+    const locallyDeletedIds = new Set(
+      currentTombstones.map((item) => item.id),
+    );
+
+    const localById = new Map(
+      currentLocalNotes.map((note) => [
+        note.id,
+        note,
+      ]),
+    );
+
+    const remoteNotes: StudyNoteRecord[] = [];
+
+    for (const rawRow of remoteRows ?? []) {
+      if (
+        !rawRow ||
+        typeof rawRow.id !== "string" ||
+        !rawRow.id ||
+        locallyDeletedIds.has(rawRow.id)
+      ) {
+        continue;
+      }
+
+      const existingLocalNote =
+        localById.get(rawRow.id);
+
+      const nextBlocks: StudyBlock[] = [];
+      let lastPageHtml = "";
+
+      const rawBlocks = Array.isArray(
+        rawRow.blocks,
+      )
+        ? rawRow.blocks
+        : [];
+
+      for (const unknownBlock of rawBlocks) {
+        if (
+          !unknownBlock ||
+          typeof unknownBlock !== "object" ||
+          Array.isArray(unknownBlock)
+        ) {
+          continue;
+        }
+
+        const rawBlock =
+          unknownBlock as Record<
+            string,
+            unknown
+          >;
+
+        if (rawBlock.type === "last-page") {
+          lastPageHtml =
+            typeof rawBlock.html === "string"
+              ? rawBlock.html
+              : "";
+          continue;
+        }
+
+        const blockId =
+          typeof rawBlock.id === "string" &&
+          rawBlock.id
+            ? rawBlock.id
+            : crypto.randomUUID();
+
+        if (rawBlock.type === "text") {
+          const annotationRecord =
+            rawBlock.annotation &&
+            typeof rawBlock.annotation ===
+              "object" &&
+            !Array.isArray(
+              rawBlock.annotation,
+            )
+              ? (rawBlock.annotation as Record<
+                  string,
+                  unknown
+                >)
+              : null;
+
+          const annotation =
+            annotationRecord &&
+            (
+              typeof annotationRecord.quote ===
+                "string" ||
+              typeof annotationRecord.text ===
+                "string"
+            )
+              ? {
+                  quote:
+                    typeof annotationRecord.quote ===
+                    "string"
+                      ? annotationRecord.quote
+                      : "",
+                  text:
+                    typeof annotationRecord.text ===
+                    "string"
+                      ? annotationRecord.text
+                      : "",
+                  anchorPercent:
+                    Number.isFinite(
+                      Number(
+                        annotationRecord.anchorPercent,
+                      ),
+                    )
+                      ? Number(
+                          annotationRecord.anchorPercent,
+                        )
+                      : undefined,
+                }
+              : undefined;
+
+          nextBlocks.push({
+            id: blockId,
+            type: "text",
+            html:
+              typeof rawBlock.html === "string"
+                ? rawBlock.html
+                : "",
+            units: Math.max(
+              1,
+              Math.min(
+                PAGE_LINE_LIMIT,
+                Math.floor(
+                  Number(rawBlock.units) || 1,
+                ),
+              ),
+            ),
+            brace: rawBlock.brace === true,
+            annotation,
+          });
+          continue;
+        }
+
+        if (rawBlock.type !== "image") {
+          continue;
+        }
+
+        const storagePath =
+          typeof rawBlock.storagePath ===
+            "string" &&
+          rawBlock.storagePath
+            ? rawBlock.storagePath
+            : undefined;
+
+        const existingLocalImage =
+          existingLocalNote?.blocks.find(
+            (
+              block,
+            ): block is StudyImageBlock =>
+              block.type === "image" &&
+              block.id === blockId,
+          );
+
+        let imageSource =
+          existingLocalImage?.src ?? "";
+
+        /*
+         * 최초 목록 복원 단계에서는 큰 Blob을 내려받지 않는다.
+         * private Storage의 signed URL만 만들어 즉시 표시하고,
+         * 기존 syncStudyNotes가 이후 정상적인 로컬 캐시/업로드 처리를 맡는다.
+         */
+        if (!imageSource && storagePath) {
+          try {
+            const {
+              data: signedImage,
+              error: signedImageError,
+            } = await supabase.storage
+              .from("hoo-study-note-images")
+              .createSignedUrl(
+                storagePath,
+                60 * 60 * 24,
+              );
+
+            if (
+              !signedImageError &&
+              signedImage?.signedUrl
+            ) {
+              imageSource =
+                signedImage.signedUrl;
+            }
+          } catch (imageError) {
+            console.warn(
+              "HOO터디 노트 초기 사진 URL 복원 실패:",
+              {
+                noteId: rawRow.id,
+                blockId,
+                storagePath,
+                error: imageError,
+              },
+            );
+          }
+        }
+
+        const rawSize = rawBlock.size;
+        const size: ImageSize =
+          rawSize === "small" ||
+          rawSize === "medium" ||
+          rawSize === "large"
+            ? rawSize
+            : "medium";
+
+        const rawLayout = rawBlock.layout;
+        const layout:
+          | "block"
+          | "float-right"
+          | "free"
+          | undefined =
+          rawLayout === "block" ||
+          rawLayout === "float-right" ||
+          rawLayout === "free"
+            ? rawLayout
+            : undefined;
+
+        nextBlocks.push({
+          id: blockId,
+          type: "image",
+          src: imageSource,
+          alt:
+            typeof rawBlock.alt === "string"
+              ? rawBlock.alt
+              : "후터디노트 사진",
+          size,
+          units: Math.max(
+            1,
+            Math.min(
+              PAGE_LINE_LIMIT,
+              Math.floor(
+                Number(rawBlock.units) || 4,
+              ),
+            ),
+          ),
+          widthPercent:
+            Number.isFinite(
+              Number(rawBlock.widthPercent),
+            )
+              ? Number(rawBlock.widthPercent)
+              : undefined,
+          aspectRatio:
+            Number.isFinite(
+              Number(rawBlock.aspectRatio),
+            )
+              ? Number(rawBlock.aspectRatio)
+              : undefined,
+          layout,
+          positionXPercent:
+            Number.isFinite(
+              Number(rawBlock.positionXPercent),
+            )
+              ? Number(
+                  rawBlock.positionXPercent,
+                )
+              : undefined,
+          positionYPx:
+            Number.isFinite(
+              Number(rawBlock.positionYPx),
+            )
+              ? Number(rawBlock.positionYPx)
+              : undefined,
+          pageAnchorIndex:
+            Number.isFinite(
+              Number(rawBlock.pageAnchorIndex),
+            )
+              ? Math.max(
+                  0,
+                  Math.floor(
+                    Number(
+                      rawBlock.pageAnchorIndex,
+                    ),
+                  ),
+                )
+              : undefined,
+          storagePath,
+        });
+      }
+
+      const updatedAt =
+        typeof rawRow.updated_at ===
+          "string" &&
+        rawRow.updated_at
+          ? rawRow.updated_at
+          : new Date(0).toISOString();
+
+      remoteNotes.push({
+        id: rawRow.id,
+        date:
+          typeof rawRow.note_date ===
+          "string"
+            ? rawRow.note_date
+            : getLocalDateValue(),
+        title:
+          typeof rawRow.title === "string" &&
+          rawRow.title.trim()
+            ? rawRow.title
+            : "제목 없는 기록",
+        category:
+          typeof rawRow.category ===
+            "string" &&
+          rawRow.category.trim()
+            ? rawRow.category
+            : DEFAULT_CATEGORIES[0],
+        blocks:
+          nextBlocks.length > 0
+            ? nextBlocks
+            : [createTextBlock()],
+        lastPageHtml,
+        createdAt: updatedAt,
+        updatedAt,
+        version: Math.max(
+          1,
+          Number(rawRow.version) || 1,
+        ),
+      });
+    }
+
+    const remoteById = new Map(
+      remoteNotes.map((note) => [
+        note.id,
+        note,
+      ]),
+    );
+
+    const mergedNotes: StudyNoteRecord[] = [];
+    const handledIds = new Set<string>();
+
+    for (const localNote of currentLocalNotes) {
+      if (locallyDeletedIds.has(localNote.id)) {
+        continue;
+      }
+
+      const remoteNote =
+        remoteById.get(localNote.id);
+
+      if (!remoteNote) {
+        mergedNotes.push(localNote);
+        continue;
+      }
+
+      handledIds.add(localNote.id);
+
+      const localVersion = Math.max(
+        1,
+        Number(localNote.version) || 1,
+      );
+      const remoteVersion = Math.max(
+        1,
+        Number(remoteNote.version) || 1,
+      );
+      const localUpdated =
+        Date.parse(localNote.updatedAt) || 0;
+      const remoteUpdated =
+        Date.parse(remoteNote.updatedAt) || 0;
+
+      const localWins =
+        localVersion > remoteVersion ||
+        (
+          localVersion === remoteVersion &&
+          localUpdated > remoteUpdated
+        );
+
+      if (localWins) {
+        const remoteImages = new Map(
+          remoteNote.blocks
+            .filter(
+              (
+                block,
+              ): block is StudyImageBlock =>
+                block.type === "image",
+            )
+            .map((block) => [
+              block.id,
+              block,
+            ]),
+        );
+
+        mergedNotes.push({
+          ...localNote,
+          blocks: localNote.blocks.map(
+            (block) => {
+              if (block.type !== "image") {
+                return block;
+              }
+
+              const remoteImage =
+                remoteImages.get(block.id);
+
+              if (!remoteImage) {
+                return block;
+              }
+
+              return {
+                ...block,
+                src:
+                  block.src ||
+                  remoteImage.src,
+                storagePath:
+                  block.storagePath ??
+                  remoteImage.storagePath,
+              };
+            },
+          ),
+        });
+      } else {
+        const localImages = new Map(
+          localNote.blocks
+            .filter(
+              (
+                block,
+              ): block is StudyImageBlock =>
+                block.type === "image",
+            )
+            .map((block) => [
+              block.id,
+              block,
+            ]),
+        );
+
+        mergedNotes.push({
+          ...remoteNote,
+          blocks: remoteNote.blocks.map(
+            (block) => {
+              if (block.type !== "image") {
+                return block;
+              }
+
+              const localImage =
+                localImages.get(block.id);
+
+              if (!localImage) {
+                return block;
+              }
+
+              return {
+                ...block,
+                src:
+                  block.src ||
+                  localImage.src,
+                storagePath:
+                  block.storagePath ??
+                  localImage.storagePath,
+              };
+            },
+          ),
+        });
+      }
+    }
+
+    for (const remoteNote of remoteNotes) {
+      if (
+        handledIds.has(remoteNote.id) ||
+        locallyDeletedIds.has(remoteNote.id)
+      ) {
+        continue;
+      }
+
+      mergedNotes.push(remoteNote);
+    }
+
+    mergedNotes.sort((first, second) =>
+      second.updatedAt.localeCompare(
+        first.updatedAt,
+      ),
+    );
+
+    notesRef.current = mergedNotes;
+    await replaceNotesInIndexedDb(
+      mergedNotes,
+    );
+
+    setNotes(mergedNotes);
+
+    setSelectedNoteId((previousId) => {
+      if (
+        previousId &&
+        mergedNotes.some(
+          (note) => note.id === previousId,
+        )
+      ) {
+        return previousId;
+      }
+
+      return mergedNotes[0]?.id ?? null;
+    });
+
+    if (remoteNotes.length > 0) {
+      setSaveLabel(
+        `클라우드 불러옴 · ${remoteNotes.length}개`,
+      );
     }
   }
 
