@@ -977,7 +977,17 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }, [supabase]);
 
   useEffect(() => {
-    if (!isHydrated) {
+    /*
+     * 로컬 hydration과 Supabase 세션 복원이 모두 끝난 뒤에만
+     * 최초 클라우드 동기화를 시작한다.
+     *
+     * 기존에는 isHydrated만 보고 최초 sync를 실행해서,
+     * 페이지 진입 직후 Supabase 세션이 아직 복원되기 전이면
+     * syncStudyNotes()가 "로그인 후 동기화"로 종료될 수 있었다.
+     * 이후 getSession()이 로그인 이메일을 복원해도 이 effect가
+     * 다시 실행되지 않아 다른 기기의 서버 노트가 0개로 남을 수 있었다.
+     */
+    if (!isHydrated || !signedInEmail) {
       return;
     }
 
@@ -995,6 +1005,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
       }
     };
 
+    /*
+     * signedInEmail이 복원되는 순간 다시 실행되므로
+     * 로그인된 새 기기에서도 Supabase -> IndexedDB 병합을
+     * 최초 진입 시 반드시 한 번 수행한다.
+     */
     const initialSyncTimer =
       window.setTimeout(
         syncFromCloud,
@@ -1040,9 +1055,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
       );
     };
 
-    // syncStudyNotes는 notesRef를 사용하므로 hydration이 끝난 시점에 한 번만 연결한다.
+    // syncStudyNotes는 notesRef를 사용하므로 함수 자체는 dependency에서 제외한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHydrated]);
+  }, [isHydrated, signedInEmail]);
 
   useEffect(() => {
     const savedSession = window.sessionStorage.getItem(
