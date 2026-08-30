@@ -175,8 +175,6 @@ type RemoteStudyNoteRow = {
   category: string;
   blocks: Array<Record<string, unknown>>;
   version: number;
-  client_updated_at: string;
-  created_at: string;
   updated_at: string;
   deleted_at: string | null;
 };
@@ -7049,8 +7047,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
           category,
           blocks,
           version,
-          client_updated_at,
-          created_at,
           updated_at,
           deleted_at
         `)
@@ -7329,19 +7325,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
         }
 
         const remoteUpdatedAt =
-          typeof row.client_updated_at === "string" &&
-          row.client_updated_at
-            ? row.client_updated_at
-            : typeof row.updated_at === "string" &&
-                row.updated_at
-              ? row.updated_at
-              : new Date().toISOString();
+          typeof row.updated_at === "string" &&
+          row.updated_at
+            ? row.updated_at
+            : new Date().toISOString();
 
         const remoteCreatedAt =
-          typeof row.created_at === "string" &&
-          row.created_at
-            ? row.created_at
-            : remoteUpdatedAt;
+          remoteUpdatedAt;
 
         remoteNotes.push({
           id: noteId,
@@ -7646,8 +7636,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 category: note.category,
                 blocks: remoteBlocks,
                 version: nextVersion,
-                client_updated_at:
-                  note.updatedAt,
                 deleted_at: null,
               },
               { onConflict: "id" },
