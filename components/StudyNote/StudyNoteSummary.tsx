@@ -332,7 +332,7 @@ export default function StudyNoteSummary() {
             (resolve, reject) => {
               const request = window.indexedDB.open(
                 "hoo-study-note-db",
-                2,
+                3,
               );
 
               request.onsuccess = () =>
