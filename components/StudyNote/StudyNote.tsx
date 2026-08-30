@@ -26,6 +26,32 @@ const STUDY_TOMBSTONE_STORE = "tombstones";
 const PAGE_LINE_LIMIT = 29;
 const ROW_HEIGHT = 28;
 
+/*
+ * 편집 페이지의 실제 폭을 브라우저 창 크기와 완전히 분리한다.
+ * 본문 14px + tabular 숫자 기준으로 한 줄의 논리 폭을 정확히 86ch로 고정한다.
+ * 창이 좁아져도 페이지 폭/줄바꿈/사진 좌표는 바뀌지 않고,
+ * 필요한 경우 에디터 viewport에서 가로 스크롤만 생긴다.
+ */
+const PAGE_TEXT_CHARACTER_LIMIT = 86;
+const PAGE_TEXT_FONT_SIZE = 14;
+const PAGE_LEFT_GUTTER = 60;
+const PAGE_RIGHT_GUTTER = 20;
+const PAGE_BORDER_WIDTH = 2;
+const PAGE_HORIZONTAL_FIXED_WIDTH =
+  PAGE_LEFT_GUTTER +
+  PAGE_RIGHT_GUTTER +
+  PAGE_BORDER_WIDTH;
+const PAGE_SHEET_WIDTH =
+  `calc(${PAGE_TEXT_CHARACTER_LIMIT}ch + ${PAGE_HORIZONTAL_FIXED_WIDTH}px)`;
+const EDITOR_SIDE_PANEL_WIDTH = 286;
+const EDITOR_GRID_GAP = 12;
+const EDITOR_CANVAS_WIDTH =
+  `calc(${PAGE_TEXT_CHARACTER_LIMIT}ch + ${
+    PAGE_HORIZONTAL_FIXED_WIDTH +
+    EDITOR_SIDE_PANEL_WIDTH +
+    EDITOR_GRID_GAP
+  }px)`;
+
 const HIGHLIGHT_COLOR = "rgba(255, 224, 92, 0.38)";
 
 const FOCUS_STUDY_NOTE_SESSION_KEY =
@@ -677,8 +703,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
     useRef<HTMLDivElement | null>(null);
   const [editorPageCanvasHeight, setEditorPageCanvasHeight] =
     useState(0);
-  const [editorMaxPageZoom, setEditorMaxPageZoom] =
-    useState(1);
   const [isBoldFormatActive, setIsBoldFormatActive] =
     useState(false);
   const [isItalicFormatActive, setIsItalicFormatActive] =
@@ -953,6 +977,74 @@ export default function StudyNote({ active }: StudyNoteProps) {
       authListener.subscription.unsubscribe();
     };
   }, [supabase]);
+
+  useEffect(() => {
+    if (!isHydrated) {
+      return;
+    }
+
+    const syncFromCloud = () => {
+      if (!navigator.onLine) {
+        return;
+      }
+
+      void syncStudyNotes();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        syncFromCloud();
+      }
+    };
+
+    const initialSyncTimer =
+      window.setTimeout(
+        syncFromCloud,
+        0,
+      );
+
+    window.addEventListener(
+      "focus",
+      syncFromCloud,
+    );
+    window.addEventListener(
+      "pageshow",
+      syncFromCloud,
+    );
+    window.addEventListener(
+      "online",
+      syncFromCloud,
+    );
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange,
+    );
+
+    return () => {
+      window.clearTimeout(
+        initialSyncTimer,
+      );
+      window.removeEventListener(
+        "focus",
+        syncFromCloud,
+      );
+      window.removeEventListener(
+        "pageshow",
+        syncFromCloud,
+      );
+      window.removeEventListener(
+        "online",
+        syncFromCloud,
+      );
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange,
+      );
+    };
+
+    // syncStudyNotes는 notesRef를 사용하므로 hydration이 끝난 시점에 한 번만 연결한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHydrated]);
 
   useEffect(() => {
     const savedSession = window.sessionStorage.getItem(
@@ -1407,24 +1499,14 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
     const clampEditorPageZoom = (
       value: number,
-    ) => {
-      const maximumZoom =
-        Math.min(
-          2.2,
-          Math.max(
-            0.7,
-            editorMaxPageZoom,
-          ),
-        );
-
-      return Math.min(
-        maximumZoom,
+    ) =>
+      Math.min(
+        2.2,
         Math.max(
           0.7,
           Math.round(value * 10) / 10,
         ),
       );
-    };
 
     const changeEditorPageZoom = (
       delta: number,
@@ -1452,9 +1534,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
       }
 
       /*
-       * 브라우저 전체 확대는 막고,
-       * 페이지 + 마지막 페이지가 에디터 화면 안에 들어가는 범위까지만
-       * 노트 캔버스를 확대한다.
+       * 사용자가 직접 요청한 확대/축소만 허용한다.
+       * 브라우저 창 크기가 변했다고 페이지 배율을 자동으로 바꾸지는 않는다.
        */
       event.preventDefault();
 
@@ -1507,9 +1588,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
       }
 
       if (isZoomReset) {
-        setEditorPageZoom(
-          clampEditorPageZoom(1),
-        );
+        setEditorPageZoom(1);
         return;
       }
 
@@ -1547,7 +1626,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }, [
     active,
     viewMode,
-    editorMaxPageZoom,
   ]);
 
   useEffect(() => {
@@ -1558,92 +1636,20 @@ export default function StudyNote({ active }: StudyNoteProps) {
       return;
     }
 
-    const viewport =
-      editorViewportRef.current;
-
     const canvas =
       editorPageCanvasRef.current;
 
-    if (
-      !viewport ||
-      !canvas
-    ) {
+    if (!canvas) {
       return;
     }
 
     const measureCanvas = () => {
+      /*
+       * 페이지의 논리 폭은 절대 건드리지 않는다.
+       * 내용이 늘어날 때 세로 높이만 다시 측정한다.
+       */
       setEditorPageCanvasHeight(
         canvas.offsetHeight,
-      );
-
-      const viewportStyle =
-        window.getComputedStyle(
-          viewport,
-        );
-
-      const paddingLeft =
-        Number.parseFloat(
-          viewportStyle.paddingLeft,
-        ) || 0;
-
-      const paddingRight =
-        Number.parseFloat(
-          viewportStyle.paddingRight,
-        ) || 0;
-
-      /*
-       * 8px의 안전 여백을 남겨 마지막 픽셀에서 가로 스크롤이
-       * 생기는 것도 막는다.
-       */
-      const availableWidth =
-        Math.max(
-          1,
-          viewport.clientWidth -
-            paddingLeft -
-            paddingRight -
-            8,
-        );
-
-      /*
-       * transform은 offsetWidth를 바꾸지 않으므로
-       * canvas.offsetWidth는 항상 100% 기준의 논리 페이지 폭이다.
-       * 이 폭과 현재 화면의 실제 사용 가능 폭을 비교해
-       * "밀림이 시작되기 직전" 배율을 계산한다.
-       */
-      const canvasWidth =
-        Math.max(
-          1,
-          canvas.offsetWidth,
-        );
-
-      const fitZoom =
-        Math.min(
-          2.2,
-          Math.max(
-            0.7,
-            Math.floor(
-              (
-                availableWidth /
-                canvasWidth
-              ) * 100,
-            ) / 100,
-          ),
-        );
-
-      setEditorMaxPageZoom(
-        fitZoom,
-      );
-
-      /*
-       * 브라우저 창을 줄여 현재 배율이 새 최대치를 넘게 되면
-       * 즉시 화면 안에 들어오는 크기로 복귀시킨다.
-       */
-      setEditorPageZoom(
-        (previous) =>
-          Math.min(
-            previous,
-            fitZoom,
-          ),
       );
     };
 
@@ -1654,26 +1660,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
         measureCanvas,
       );
 
-    observer.observe(
-      viewport,
-    );
-
-    observer.observe(
-      canvas,
-    );
-
-    window.addEventListener(
-      "resize",
-      measureCanvas,
-    );
+    observer.observe(canvas);
 
     return () => {
       observer.disconnect();
-
-      window.removeEventListener(
-        "resize",
-        measureCanvas,
-      );
     };
   }, [
     active,
@@ -7042,13 +7032,514 @@ export default function StudyNote({ active }: StudyNoteProps) {
         }
       }
 
+      /*
+       * 중요: 서버 기록을 먼저 내려받아 로컬 기록과 양방향 병합한다.
+       * 기존 코드는 로컬 -> Supabase 업로드만 수행했기 때문에
+       * 다른 컴퓨터에서 작성한 기록을 새 기기로 가져올 수 없었다.
+       */
+      const {
+        data: remoteRows,
+        error: remoteLoadError,
+      } = await supabase
+        .from("hoo_study_notes")
+        .select(`
+          id,
+          note_date,
+          title,
+          category,
+          blocks,
+          version,
+          client_updated_at,
+          created_at,
+          updated_at,
+          deleted_at
+        `)
+        .eq("user_id", userId)
+        .limit(1000);
+
+      if (remoteLoadError) {
+        throw remoteLoadError;
+      }
+
+      const localById = new Map(
+        normalizedLocalNotes.map((note) => [
+          note.id,
+          note,
+        ]),
+      );
+
+      const pendingDeletedIds = new Set(
+        currentTombstones.map((item) => item.id),
+      );
+
+      const serverDeletedIds = new Set<string>();
+      const remoteNotes: StudyNoteRecord[] = [];
+
+      for (const rawRow of remoteRows ?? []) {
+        const row = rawRow as Record<string, unknown>;
+        const noteId =
+          typeof row.id === "string"
+            ? row.id
+            : "";
+
+        if (!noteId) {
+          continue;
+        }
+
+        if (
+          typeof row.deleted_at === "string" &&
+          row.deleted_at.length > 0
+        ) {
+          serverDeletedIds.add(noteId);
+          continue;
+        }
+
+        if (pendingDeletedIds.has(noteId)) {
+          continue;
+        }
+
+        const existingLocalNote =
+          localById.get(noteId);
+
+        const nextBlocks: StudyBlock[] = [];
+        let lastPageHtml = "";
+
+        const rawBlocks = Array.isArray(row.blocks)
+          ? (row.blocks as Array<Record<string, unknown>>)
+          : [];
+
+        for (const rawBlock of rawBlocks) {
+          const blockType = rawBlock.type;
+
+          if (blockType === "last-page") {
+            lastPageHtml =
+              typeof rawBlock.html === "string"
+                ? rawBlock.html
+                : "";
+            continue;
+          }
+
+          const blockId =
+            typeof rawBlock.id === "string" &&
+            rawBlock.id
+              ? rawBlock.id
+              : crypto.randomUUID();
+
+          if (blockType === "text") {
+            const annotationRecord =
+              rawBlock.annotation &&
+              typeof rawBlock.annotation === "object"
+                ? (rawBlock.annotation as Record<string, unknown>)
+                : null;
+
+            const annotation =
+              annotationRecord &&
+              (
+                typeof annotationRecord.quote === "string" ||
+                typeof annotationRecord.text === "string"
+              )
+                ? {
+                    quote:
+                      typeof annotationRecord.quote === "string"
+                        ? annotationRecord.quote
+                        : "",
+                    text:
+                      typeof annotationRecord.text === "string"
+                        ? annotationRecord.text
+                        : "",
+                    anchorPercent:
+                      Number.isFinite(
+                        Number(
+                          annotationRecord.anchorPercent,
+                        ),
+                      )
+                        ? Number(
+                            annotationRecord.anchorPercent,
+                          )
+                        : undefined,
+                  }
+                : undefined;
+
+            nextBlocks.push({
+              id: blockId,
+              type: "text",
+              html:
+                typeof rawBlock.html === "string"
+                  ? rawBlock.html
+                  : "",
+              units: Math.max(
+                1,
+                Math.min(
+                  PAGE_LINE_LIMIT,
+                  Math.floor(
+                    Number(rawBlock.units) || 1,
+                  ),
+                ),
+              ),
+              brace: rawBlock.brace === true,
+              annotation,
+            });
+            continue;
+          }
+
+          if (blockType !== "image") {
+            continue;
+          }
+
+          const storagePath =
+            typeof rawBlock.storagePath === "string" &&
+            rawBlock.storagePath
+              ? rawBlock.storagePath
+              : undefined;
+
+          const existingLocalImage =
+            existingLocalNote?.blocks.find(
+              (
+                block,
+              ): block is StudyImageBlock =>
+                block.type === "image" &&
+                block.id === blockId,
+            );
+
+          let imageSource =
+            existingLocalImage?.src ?? "";
+
+          if (!imageSource && storagePath) {
+            try {
+              const {
+                data: imageBlob,
+                error: downloadError,
+              } = await supabase.storage
+                .from("hoo-study-note-images")
+                .download(storagePath);
+
+              if (!downloadError && imageBlob) {
+                imageSource =
+                  await blobToDataUrl(imageBlob);
+              } else {
+                const {
+                  data: signedImage,
+                  error: signedImageError,
+                } = await supabase.storage
+                  .from("hoo-study-note-images")
+                  .createSignedUrl(
+                    storagePath,
+                    60 * 60 * 24,
+                  );
+
+                if (
+                  !signedImageError &&
+                  signedImage?.signedUrl
+                ) {
+                  imageSource =
+                    signedImage.signedUrl;
+                }
+              }
+            } catch (imageLoadError) {
+              console.warn(
+                "HOO터디 노트 원격 사진 불러오기 대기:",
+                {
+                  noteId,
+                  blockId,
+                  storagePath,
+                  error: imageLoadError,
+                },
+              );
+            }
+          }
+
+          const rawSize = rawBlock.size;
+          const size: ImageSize =
+            rawSize === "small" ||
+            rawSize === "large" ||
+            rawSize === "medium"
+              ? rawSize
+              : "medium";
+
+          const rawLayout = rawBlock.layout;
+          const layout:
+            | "block"
+            | "float-right"
+            | "free"
+            | undefined =
+            rawLayout === "block" ||
+            rawLayout === "float-right" ||
+            rawLayout === "free"
+              ? rawLayout
+              : undefined;
+
+          nextBlocks.push({
+            id: blockId,
+            type: "image",
+            src: imageSource,
+            alt:
+              typeof rawBlock.alt === "string"
+                ? rawBlock.alt
+                : "후터디노트 사진",
+            size,
+            units: Math.max(
+              1,
+              Math.min(
+                PAGE_LINE_LIMIT,
+                Math.floor(
+                  Number(rawBlock.units) || 4,
+                ),
+              ),
+            ),
+            widthPercent:
+              Number.isFinite(
+                Number(rawBlock.widthPercent),
+              )
+                ? Number(rawBlock.widthPercent)
+                : undefined,
+            aspectRatio:
+              Number.isFinite(
+                Number(rawBlock.aspectRatio),
+              )
+                ? Number(rawBlock.aspectRatio)
+                : undefined,
+            layout,
+            positionXPercent:
+              Number.isFinite(
+                Number(rawBlock.positionXPercent),
+              )
+                ? Number(rawBlock.positionXPercent)
+                : undefined,
+            positionYPx:
+              Number.isFinite(
+                Number(rawBlock.positionYPx),
+              )
+                ? Number(rawBlock.positionYPx)
+                : undefined,
+            pageAnchorIndex:
+              Number.isFinite(
+                Number(rawBlock.pageAnchorIndex),
+              )
+                ? Math.max(
+                    0,
+                    Math.floor(
+                      Number(
+                        rawBlock.pageAnchorIndex,
+                      ),
+                    ),
+                  )
+                : undefined,
+            storagePath,
+          });
+        }
+
+        const remoteUpdatedAt =
+          typeof row.client_updated_at === "string" &&
+          row.client_updated_at
+            ? row.client_updated_at
+            : typeof row.updated_at === "string" &&
+                row.updated_at
+              ? row.updated_at
+              : new Date().toISOString();
+
+        const remoteCreatedAt =
+          typeof row.created_at === "string" &&
+          row.created_at
+            ? row.created_at
+            : remoteUpdatedAt;
+
+        remoteNotes.push({
+          id: noteId,
+          date:
+            typeof row.note_date === "string"
+              ? row.note_date
+              : getLocalDateValue(),
+          title:
+            typeof row.title === "string" &&
+            row.title.trim()
+              ? row.title
+              : "제목 없는 기록",
+          category:
+            typeof row.category === "string" &&
+            row.category.trim()
+              ? row.category
+              : DEFAULT_CATEGORIES[0],
+          blocks:
+            nextBlocks.length > 0
+              ? nextBlocks
+              : [createTextBlock()],
+          lastPageHtml,
+          createdAt: remoteCreatedAt,
+          updatedAt: remoteUpdatedAt,
+          version: Math.max(
+            1,
+            Number(row.version) || 1,
+          ),
+        });
+      }
+
+      const remoteById = new Map(
+        remoteNotes.map((note) => [
+          note.id,
+          note,
+        ]),
+      );
+
+      function mergeImageState(
+        primary: StudyNoteRecord,
+        secondary: StudyNoteRecord,
+      ): StudyNoteRecord {
+        const secondaryImages = new Map(
+          secondary.blocks
+            .filter(
+              (
+                block,
+              ): block is StudyImageBlock =>
+                block.type === "image",
+            )
+            .map((block) => [
+              block.id,
+              block,
+            ]),
+        );
+
+        return {
+          ...primary,
+          blocks: primary.blocks.map((block) => {
+            if (block.type !== "image") {
+              return block;
+            }
+
+            const secondaryImage =
+              secondaryImages.get(block.id);
+
+            if (!secondaryImage) {
+              return block;
+            }
+
+            return {
+              ...block,
+              src:
+                block.src ||
+                secondaryImage.src,
+              storagePath:
+                block.storagePath ??
+                secondaryImage.storagePath,
+            };
+          }),
+        };
+      }
+
+      const mergedSourceNotes: StudyNoteRecord[] = [];
+      const handledRemoteIds = new Set<string>();
+
+      for (const localNote of normalizedLocalNotes) {
+        if (
+          serverDeletedIds.has(localNote.id) ||
+          pendingDeletedIds.has(localNote.id)
+        ) {
+          continue;
+        }
+
+        const remoteNote =
+          remoteById.get(localNote.id);
+
+        if (!remoteNote) {
+          mergedSourceNotes.push(localNote);
+          continue;
+        }
+
+        handledRemoteIds.add(localNote.id);
+
+        const localVersion =
+          Math.max(
+            1,
+            Number(localNote.version) || 1,
+          );
+        const remoteVersion =
+          Math.max(
+            1,
+            Number(remoteNote.version) || 1,
+          );
+
+        const localUpdatedTime =
+          Date.parse(localNote.updatedAt) || 0;
+        const remoteUpdatedTime =
+          Date.parse(remoteNote.updatedAt) || 0;
+
+        const localWins =
+          localVersion > remoteVersion ||
+          (
+            localVersion === remoteVersion &&
+            localUpdatedTime > remoteUpdatedTime
+          );
+
+        mergedSourceNotes.push(
+          localWins
+            ? mergeImageState(
+                localNote,
+                remoteNote,
+              )
+            : mergeImageState(
+                remoteNote,
+                localNote,
+              ),
+        );
+      }
+
+      for (const remoteNote of remoteNotes) {
+        if (
+          handledRemoteIds.has(remoteNote.id) ||
+          serverDeletedIds.has(remoteNote.id) ||
+          pendingDeletedIds.has(remoteNote.id)
+        ) {
+          continue;
+        }
+
+        mergedSourceNotes.push(remoteNote);
+      }
+
+      mergedSourceNotes.sort((first, second) =>
+        second.updatedAt.localeCompare(
+          first.updatedAt,
+        ),
+      );
+
+      /*
+       * 다른 기기에서 내려온 기록을 즉시 현재 기기의 IndexedDB에도 저장한다.
+       * 따라서 다음 실행부터는 네트워크가 없어도 마지막 동기화 기록을 볼 수 있다.
+       */
+      notesRef.current = mergedSourceNotes;
+      await replaceNotesInIndexedDb(
+        mergedSourceNotes,
+      );
+
+      setNotes((previousNotes) => {
+        const previousSignature =
+          JSON.stringify(previousNotes);
+        const nextSignature =
+          JSON.stringify(mergedSourceNotes);
+
+        return previousSignature === nextSignature
+          ? previousNotes
+          : mergedSourceNotes;
+      });
+
+      setSelectedNoteId((previousId) => {
+        if (
+          previousId &&
+          mergedSourceNotes.some(
+            (note) => note.id === previousId,
+          )
+        ) {
+          return previousId;
+        }
+
+        return mergedSourceNotes[0]?.id ?? null;
+      });
+
       let pushedCount = 0;
       let failedCount = 0;
       let firstFailureMessage = "";
 
       const syncedNotes: StudyNoteRecord[] = [];
 
-      for (const note of normalizedLocalNotes) {
+      for (const note of mergedSourceNotes) {
         try {
           const localBlocks: StudyBlock[] = [];
           const remoteBlocks: Array<Record<string, unknown>> = [];
@@ -7129,11 +7620,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
             }
           }
 
-          /*
-           * 마지막 페이지는 본문 blocks와 분리해서 작성하지만,
-           * 서버에는 blocks 배열의 가장 마지막 객체로 넣는다.
-           * 따라서 본문 페이지가 늘어나도 항상 파일의 최종 페이지로 유지된다.
-           */
           remoteBlocks.push({
             id: `${note.id}-last-page`,
             type: "last-page",
@@ -7141,10 +7627,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
             role: "last-page",
           });
 
-          /*
-           * merge 판단보다 먼저 현재 로컬 노트를 확실히 upsert한다.
-           * 이어서 select("id")를 받아 실제 DB 반영까지 검증한다.
-           */
           const nextVersion = Math.max(
             1,
             Number(note.version) || 1,
@@ -7164,6 +7646,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 category: note.category,
                 blocks: remoteBlocks,
                 version: nextVersion,
+                client_updated_at:
+                  note.updatedAt,
                 deleted_at: null,
               },
               { onConflict: "id" },
@@ -7220,13 +7704,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
       /*
        * 동기화가 시작된 뒤 사용자가 계속 타이핑했을 수 있다.
-       * 이때 sync 시작 시점의 syncedNotes를 그대로 setNotes 하면
-       * 몇 초 전에 쓴 내용으로 되돌아가면서 마지막 페이지 글이
-       * 대부분 사라지는 현상이 생긴다.
-       *
-       * 항상 현재 notesRef.current와 다시 비교해서 더 최신인 로컬
-       * 편집본을 우선하고, 동기화 중 새로 얻은 이미지 storagePath만
-       * 안전하게 합친다.
+       * 항상 현재 notesRef.current와 다시 비교해서 더 최신인 로컬 편집본을
+       * 우선하고, 동기화 중 얻은 이미지 storagePath만 안전하게 합친다.
        */
       const latestLocalNotes =
         notesRef.current;
@@ -7307,15 +7786,17 @@ export default function StudyNote({ active }: StudyNoteProps) {
           };
         });
 
-      /*
-       * 동기화 도중 새 노트를 만들었으면 syncedNotes에는 없을 수 있으므로
-       * 그 노트도 그대로 유지한다.
-       */
       for (const latestNote of latestLocalNotes) {
         if (!syncedById.has(latestNote.id)) {
           reconciledNotes.push(latestNote);
         }
       }
+
+      reconciledNotes.sort((first, second) =>
+        second.updatedAt.localeCompare(
+          first.updatedAt,
+        ),
+      );
 
       await replaceNotesInIndexedDb(
         reconciledNotes,
@@ -9416,10 +9897,22 @@ export default function StudyNote({ active }: StudyNoteProps) {
           >
             {renderCompactEditorToolbar()}
 
-            <div className="mx-auto max-w-[1340px] overflow-visible">
+            <div
+              className="mx-auto overflow-visible"
+              style={{
+                width: EDITOR_CANVAS_WIDTH,
+                minWidth: EDITOR_CANVAS_WIDTH,
+                maxWidth: "none",
+                fontSize: `${PAGE_TEXT_FONT_SIZE}px`,
+                fontVariantNumeric: "tabular-nums",
+                fontFeatureSettings: '"tnum" 1',
+              }}
+            >
               <div
-                className="relative mx-auto w-full overflow-visible"
+                className="relative mx-auto overflow-visible"
                 style={{
+                  width: EDITOR_CANVAS_WIDTH,
+                  minWidth: EDITOR_CANVAS_WIDTH,
                   height:
                     editorPageCanvasHeight > 0
                       ? `${editorPageCanvasHeight * editorPageZoom}px`
@@ -9430,15 +9923,29 @@ export default function StudyNote({ active }: StudyNoteProps) {
                   ref={editorPageCanvasRef}
                   className="origin-top"
                   style={{
-                    width: "100%",
-                    minWidth: 0,
+                    width: EDITOR_CANVAS_WIDTH,
+                    minWidth: EDITOR_CANVAS_WIDTH,
                     transform: `scale(${editorPageZoom})`,
                     transformOrigin: "top center",
                     willChange: "transform",
+                    fontSize: `${PAGE_TEXT_FONT_SIZE}px`,
+                    fontVariantNumeric: "tabular-nums",
+                    fontFeatureSettings: '"tnum" 1',
                   } as CSSProperties}
                 >
-                <div className="grid items-start gap-3 xl:grid-cols-[minmax(0,1fr)_286px]">
-                  <div className="min-w-0 space-y-4">
+                <div
+                  className="grid items-start gap-3"
+                  style={{
+                    gridTemplateColumns: `${PAGE_SHEET_WIDTH} ${EDITOR_SIDE_PANEL_WIDTH}px`,
+                  }}
+                >
+                  <div
+                    className="min-w-0 space-y-4"
+                    style={{
+                      width: PAGE_SHEET_WIDTH,
+                      minWidth: PAGE_SHEET_WIDTH,
+                    }}
+                  >
                     <div
                       className={`relative flex min-h-[76px] w-full items-center justify-center border px-7 py-4 ${
                         isDarkMode
@@ -9540,6 +10047,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
                       className="relative pl-[60px] pr-5"
                       style={{
                         minHeight: PAGE_LINE_LIMIT * ROW_HEIGHT,
+                        fontVariantNumeric: "tabular-nums",
+                        fontFeatureSettings: '"tnum" 1',
                         backgroundImage: isDarkMode
                           ? "repeating-linear-gradient(to bottom, transparent 0, transparent 27px, rgba(255,255,255,0.075) 27px, rgba(255,255,255,0.075) 28px)"
                           : "repeating-linear-gradient(to bottom, transparent 0, transparent 27px, rgba(112,102,86,0.16) 27px, rgba(112,102,86,0.16) 28px)",
