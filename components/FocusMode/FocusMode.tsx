@@ -353,6 +353,212 @@ useEffect(() => {
     setWasRunningBeforeExitConfirm,
   ] = useState(false);
 
+  useEffect(() => {
+    const shouldReturnToFocus =
+      window.sessionStorage.getItem(
+        "hoo-focus-return-from-study-note",
+      ) === "true";
+
+    if (!shouldReturnToFocus) {
+      return;
+    }
+
+    const savedSession =
+      window.sessionStorage.getItem(
+        "hoo-focus-study-note-session-v1",
+      );
+
+    window.sessionStorage.removeItem(
+      "hoo-focus-return-from-study-note",
+    );
+    window.sessionStorage.removeItem(
+      "hoo-focus-return-action",
+    );
+
+    if (!savedSession) {
+      return;
+    }
+
+    try {
+      const parsedSession = JSON.parse(
+        savedSession,
+      ) as {
+        goal?: unknown;
+        initialSeconds?: unknown;
+        remainingSeconds?: unknown;
+        focusStartedAt?: unknown;
+        focusEndsAt?: unknown;
+        isRunning?: unknown;
+        selectedDuration?: unknown;
+        customHours?: unknown;
+        customMinutes?: unknown;
+        customSeconds?: unknown;
+      };
+
+      if (
+        typeof parsedSession.goal !==
+          "string" ||
+        !Number.isFinite(
+          Number(
+            parsedSession.initialSeconds,
+          ),
+        ) ||
+        !Number.isFinite(
+          Number(
+            parsedSession.remainingSeconds,
+          ),
+        )
+      ) {
+        return;
+      }
+
+      const now = Date.now();
+
+      const savedRemainingSeconds =
+        Math.max(
+          0,
+          Math.floor(
+            Number(
+              parsedSession.remainingSeconds,
+            ),
+          ),
+        );
+
+      const savedFocusEndsAt =
+        Number.isFinite(
+          Number(
+            parsedSession.focusEndsAt,
+          ),
+        )
+          ? Number(
+              parsedSession.focusEndsAt,
+            )
+          : null;
+
+      const wasRunning =
+        parsedSession.isRunning === true;
+
+      const currentRemainingSeconds =
+        wasRunning &&
+        savedFocusEndsAt !== null
+          ? Math.max(
+              0,
+              Math.ceil(
+                (
+                  savedFocusEndsAt -
+                  now
+                ) / 1000,
+              ),
+            )
+          : savedRemainingSeconds;
+
+      const restoredDuration:
+        FocusDuration =
+        parsedSession.selectedDuration ===
+          25 ||
+        parsedSession.selectedDuration ===
+          60 ||
+        parsedSession.selectedDuration ===
+          "custom"
+          ? parsedSession.selectedDuration
+          : "custom";
+
+      setFocusGoal(
+        parsedSession.goal,
+      );
+
+      setSelectedDuration(
+        restoredDuration,
+      );
+
+      if (
+        restoredDuration === "custom"
+      ) {
+        setCustomHours(
+          Math.max(
+            0,
+            Math.floor(
+              Number(
+                parsedSession.customHours,
+              ) || 0,
+            ),
+          ),
+        );
+
+        setCustomMinutes(
+          Math.max(
+            0,
+            Math.min(
+              59,
+              Math.floor(
+                Number(
+                  parsedSession.customMinutes,
+                ) || 0,
+              ),
+            ),
+          ),
+        );
+
+        setCustomSeconds(
+          Math.max(
+            0,
+            Math.min(
+              59,
+              Math.floor(
+                Number(
+                  parsedSession.customSeconds,
+                ) || 0,
+              ),
+            ),
+          ),
+        );
+      }
+
+      setRemainingSeconds(
+        currentRemainingSeconds,
+      );
+
+      setFocusStartedAt(
+        typeof
+          parsedSession.focusStartedAt ===
+          "string"
+          ? parsedSession.focusStartedAt
+          : null,
+      );
+
+      const shouldResume =
+        wasRunning &&
+        currentRemainingSeconds > 0;
+
+      setFocusEndsAt(
+        shouldResume
+          ? savedFocusEndsAt ??
+              now +
+                currentRemainingSeconds *
+                  1000
+          : null,
+      );
+
+      setIsRunning(
+        shouldResume,
+      );
+
+      setIsExitConfirmOpen(false);
+      setIsOpen(true);
+
+      setView(
+        currentRemainingSeconds > 0
+          ? "timer"
+          : "completed",
+      );
+    } catch (error) {
+      console.error(
+        "후터디노트 포커스 복귀 실패:",
+        error,
+      );
+    }
+  }, []);
+
 const {
   profileImageUrl,
   isProfileImageLoading,
@@ -1236,6 +1442,53 @@ function handleProfileLauncherClick() {
   setFocusQuickMemos([]);
   setView("timer");
   setIsRunning(true);
+}
+
+function openFocusStudyNote() {
+  const currentRemainingSeconds =
+    isRunning &&
+    focusEndsAt !== null
+      ? Math.max(
+          0,
+          Math.ceil(
+            (
+              focusEndsAt -
+              Date.now()
+            ) / 1000,
+          ),
+        )
+      : remainingSeconds;
+
+  const currentFocusEndsAt =
+    isRunning
+      ? focusEndsAt ??
+        Date.now() +
+          currentRemainingSeconds *
+            1000
+      : null;
+
+  window.sessionStorage.setItem(
+    "hoo-focus-study-note-session-v1",
+    JSON.stringify({
+      version: 1,
+      goal: trimmedGoal,
+      initialSeconds,
+      remainingSeconds:
+        currentRemainingSeconds,
+      focusStartedAt,
+      focusEndsAt:
+        currentFocusEndsAt,
+      isRunning,
+      selectedDuration,
+      customHours,
+      customMinutes,
+      customSeconds,
+      savedAt: Date.now(),
+    }),
+  );
+
+  window.location.href =
+    "/study-note?from=focus";
 }
 
   async function saveQuickMemo() {
@@ -2313,6 +2566,9 @@ useEffect(() => {
         }
         onToggleTimer={
           toggleTimer
+        }
+        onOpenStudyNote={
+          openFocusStudyNote
         }
         onRequestFinish={
           requestFinishFocusMode

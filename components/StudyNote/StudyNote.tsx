@@ -28,6 +28,13 @@ const ROW_HEIGHT = 28;
 
 const HIGHLIGHT_COLOR = "rgba(255, 224, 92, 0.38)";
 
+const FOCUS_STUDY_NOTE_SESSION_KEY =
+  "hoo-focus-study-note-session-v1";
+const FOCUS_STUDY_NOTE_RETURN_KEY =
+  "hoo-focus-return-from-study-note";
+const FOCUS_STUDY_NOTE_RETURN_ACTION_KEY =
+  "hoo-focus-return-action";
+
 const FONT_SIZE_OPTIONS = [
   14,
   16,
@@ -152,6 +159,22 @@ type StudyNoteProps = {
   active: boolean;
 };
 
+type FocusStudyNoteSession = {
+  version: 1;
+  goal: string;
+  initialSeconds: number;
+  remainingSeconds: number;
+  focusStartedAt: string | null;
+  focusEndsAt: number | null;
+  isRunning: boolean;
+  selectedDuration: 25 | 60 | "custom";
+  customHours: number;
+  customMinutes: number;
+  customSeconds: number;
+  savedAt: number;
+  finishedWhileInStudyNote?: boolean;
+};
+
 type DeleteDragTarget =
   | {
       kind: "note";
@@ -210,6 +233,46 @@ function stripHtml(value: string) {
   ).replace(/\u200B/g, "");
 }
 
+
+function formatStudyNoteFocusTime(totalSeconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(
+      seconds,
+    ).padStart(2, "0")}`;
+  }
+
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(
+    2,
+    "0",
+  )}`;
+}
+
+function formatStudyNoteFocusDuration(totalSeconds: number) {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  const seconds = safeSeconds % 60;
+  const parts: string[] = [];
+
+  if (hours > 0) {
+    parts.push(`${hours}시간`);
+  }
+
+  if (minutes > 0) {
+    parts.push(`${minutes}분`);
+  }
+
+  if (seconds > 0 || parts.length === 0) {
+    parts.push(`${seconds}초`);
+  }
+
+  return parts.join(" ");
+}
 
 function openStudyNoteDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -665,6 +728,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const [authMessage, setAuthMessage] = useState("");
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+  const [focusStudyNoteSession, setFocusStudyNoteSession] =
+    useState<FocusStudyNoteSession | null>(null);
+  const [isFocusStudyNotePanelOpen, setIsFocusStudyNotePanelOpen] =
+    useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -887,6 +954,205 @@ export default function StudyNote({ active }: StudyNoteProps) {
     };
   }, [supabase]);
 
+  useEffect(() => {
+    const savedSession = window.sessionStorage.getItem(
+      FOCUS_STUDY_NOTE_SESSION_KEY,
+    );
+
+    if (!savedSession) {
+      return;
+    }
+
+    try {
+      const parsedSession = JSON.parse(
+        savedSession,
+      ) as Partial<FocusStudyNoteSession>;
+
+      if (
+        typeof parsedSession.goal !== "string" ||
+        !Number.isFinite(parsedSession.initialSeconds) ||
+        !Number.isFinite(parsedSession.remainingSeconds)
+      ) {
+        return;
+      }
+
+      const now = Date.now();
+      const storedRemainingSeconds = Math.max(
+        0,
+        Math.floor(
+          Number(parsedSession.remainingSeconds) || 0,
+        ),
+      );
+
+      const storedFocusEndsAt =
+        Number.isFinite(parsedSession.focusEndsAt)
+          ? Number(parsedSession.focusEndsAt)
+          : null;
+
+      const isStoredRunning =
+        parsedSession.isRunning === true;
+
+      const currentRemainingSeconds =
+        isStoredRunning && storedFocusEndsAt !== null
+          ? Math.max(
+              0,
+              Math.ceil(
+                (storedFocusEndsAt - now) / 1000,
+              ),
+            )
+          : storedRemainingSeconds;
+
+      const selectedDuration =
+        parsedSession.selectedDuration === 25 ||
+        parsedSession.selectedDuration === 60 ||
+        parsedSession.selectedDuration === "custom"
+          ? parsedSession.selectedDuration
+          : "custom";
+
+      const nextSession: FocusStudyNoteSession = {
+        version: 1,
+        goal: parsedSession.goal,
+        initialSeconds: Math.max(
+          1,
+          Math.floor(
+            Number(parsedSession.initialSeconds) || 1,
+          ),
+        ),
+        remainingSeconds: currentRemainingSeconds,
+        focusStartedAt:
+          typeof parsedSession.focusStartedAt === "string"
+            ? parsedSession.focusStartedAt
+            : null,
+        focusEndsAt:
+          isStoredRunning && currentRemainingSeconds > 0
+            ? storedFocusEndsAt ??
+              now + currentRemainingSeconds * 1000
+            : null,
+        isRunning:
+          isStoredRunning && currentRemainingSeconds > 0,
+        selectedDuration,
+        customHours: Math.max(
+          0,
+          Math.floor(Number(parsedSession.customHours) || 0),
+        ),
+        customMinutes: Math.max(
+          0,
+          Math.min(
+            59,
+            Math.floor(Number(parsedSession.customMinutes) || 0),
+          ),
+        ),
+        customSeconds: Math.max(
+          0,
+          Math.min(
+            59,
+            Math.floor(Number(parsedSession.customSeconds) || 0),
+          ),
+        ),
+        savedAt: now,
+        finishedWhileInStudyNote:
+          currentRemainingSeconds <= 0 ||
+          parsedSession.finishedWhileInStudyNote === true,
+      };
+
+      setFocusStudyNoteSession(nextSession);
+      window.sessionStorage.setItem(
+        FOCUS_STUDY_NOTE_SESSION_KEY,
+        JSON.stringify(nextSession),
+      );
+    } catch (error) {
+      console.error(
+        "후터디노트 포커스 세션 불러오기 실패:",
+        error,
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (
+      !focusStudyNoteSession?.isRunning ||
+      focusStudyNoteSession.focusEndsAt === null
+    ) {
+      return;
+    }
+
+    const syncFocusSession = () => {
+      setFocusStudyNoteSession((previous) => {
+        if (
+          !previous?.isRunning ||
+          previous.focusEndsAt === null
+        ) {
+          return previous;
+        }
+
+        const nextRemainingSeconds = Math.max(
+          0,
+          Math.ceil(
+            (previous.focusEndsAt - Date.now()) / 1000,
+          ),
+        );
+
+        if (
+          nextRemainingSeconds === previous.remainingSeconds &&
+          nextRemainingSeconds > 0
+        ) {
+          return previous;
+        }
+
+        const nextSession: FocusStudyNoteSession = {
+          ...previous,
+          remainingSeconds: nextRemainingSeconds,
+          isRunning: nextRemainingSeconds > 0,
+          focusEndsAt:
+            nextRemainingSeconds > 0
+              ? previous.focusEndsAt
+              : null,
+          savedAt: Date.now(),
+          finishedWhileInStudyNote:
+            nextRemainingSeconds <= 0
+              ? true
+              : previous.finishedWhileInStudyNote,
+        };
+
+        window.sessionStorage.setItem(
+          FOCUS_STUDY_NOTE_SESSION_KEY,
+          JSON.stringify(nextSession),
+        );
+
+        return nextSession;
+      });
+    };
+
+    syncFocusSession();
+
+    const interval = window.setInterval(
+      syncFocusSession,
+      500,
+    );
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        syncFocusSession();
+      }
+    };
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange,
+    );
+
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange,
+      );
+    };
+  }, [
+    focusStudyNoteSession?.isRunning,
+    focusStudyNoteSession?.focusEndsAt,
+  ]);
+
   async function handleStudyNoteLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -1015,6 +1281,123 @@ export default function StudyNote({ active }: StudyNoteProps) {
     setSignedInEmail(null);
     setAuthPassword("");
     setAuthMessage("");
+  }
+
+  function persistFocusStudyNoteSession(
+    session: FocusStudyNoteSession,
+  ) {
+    window.sessionStorage.setItem(
+      FOCUS_STUDY_NOTE_SESSION_KEY,
+      JSON.stringify(session),
+    );
+  }
+
+  function getCurrentFocusStudyNoteSession() {
+    if (!focusStudyNoteSession) {
+      return null;
+    }
+
+    if (
+      !focusStudyNoteSession.isRunning ||
+      focusStudyNoteSession.focusEndsAt === null
+    ) {
+      return focusStudyNoteSession;
+    }
+
+    const nextRemainingSeconds = Math.max(
+      0,
+      Math.ceil(
+        (focusStudyNoteSession.focusEndsAt - Date.now()) /
+          1000,
+      ),
+    );
+
+    return {
+      ...focusStudyNoteSession,
+      remainingSeconds: nextRemainingSeconds,
+      isRunning: nextRemainingSeconds > 0,
+      focusEndsAt:
+        nextRemainingSeconds > 0
+          ? focusStudyNoteSession.focusEndsAt
+          : null,
+      savedAt: Date.now(),
+      finishedWhileInStudyNote:
+        nextRemainingSeconds <= 0
+          ? true
+          : focusStudyNoteSession.finishedWhileInStudyNote,
+    } satisfies FocusStudyNoteSession;
+  }
+
+  function toggleFocusStudyNoteTimer() {
+    setFocusStudyNoteSession((previous) => {
+      if (!previous || previous.remainingSeconds <= 0) {
+        return previous;
+      }
+
+      const now = Date.now();
+
+      if (previous.isRunning) {
+        const nextRemainingSeconds =
+          previous.focusEndsAt === null
+            ? previous.remainingSeconds
+            : Math.max(
+                0,
+                Math.ceil(
+                  (previous.focusEndsAt - now) / 1000,
+                ),
+              );
+
+        const nextSession: FocusStudyNoteSession = {
+          ...previous,
+          remainingSeconds: nextRemainingSeconds,
+          isRunning: false,
+          focusEndsAt: null,
+          savedAt: now,
+          finishedWhileInStudyNote:
+            nextRemainingSeconds <= 0
+              ? true
+              : previous.finishedWhileInStudyNote,
+        };
+
+        persistFocusStudyNoteSession(nextSession);
+        return nextSession;
+      }
+
+      const nextSession: FocusStudyNoteSession = {
+        ...previous,
+        isRunning: true,
+        focusEndsAt:
+          now + previous.remainingSeconds * 1000,
+        savedAt: now,
+        finishedWhileInStudyNote: false,
+      };
+
+      persistFocusStudyNoteSession(nextSession);
+      return nextSession;
+    });
+  }
+
+  function returnToMainFocusScreen(
+    action: "resume" | "finish" = "resume",
+  ) {
+    const currentSession =
+      getCurrentFocusStudyNoteSession();
+
+    if (currentSession) {
+      persistFocusStudyNoteSession(currentSession);
+      setFocusStudyNoteSession(currentSession);
+    }
+
+    window.sessionStorage.setItem(
+      FOCUS_STUDY_NOTE_RETURN_KEY,
+      "true",
+    );
+    window.sessionStorage.setItem(
+      FOCUS_STUDY_NOTE_RETURN_ACTION_KEY,
+      action,
+    );
+
+    window.location.href = "/";
   }
 
   useEffect(() => {
@@ -7358,6 +7741,64 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
   }
 
+  function renderFocusStudyNotePanel() {
+    if (
+      !focusStudyNoteSession ||
+      !isFocusStudyNotePanelOpen
+    ) {
+      return null;
+    }
+
+    return (
+      <div
+        className="fixed inset-0 z-[20000] flex items-center justify-center overflow-y-auto bg-black/[0.97] px-4 py-8 backdrop-blur-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label="후터디노트 포커스 상태"
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            setIsFocusStudyNotePanelOpen(false);
+          }
+        }}
+      >
+        <section className="relative my-auto flex w-full max-w-[900px] flex-col items-center px-4 py-8 text-center text-white md:py-12">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute left-1/2 top-[58%] h-[620px] w-[620px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#5f50d8]/10 blur-[130px]"
+          />
+
+          <div className="relative z-10 flex w-full flex-col items-center">
+            <p className="text-sm font-black tracking-[0.34em] text-[#9485ff] md:text-base">
+              FOCUS SESSION
+            </p>
+
+            <h2 className="mx-auto mt-7 max-w-[760px] break-words text-4xl font-black leading-tight md:text-6xl">
+              {focusStudyNoteSession.goal}
+            </h2>
+
+            <div className="mx-auto mt-14 flex aspect-square w-full max-w-[620px] items-center justify-center rounded-full border border-[#6f5ee8]/60 bg-black shadow-[0_0_58px_rgba(92,74,231,0.42),inset_0_0_110px_rgba(35,28,92,0.2)]">
+              <div>
+                <p className="text-7xl font-black tracking-[-0.06em] sm:text-8xl md:text-[7rem]">
+                  {formatStudyNoteFocusTime(
+                    focusStudyNoteSession.remainingSeconds,
+                  )}
+                </p>
+
+                <p className="mt-7 text-base font-black tracking-[0.18em] text-white/45 md:text-lg">
+                  {focusStudyNoteSession.remainingSeconds <= 0
+                    ? "집중 완료"
+                    : focusStudyNoteSession.isRunning
+                      ? "집중 중"
+                      : "잠시 멈춤"}
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   function renderSidebar() {
     return (
       <aside
@@ -7563,7 +8004,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
             <span className="opacity-55">{notes.length}</span>
           </button>
 
-          {categories.map((category) => (
+          {categories.slice(0, 6).map((category) => (
             <div
               key={category}
               draggable
@@ -7598,46 +8039,110 @@ export default function StudyNote({ active }: StudyNoteProps) {
               </button>
             </div>
           ))}
+
+          {categories.length > 6 && (
+            <button
+              type="button"
+              onClick={() => {
+                setCategoryFilter("전체");
+                setSelectedNoteId(null);
+                setSearchQuery("");
+                setViewMode("home");
+              }}
+              className={`flex w-full items-center justify-center rounded-md py-1.5 text-lg font-black transition ${
+                isDarkMode
+                  ? "text-white/45 hover:bg-white/5 hover:text-white/85"
+                  : "text-black/35 hover:bg-black/[0.035] hover:text-black/70"
+              }`}
+              title={`나머지 ${categories.length - 6}개 카테고리 보기`}
+              aria-label="전체 카테고리 보기"
+            >
+              ＋
+            </button>
+          )}
         </div>
 
-        <div className={`mt-5 border-t pt-4 ${isDarkMode ? "border-[#303238]" : "border-[#e3e1db]"}`}>
-          <h3 className="text-xs font-black">최근 노트</h3>
-          <div className="mt-2 space-y-1">
-            {recentNotes.map((note) => (
-              <div
-                key={note.id}
-                draggable
-                onDragStart={(event) =>
-                  beginDeleteDrag(event, {
-                    kind: "note",
-                    id: note.id,
-                    label: note.title,
-                  })
-                }
-                onDragEnd={finishDeleteDrag}
-                className="cursor-grab active:cursor-grabbing"
-                title="끌어서 오른쪽 아래 휴지통에 놓으면 삭제됩니다"
-              >
-                <button
-                  type="button"
-                  draggable={false}
-                  onClick={() => openNote(note.id)}
-                  className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-[11px] font-bold transition ${
-                    isDarkMode
-                      ? "hover:bg-white/5"
-                      : "hover:bg-black/[0.035]"
-                  }`}
-                >
-                  <span>□</span>
-                  <span className="min-w-0 flex-1 truncate">{note.title}</span>
-                  <span className="opacity-45">☆</span>
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
+
 
         <div className="mt-auto pt-4">
+
+
+
+
+        {focusStudyNoteSession && (
+  <button
+    type="button"
+    onClick={() =>
+      returnToMainFocusScreen("resume")
+    }
+    className="group relative mb-3 flex min-h-[322px] w-full flex-col overflow-hidden rounded-[18px] border bg-black px-4 pb-6 pt-4 text-left text-white transition duration-300"
+    style={{
+      borderColor: "#493a8f",
+      boxShadow:
+        "inset 0 1px 0 rgba(255,255,255,0.02)",
+    }}
+    title="포커스 화면으로 돌아가기"
+  >
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute left-1/2 top-[65%] h-[250px] w-[250px] -translate-x-1/2 -translate-y-1/2 rounded-full"
+      style={{
+        background:
+          "rgba(92,74,231,0.08)",
+        filter: "blur(58px)",
+      }}
+    />
+
+    <div className="relative z-10 flex w-full items-center justify-between gap-2">
+      <span className="text-[10px] font-black tracking-[0.22em] text-[#9587ff]">
+        FOCUS SESSION
+      </span>
+
+      <span
+        className={`h-3 w-3 shrink-0 rounded-full ${
+          focusStudyNoteSession.remainingSeconds <= 0
+            ? "bg-white/25"
+            : focusStudyNoteSession.isRunning
+              ? "bg-emerald-400 shadow-[0_0_14px_rgba(52,211,153,0.95)]"
+              : "bg-amber-300"
+        }`}
+      />
+    </div>
+
+    <h3 className="relative z-10 mt-4 w-full truncate text-[14px] font-black leading-none text-white">
+      {focusStudyNoteSession.goal}
+    </h3>
+
+    <div className="relative z-10 flex min-h-0 flex-1 items-center justify-center pb-1 pt-4">
+      <div
+        className="flex aspect-square w-[70%] max-w-[190px] items-center justify-center rounded-full bg-black transition duration-300"
+        style={{
+          border: "1px solid #765cff",
+          boxShadow:
+            "0 0 12px rgba(118,92,255,0.95), 0 0 28px rgba(101,73,238,0.72), 0 0 52px rgba(79,54,196,0.34), inset 0 0 34px rgba(48,35,118,0.08)",
+        }}
+      >
+        <div className="text-center">
+          <p className="text-[38px] font-black tracking-[-0.055em] text-white">
+            {formatStudyNoteFocusTime(
+              focusStudyNoteSession.remainingSeconds,
+            )}
+          </p>
+
+          <p className="mt-2 text-[10px] font-black tracking-[0.12em] text-white/50">
+            {focusStudyNoteSession.remainingSeconds <= 0
+              ? "집중 완료"
+              : focusStudyNoteSession.isRunning
+                ? "집중 중"
+                : "잠시 멈춤"}
+          </p>
+        </div>
+      </div>
+    </div>
+  </button>
+)}
+
+
           {signedInEmail ? (
             <div
               className={`mb-3 rounded-lg border px-3 py-2.5 ${
@@ -8384,6 +8889,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     return (
       <section className="flex h-[100dvh] w-screen shrink-0 overflow-hidden bg-[#f4f4f1] p-0">
         {renderLoginModal()}
+        {renderFocusStudyNotePanel()}
 
         {renderTrashBin()}
 
@@ -8637,6 +9143,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     return (
       <section className="flex h-[100dvh] w-screen shrink-0 overflow-hidden bg-[#f4f4f1] p-0">
         {renderLoginModal()}
+        {renderFocusStudyNotePanel()}
         {renderNoteNameModal()}
         {renderTrashBin()}
 
@@ -8852,6 +9359,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     
     <section className="flex h-[100dvh] w-screen shrink-0 overflow-hidden bg-[#f4f4f1] p-0">
         {renderLoginModal()}
+        {renderFocusStudyNotePanel()}
         {renderTrashBin()}
       <div
         className={`grid h-full w-full min-h-0 grid-rows-[66px_minmax(0,1fr)] overflow-hidden border ${

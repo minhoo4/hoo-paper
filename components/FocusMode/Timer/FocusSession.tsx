@@ -39,6 +39,7 @@ type FocusSessionProps = {
   setQuickMemoInput:
     Dispatch<SetStateAction<string>>;
   onToggleTimer: () => void;
+  onOpenStudyNote: () => void;
   onRequestFinish: () => void;
   onContinue: () => void;
   onConfirmFinish: () => void;
@@ -61,6 +62,7 @@ export default function FocusSession({
   focusPresenceStatus,
   setQuickMemoInput,
   onToggleTimer,
+  onOpenStudyNote,
   onRequestFinish,
   onContinue,
   onConfirmFinish,
@@ -166,9 +168,38 @@ export default function FocusSession({
                       QUICK MEMO
                     </p>
 
-                    <h3 className="mt-2 text-xl font-black text-white">
-                      집중 메모
-                    </h3>
+                    <div className="mt-2 flex items-center justify-between gap-3">
+  <h3 className="text-xl font-black text-white">
+    집중 메모
+  </h3>
+
+  <button
+    type="button"
+    onClick={onOpenStudyNote}
+    className="group flex shrink-0 items-center gap-2.5 rounded-2xl border border-[#7565e8]/50 bg-[#7565e8]/12 px-4 py-2.5 text-sm font-black text-[#c8c1ff] shadow-[0_10px_24px_rgba(72,60,180,0.16)] transition-all duration-300 hover:-translate-y-0.5 hover:border-[#8d80ff]/75 hover:bg-[#7565e8]/22 hover:text-white hover:shadow-[0_14px_30px_rgba(88,70,210,0.28)] active:scale-[0.97]"
+    aria-label="집중노트 열기"
+  >
+    <span
+      aria-hidden="true"
+      className="relative block h-7 w-8 shrink-0"
+    >
+      <span className="absolute left-[2px] top-[5px] h-[20px] w-[26px] rounded-[5px] bg-[#5f52c9] shadow-[0_3px_10px_rgba(45,34,126,0.38)]">
+        <span className="absolute left-[3px] top-[-4px] h-[7px] w-[11px] rounded-t-[4px] bg-[#7568e8]" />
+      </span>
+
+      <span className="absolute left-[5px] top-[9px] h-[13px] w-[20px] rounded-[3px] bg-[#efeaff]/90 transition-all duration-300 group-hover:-translate-y-1">
+        <span className="absolute left-[4px] top-[4px] h-[1.5px] w-[12px] rounded-full bg-[#7c6fe1]/35" />
+        <span className="absolute left-[4px] top-[8px] h-[1.5px] w-[9px] rounded-full bg-[#7c6fe1]/25" />
+      </span>
+
+      <span className="absolute bottom-[1px] left-[1px] h-[15px] w-[28px] origin-bottom rounded-[4px] border border-[#9d90ff]/35 bg-[linear-gradient(180deg,#8174ef,#6254cf)] shadow-[0_4px_10px_rgba(50,38,135,0.36)] transition-all duration-300 group-hover:translate-y-1 group-hover:scale-y-[0.72]" />
+    </span>
+
+    <span className="tracking-[-0.02em]">
+      집중노트
+    </span>
+  </button>
+</div>
 
                     <p className="mt-2 text-xs font-bold leading-6 text-white/35">
                       떠오른 내용을 적어두면 HOO 메모장에

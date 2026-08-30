@@ -57,6 +57,7 @@ type FocusTimerModalProps = {
   setQuickMemoInput:
     Dispatch<SetStateAction<string>>;
   onToggleTimer: () => void;
+  onOpenStudyNote: () => void;
   onRequestFinish: () => void;
   onContinue: () => void;
   onConfirmFinish: () => void;
@@ -96,6 +97,7 @@ export default function FocusTimerModal({
   setFocusGoal,
   setQuickMemoInput,
   onToggleTimer,
+  onOpenStudyNote,
   onRequestFinish,
   onContinue,
   onConfirmFinish,
@@ -197,6 +199,9 @@ export default function FocusTimerModal({
         }
         onToggleTimer={
           onToggleTimer
+        }
+        onOpenStudyNote={
+          onOpenStudyNote
         }
         onRequestFinish={
           onRequestFinish
