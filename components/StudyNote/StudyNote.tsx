@@ -876,7 +876,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
-  const [saveLabel, setSaveLabel] = useState("자동 저장");
+  const [saveLabel, setSaveLabel] = useState("페이지 이탈 시 저장");
   const [viewMode, setViewMode] = useState<"home" | "category" | "editor">("home");
   const [toolTab, setToolTab] = useState<"text" | "page">("text");
   const [isEditorToolbarCollapsed, setIsEditorToolbarCollapsed] =
@@ -938,6 +938,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const [authMessage, setAuthMessage] = useState("");
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+  const [pendingPageDeleteIndex, setPendingPageDeleteIndex] =
+    useState<number | null>(null);
   const [focusStudyNoteSession, setFocusStudyNoteSession] =
     useState<FocusStudyNoteSession | null>(null);
   const [isFocusStudyNotePanelOpen, setIsFocusStudyNotePanelOpen] =
@@ -950,17 +952,22 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const selectionRangeRef = useRef<Range | null>(null);
   const selectedBlockIdsRef = useRef<string[]>([]);
   const lastSelectedTextBlockIdRef = useRef<string | null>(null);
-  const saveTimerRef = useRef<number | null>(null);
-  const syncTimerRef = useRef<number | null>(null);
   const syncInProgressRef = useRef(false);
   const syncQueuedRef = useRef(false);
   const notesRef = useRef<StudyNoteRecord[]>([]);
+  const dragSelectionCleanupRef = useRef<(() => void) | null>(null);
   const activeFontSizeRef = useRef(14);
   const typingFontSizeRef = useRef(14);
   const undoHistoryRef = useRef<
     Map<string, StudyNoteRecord[]>
   >(new Map());
   const localMutationRevisionRef = useRef(0);
+  const lastPersistedMutationRevisionRef = useRef(0);
+  const localSaveInProgressRef = useRef(false);
+  const localSaveQueuedRef = useRef(false);
+  const tombstonesRef = useRef<StudyNoteTombstone[]>([]);
+  const previousViewModeRef = useRef<"home" | "category" | "editor">("home");
+  const previousSelectedNoteIdRef = useRef<string | null>(null);
   const cloudPullInProgressRef = useRef(false);
 
   useEffect(() => {
@@ -1077,43 +1084,108 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }, [notes]);
 
   useEffect(() => {
+    tombstonesRef.current = tombstones;
+  }, [tombstones]);
+
+  /*
+   * 타이핑/사진/삭제 때마다 전체 notes를 IndexedDB에 다시 쓰던 기존
+   * 350ms 자동 저장을 제거한다. 이제 편집 중에는 React state만 갱신하고,
+   * 실제 로컬 디스크 저장은 편집 페이지를 나가거나 문서가 숨겨질 때만 한다.
+   */
+  useEffect(() => {
+    if (!isHydrated) {
+      previousViewModeRef.current = viewMode;
+      previousSelectedNoteIdRef.current = selectedNoteId;
+      return;
+    }
+
+    const previousViewMode =
+      previousViewModeRef.current;
+
+    const previousSelectedNoteId =
+      previousSelectedNoteIdRef.current;
+
+    const leftEditor =
+      previousViewMode === "editor" &&
+      viewMode !== "editor";
+
+    const switchedEditorNote =
+      previousViewMode === "editor" &&
+      viewMode === "editor" &&
+      previousSelectedNoteId !== null &&
+      selectedNoteId !== null &&
+      previousSelectedNoteId !== selectedNoteId;
+
+    previousViewModeRef.current = viewMode;
+    previousSelectedNoteIdRef.current = selectedNoteId;
+
+    if (leftEditor || switchedEditorNote) {
+      void persistStudyNotesLocally(true);
+    }
+
+    // persistStudyNotesLocally는 최신 notesRef/tombstonesRef를 사용한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    isHydrated,
+    viewMode,
+    selectedNoteId,
+  ]);
+
+  useEffect(() => {
     if (!isHydrated) {
       return;
     }
 
-    setSaveLabel("저장 중...");
+    const saveBeforeLeaving = () => {
+      /*
+       * IndexedDB는 네트워크가 필요하지 않는다.
+       * visibilitychange(hidden)는 일반적인 탭 전환/페이지 이탈에서
+       * pagehide보다 먼저 오는 경우가 많아 로컬 저장 성공 가능성을 높인다.
+       */
+      void persistStudyNotesLocally(true);
+    };
 
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-    }
-
-    saveTimerRef.current = window.setTimeout(() => {
-      void replaceNotesInIndexedDb(notes)
-        .then(() => {
-          setSaveLabel(navigator.onLine ? "로컬 저장됨" : "오프라인 저장됨");
-
-          if (navigator.onLine) {
-            if (syncTimerRef.current !== null) {
-              window.clearTimeout(syncTimerRef.current);
-            }
-
-            syncTimerRef.current = window.setTimeout(() => {
-              void syncStudyNotes(notesRef.current);
-            }, 900);
-          }
-        })
-        .catch((error) => {
-          console.error("HOO터디 노트 IndexedDB 저장 실패:", error);
-          setSaveLabel("저장 실패");
-        });
-    }, 350);
-
-    return () => {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        saveBeforeLeaving();
       }
     };
-  }, [isHydrated, notes]);
+
+    window.addEventListener(
+      "pagehide",
+      saveBeforeLeaving,
+    );
+
+    window.addEventListener(
+      "beforeunload",
+      saveBeforeLeaving,
+    );
+
+    document.addEventListener(
+      "visibilitychange",
+      handleVisibilityChange,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "pagehide",
+        saveBeforeLeaving,
+      );
+
+      window.removeEventListener(
+        "beforeunload",
+        saveBeforeLeaving,
+      );
+
+      document.removeEventListener(
+        "visibilitychange",
+        handleVisibilityChange,
+      );
+    };
+
+    // persistStudyNotesLocally는 최신 ref를 사용한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHydrated]);
 
   useEffect(() => {
     if (!isHydrated) {
@@ -2542,6 +2614,104 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
   }
 
+  async function persistStudyNotesLocally(
+    syncCloudAfterSave = true,
+  ) {
+    if (!isHydrated) {
+      return;
+    }
+
+    const currentRevision =
+      localMutationRevisionRef.current;
+
+    if (
+      currentRevision ===
+      lastPersistedMutationRevisionRef.current
+    ) {
+      return;
+    }
+
+    if (localSaveInProgressRef.current) {
+      localSaveQueuedRef.current = true;
+      return;
+    }
+
+    localSaveInProgressRef.current = true;
+    localSaveQueuedRef.current = false;
+
+    const revisionAtStart =
+      localMutationRevisionRef.current;
+
+    const notesSnapshot =
+      notesRef.current;
+
+    const tombstonesSnapshot =
+      tombstonesRef.current;
+
+    setSaveLabel(
+      navigator.onLine
+        ? "로컬 저장 중..."
+        : "오프라인 저장 중...",
+    );
+
+    try {
+      await Promise.all([
+        replaceNotesInIndexedDb(
+          notesSnapshot,
+        ),
+        replaceStudyNoteTombstones(
+          tombstonesSnapshot,
+        ),
+      ]);
+
+      lastPersistedMutationRevisionRef.current =
+        revisionAtStart;
+
+      setSaveLabel(
+        navigator.onLine
+          ? "로컬 저장됨"
+          : "오프라인 저장됨",
+      );
+
+      if (
+        syncCloudAfterSave &&
+        navigator.onLine
+      ) {
+        /*
+         * 로컬 저장을 먼저 끝낸 뒤 클라우드 동기화를 시작한다.
+         * 실제 페이지 종료 중에는 브라우저가 네트워크 요청을 중단할 수 있으므로,
+         * 실패해도 다음 접속/온라인 복귀 시 기존 sync 루트가 다시 처리한다.
+         */
+        void syncStudyNotes(
+          notesRef.current,
+        );
+      }
+    } catch (error) {
+      console.error(
+        "HOO터디 노트 페이지 이탈 로컬 저장 실패:",
+        error,
+      );
+      setSaveLabel("로컬 저장 실패");
+    } finally {
+      localSaveInProgressRef.current = false;
+
+      const hasNewMutation =
+        localMutationRevisionRef.current !==
+        lastPersistedMutationRevisionRef.current;
+
+      if (
+        localSaveQueuedRef.current ||
+        hasNewMutation
+      ) {
+        localSaveQueuedRef.current = false;
+
+        void persistStudyNotesLocally(
+          syncCloudAfterSave,
+        );
+      }
+    }
+  }
+
   function updateSelectedNote(
     updater: (note: StudyNoteRecord) => StudyNoteRecord,
   ) {
@@ -2681,31 +2851,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
       ),
     );
 
-    void replaceNotesInIndexedDb(nextNotes)
-      .then(() => {
-        setSaveLabel(
-          navigator.onLine
-            ? "로컬 저장됨"
-            : "오프라인 저장됨",
-        );
-
-        if (navigator.onLine) {
-          if (syncTimerRef.current !== null) {
-            window.clearTimeout(syncTimerRef.current);
-          }
-
-          syncTimerRef.current = window.setTimeout(() => {
-            void syncStudyNotes(nextNotes);
-          }, 900);
-        }
-      })
-      .catch((error) => {
-        console.error(
-          "새 HOO터디 노트 저장 실패:",
-          error,
-        );
-        setSaveLabel("저장 실패");
-      });
+    setSaveLabel("저장 대기 · 페이지 이탈 시 저장");
   }
 
   function requestCreateNote(category: string) {
@@ -3122,26 +3268,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     setNotes(nextNotes);
     setTombstones(nextTombstones);
 
-    void Promise.all([
-      replaceNotesInIndexedDb(nextNotes),
-      replaceStudyNoteTombstones(
-        nextTombstones,
-      ),
-    ])
-      .then(() => {
-        if (navigator.onLine) {
-          window.setTimeout(() => {
-            void syncStudyNotes(nextNotes);
-          }, 150);
-        }
-      })
-      .catch((error) => {
-        console.error(
-          "HOO터디 노트 삭제 저장 실패:",
-          error,
-        );
-        setSaveLabel("삭제 저장 실패");
-      });
+    setSaveLabel("저장 대기 · 페이지 이탈 시 저장");
   }
 
   function deleteNoteById(noteId: string) {
@@ -3324,38 +3451,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : current,
     );
 
-    void replaceNotesInIndexedDb(nextNotes)
-      .then(() => {
-        setSaveLabel(
-          navigator.onLine
-            ? "로컬 저장됨"
-            : "오프라인 저장됨",
-        );
-
-        if (navigator.onLine) {
-          if (
-            syncTimerRef.current !== null
-          ) {
-            window.clearTimeout(
-              syncTimerRef.current,
-            );
-          }
-
-          syncTimerRef.current =
-            window.setTimeout(() => {
-              void syncStudyNotes(
-                notesRef.current,
-              );
-            }, 900);
-        }
-      })
-      .catch((error) => {
-        console.error(
-          "HOO터디 노트 사진 삭제 저장 실패:",
-          error,
-        );
-        setSaveLabel("삭제 저장 실패");
-      });
+    setSaveLabel("저장 대기 · 페이지 이탈 시 저장");
   }
 
   function beginDeleteDrag(
@@ -3575,6 +3671,85 @@ export default function StudyNote({ active }: StudyNoteProps) {
         );
       });
     });
+  }
+
+  function deleteStudyPage(pageIndex: number) {
+    if (!selectedNote) {
+      return;
+    }
+
+    const currentPages =
+      paginateBlocks(selectedNote.blocks);
+
+    const targetPage =
+      currentPages[pageIndex];
+
+    if (!targetPage) {
+      setPendingPageDeleteIndex(null);
+      return;
+    }
+
+    const targetBlockIds = new Set(
+      targetPage.map((block) => block.id),
+    );
+
+    updateSelectedNote((note) => {
+      const remainingBlocks = note.blocks
+        .filter(
+          (block) =>
+            !targetBlockIds.has(block.id),
+        )
+        .map((block) => {
+          if (
+            block.type !== "image" ||
+            block.layout !== "free" ||
+            !Number.isFinite(
+              block.pageAnchorIndex,
+            )
+          ) {
+            return block;
+          }
+
+          const currentAnchor = Math.max(
+            0,
+            Math.floor(
+              block.pageAnchorIndex ?? 0,
+            ),
+          );
+
+          if (currentAnchor <= pageIndex) {
+            return block;
+          }
+
+          return {
+            ...block,
+            pageAnchorIndex:
+              currentAnchor - 1,
+          };
+        });
+
+      const hasPageContent =
+        remainingBlocks.some(
+          (block) =>
+            block.type !== "image" ||
+            block.layout !== "free",
+        );
+
+      return {
+        ...note,
+        blocks: hasPageContent
+          ? remainingBlocks
+          : Array.from(
+              { length: PAGE_LINE_LIMIT },
+              () => createTextBlock(),
+            ),
+      };
+    });
+
+    selectedBlockIdsRef.current = [];
+    selectionRangeRef.current = null;
+    lastSelectedTextBlockIdRef.current = null;
+    setPendingPageDeleteIndex(null);
   }
 
   function isEditableTextBlock(
@@ -4445,6 +4620,23 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
           activeFontSizeRef.current =
             nearestSize;
+
+          /*
+           * 커서만 놓인 상태에서는 현재 실제 글자 크기를
+           * 다음 입력 크기의 기준으로도 동기화한다.
+           * 이전에 선택했던 30px 같은 값이 typing ref에 남아서
+           * 14px 줄에서 Enter 했는데 다음 줄이 갑자기 30px이 되는
+           * 문제를 막는다. 드래그 선택 중에는 현재 typing 크기를
+           * 바꾸지 않는다.
+           */
+          if (
+            !selection ||
+            selection.isCollapsed
+          ) {
+            typingFontSizeRef.current =
+              nearestSize;
+          }
+
           setActiveFontSize(
             nearestSize,
           );
@@ -6712,6 +6904,329 @@ export default function StudyNote({ active }: StudyNoteProps) {
     setResizingImageTarget(null);
   }
 
+  function getCaretRangeFromPoint(
+    clientX: number,
+    clientY: number,
+  ) {
+    const documentWithCaretApi =
+      document as Document & {
+        caretRangeFromPoint?: (
+          x: number,
+          y: number,
+        ) => Range | null;
+        caretPositionFromPoint?: (
+          x: number,
+          y: number,
+        ) => {
+          offsetNode: Node;
+          offset: number;
+        } | null;
+      };
+
+    const caretPosition =
+      documentWithCaretApi
+        .caretPositionFromPoint?.(
+          clientX,
+          clientY,
+        );
+
+    if (caretPosition) {
+      const range =
+        document.createRange();
+
+      range.setStart(
+        caretPosition.offsetNode,
+        caretPosition.offset,
+      );
+      range.collapse(true);
+      return range;
+    }
+
+    return (
+      documentWithCaretApi
+        .caretRangeFromPoint?.(
+          clientX,
+          clientY,
+        ) ?? null
+    );
+  }
+
+  function beginUnlimitedTextDragSelection(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (
+      event.button !== 0 ||
+      event.pointerType === "touch"
+    ) {
+      return;
+    }
+
+    const target =
+      event.target as HTMLElement;
+
+    const startEditable =
+      target.closest<HTMLElement>(
+        "[data-study-editable-id]",
+      );
+
+    if (!startEditable) {
+      return;
+    }
+
+    const editorRoot =
+      target.closest<HTMLElement>(
+        "[data-study-editor-root]",
+      );
+
+    if (!editorRoot) {
+      return;
+    }
+
+    const startRange =
+      getCaretRangeFromPoint(
+        event.clientX,
+        event.clientY,
+      );
+
+    if (!startRange) {
+      return;
+    }
+
+    const startElement =
+      startRange.startContainer instanceof
+      HTMLElement
+        ? startRange.startContainer
+        : startRange.startContainer
+            .parentElement;
+
+    if (
+      !startElement?.closest(
+        "[data-study-editable-id]",
+      )
+    ) {
+      return;
+    }
+
+    dragSelectionCleanupRef.current?.();
+
+    const anchorNode =
+      startRange.startContainer;
+    const anchorOffset =
+      startRange.startOffset;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const fallbackBlockId =
+      startEditable.dataset
+        .studyEditableId;
+
+    let isDragging = false;
+
+    const cleanup = () => {
+      window.removeEventListener(
+        "pointermove",
+        handleMove,
+      );
+      window.removeEventListener(
+        "pointerup",
+        handleUp,
+      );
+      window.removeEventListener(
+        "pointercancel",
+        handleCancel,
+      );
+
+      if (
+        dragSelectionCleanupRef.current ===
+        cleanup
+      ) {
+        dragSelectionCleanupRef.current =
+          null;
+      }
+    };
+
+    const handleMove = (
+      moveEvent: PointerEvent,
+    ) => {
+      if (
+        (moveEvent.buttons & 1) === 0
+      ) {
+        cleanup();
+        return;
+      }
+
+      const distance =
+        Math.hypot(
+          moveEvent.clientX - startX,
+          moveEvent.clientY - startY,
+        );
+
+      if (
+        !isDragging &&
+        distance < 3
+      ) {
+        return;
+      }
+
+      const currentRange =
+        getCaretRangeFromPoint(
+          moveEvent.clientX,
+          moveEvent.clientY,
+        );
+
+      if (!currentRange) {
+        return;
+      }
+
+      const currentElement =
+        currentRange.startContainer instanceof
+        HTMLElement
+          ? currentRange.startContainer
+          : currentRange.startContainer
+              .parentElement;
+
+      const currentEditable =
+        currentElement?.closest<HTMLElement>(
+          "[data-study-editable-id]",
+        );
+
+      if (
+        !currentEditable ||
+        !editorRoot.contains(
+          currentEditable,
+        )
+      ) {
+        return;
+      }
+
+      isDragging = true;
+      moveEvent.preventDefault();
+
+      const anchorRange =
+        document.createRange();
+      anchorRange.setStart(
+        anchorNode,
+        anchorOffset,
+      );
+      anchorRange.collapse(true);
+
+      const focusRange =
+        document.createRange();
+      focusRange.setStart(
+        currentRange.startContainer,
+        currentRange.startOffset,
+      );
+      focusRange.collapse(true);
+
+      const nextRange =
+        document.createRange();
+
+      const anchorBeforeFocus =
+        anchorRange.compareBoundaryPoints(
+          Range.START_TO_START,
+          focusRange,
+        ) <= 0;
+
+      if (anchorBeforeFocus) {
+        nextRange.setStart(
+          anchorNode,
+          anchorOffset,
+        );
+        nextRange.setEnd(
+          currentRange.startContainer,
+          currentRange.startOffset,
+        );
+      } else {
+        nextRange.setStart(
+          currentRange.startContainer,
+          currentRange.startOffset,
+        );
+        nextRange.setEnd(
+          anchorNode,
+          anchorOffset,
+        );
+      }
+
+      const selection =
+        window.getSelection();
+
+      if (!selection) {
+        return;
+      }
+
+      selection.removeAllRanges();
+      selection.addRange(nextRange);
+
+      selectionRangeRef.current =
+        nextRange.cloneRange();
+
+      const selectedIds =
+        Array.from(
+          editorRoot.querySelectorAll<HTMLElement>(
+            "[data-study-editable-id]",
+          ),
+        )
+          .filter((editable) => {
+            try {
+              return nextRange.intersectsNode(
+                editable,
+              );
+            } catch {
+              return false;
+            }
+          })
+          .map(
+            (editable) =>
+              editable.dataset
+                .studyEditableId,
+          )
+          .filter(
+            (
+              value,
+            ): value is string =>
+              Boolean(value),
+          );
+
+      selectedBlockIdsRef.current =
+        selectedIds;
+      lastSelectedTextBlockIdRef.current =
+        selectedIds[0] ??
+        fallbackBlockId ??
+        null;
+    };
+
+    const handleUp = () => {
+      if (isDragging) {
+        captureSelection(
+          fallbackBlockId,
+        );
+        syncPrimaryTextFormatState();
+      }
+
+      cleanup();
+    };
+
+    const handleCancel = () => {
+      cleanup();
+    };
+
+    window.addEventListener(
+      "pointermove",
+      handleMove,
+      { passive: false },
+    );
+    window.addEventListener(
+      "pointerup",
+      handleUp,
+    );
+    window.addEventListener(
+      "pointercancel",
+      handleCancel,
+    );
+
+    dragSelectionCleanupRef.current =
+      cleanup;
+  }
+
   function handleEditorPointerDownCapture(
     event: ReactPointerEvent<HTMLDivElement>,
   ) {
@@ -6739,6 +7254,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
         setSelectedImageDeleteTarget(null);
       }
     }
+
+    beginUnlimitedTextDragSelection(
+      event,
+    );
   }
 
   function selectAllTextInCurrentPage(
@@ -8715,6 +9234,79 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
   }
 
+  function renderPageDeleteModal() {
+    if (
+      pendingPageDeleteIndex === null ||
+      !selectedNote
+    ) {
+      return null;
+    }
+
+    const pageNumber =
+      pendingPageDeleteIndex + 1;
+
+    return (
+      <div
+        className="fixed inset-0 z-[13050] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm"
+        onMouseDown={(event) => {
+          if (
+            event.target ===
+            event.currentTarget
+          ) {
+            setPendingPageDeleteIndex(null);
+          }
+        }}
+      >
+        <div
+          className={`w-full max-w-[390px] rounded-[16px] border p-6 shadow-[0_30px_100px_rgba(0,0,0,0.45)] ${
+            isDarkMode
+              ? "border-[#3a3d43] bg-[#17191d] text-white"
+              : "border-[#e3e3de] bg-white text-[#222]"
+          }`}
+        >
+          <p className="text-[10px] font-black tracking-[0.16em] opacity-40">
+            DELETE PAGE
+          </p>
+          <h2 className="mt-1 text-[20px] font-black">
+            {pageNumber}페이지를 삭제할까요?
+          </h2>
+          <p className="mt-3 text-[11px] font-bold leading-5 opacity-55">
+            이 페이지의 텍스트, 사진, 주석이 함께 삭제됩니다.
+            삭제 후에는 실행 취소 기록으로 되돌릴 수 있지만,
+            실수 방지를 위해 한 번 더 확인해 주세요.
+          </p>
+
+          <div className="mt-6 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                setPendingPageDeleteIndex(null)
+              }
+              className={`rounded-lg px-4 py-3 text-[11px] font-black transition ${
+                isDarkMode
+                  ? "bg-white/10 hover:bg-white/15"
+                  : "bg-[#f0f0ed] hover:bg-[#e7e7e2]"
+              }`}
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                deleteStudyPage(
+                  pendingPageDeleteIndex,
+                )
+              }
+              className="rounded-lg bg-[#9f3142] px-4 py-3 text-[11px] font-black text-white transition hover:bg-[#b43a4d]"
+            >
+              삭제
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function renderLoginModal() {
     if (!isLoginOpen) {
       return null;
@@ -10686,6 +11278,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     <section className="flex h-[100dvh] w-screen shrink-0 overflow-hidden bg-[#f4f4f1] p-0">
         {renderLoginModal()}
         {renderFocusStudyNotePanel()}
+        {renderPageDeleteModal()}
         {renderTrashBin()}
       <div
         className={`grid h-full w-full min-h-0 grid-rows-[66px_minmax(0,1fr)] overflow-hidden border ${
@@ -10880,12 +11473,30 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 {notePages.map((pageBlocks, pageIndex) => (
                   <article
                     key={`${selectedNote.id}-page-${pageIndex}`}
-                    className={`overflow-hidden border ${
+                    className={`relative overflow-hidden border ${
                       isDarkMode
                         ? "border-[#303238] bg-[#17191d] text-[#efefef]"
                         : "border-[#deded9] bg-[#fff] text-[#2a2a2a]"
                     }`}
                   >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPendingPageDeleteIndex(
+                          pageIndex,
+                        )
+                      }
+                      className={`absolute right-2 top-2 z-40 flex h-7 w-7 items-center justify-center rounded-full border text-[13px] font-black transition ${
+                        isDarkMode
+                          ? "border-white/10 bg-[#111316]/90 text-white/45 hover:border-[#ff6b7d]/50 hover:bg-[#4d2028] hover:text-[#ffd9df]"
+                          : "border-black/10 bg-white/90 text-black/35 hover:border-[#c84a5c]/40 hover:bg-[#fff0f2] hover:text-[#a12e40]"
+                      }`}
+                      title={`${pageIndex + 1}페이지 삭제`}
+                      aria-label={`${pageIndex + 1}페이지 삭제`}
+                    >
+                      ×
+                    </button>
+
                     <div
                       data-study-page-body="true"
                       data-study-page-index={pageIndex}
@@ -11235,6 +11846,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
                                 selectedBlockIdsRef.current = [
                                   block.id,
                                 ];
+
+                                window.setTimeout(() => {
+                                  syncPrimaryTextFormatState();
+                                }, 0);
                               }}
                               onMouseUp={() => {
                                 captureSelection(
@@ -11423,11 +12038,14 @@ export default function StudyNote({ active }: StudyNoteProps) {
                   </div>
 
               <aside
-                className={`sticky top-0 overflow-hidden border ${
+                className={`sticky top-1/2 z-30 self-start -translate-y-1/2 overflow-hidden border ${
                   isDarkMode
                     ? "border-[#303238] bg-[#17191d] text-white"
                     : "border-[#deded9] bg-[#fff] text-[#302b27]"
                 }`}
+                style={{
+                  maxHeight: "calc(100dvh - 110px)",
+                }}
               >
                 <div
                   className={`flex h-[48px] items-center justify-between border-b px-5 ${
