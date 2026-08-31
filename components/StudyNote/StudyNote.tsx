@@ -20,7 +20,7 @@ const STORAGE_KEY = "hoo-study-notes-v1";
 const DELETED_CATEGORY_STORAGE_KEY = "hoo-study-note-deleted-categories-v1";
 const CUSTOM_CATEGORY_STORAGE_KEY = "hoo-study-note-custom-categories-v1";
 const STUDY_DB_NAME = "hoo-study-note-db";
-const STUDY_DB_VERSION = 3;
+const STUDY_DB_VERSION = 4;
 const STUDY_NOTE_STORE = "notes";
 const STUDY_TOMBSTONE_STORE = "tombstones";
 const PAGE_LINE_LIMIT = 29;
@@ -372,6 +372,14 @@ function openStudyNoteDb() {
           return;
         }
 
+        /*
+         * 기존 브라우저에 DB 버전만 올라가고 notes/tombstones store가
+         * 실제로 만들어지지 않은 경우가 있었다.
+         *
+         * 같은 버전으로 다시 열면 onupgradeneeded가 실행되지 않으므로,
+         * 현재 DB보다 한 단계 높은 버전으로 자동 재오픈해 누락된 store를
+         * 생성한다. 기존 정상 데이터는 삭제하지 않는다.
+         */
         const repairVersion =
           Math.max(
             database.version + 1,
@@ -379,7 +387,6 @@ function openStudyNoteDb() {
           );
 
         database.close();
-
         openDatabase(
           repairVersion,
           true,
@@ -401,11 +408,14 @@ function openStudyNoteDb() {
       };
     };
 
+    /*
+     * 최초에는 버전을 강제로 지정하지 않아 이미 더 높은 버전의 DB가
+     * 존재해도 VersionError 없이 현재 DB를 연다.
+     * store가 빠진 경우에만 위 repairVersion으로 자동 복구한다.
+     */
     openDatabase();
   });
 }
-
-
 
 async function loadNotesFromIndexedDb() {
   const database = await openStudyNoteDb();
@@ -578,7 +588,15 @@ function createEmptyNote(category = DEFAULT_CATEGORIES[0]): StudyNoteRecord {
     date: getLocalDateValue(),
     title: "새로운 기록",
     category,
-    blocks: [createTextBlock()],
+    /*
+     * 새 노트는 처음부터 29줄 전체를 실제 contentEditable 줄로 만든다.
+     * Enter를 눌러야 다음 줄이 생기는 구조가 아니라,
+     * 페이지 안의 모든 줄이 처음부터 입력 가능한 상태다.
+     */
+    blocks: Array.from(
+      { length: PAGE_LINE_LIMIT },
+      () => createTextBlock(),
+    ),
     lastPageHtml: "",
     createdAt: now,
     updatedAt: now,
@@ -720,6 +738,91 @@ function paginateBlocks(blocks: StudyBlock[]) {
   return pages;
 }
 
+function isPlainEmptyStudyLine(block: StudyBlock) {
+  return (
+    block.type === "text" &&
+    stripHtml(block.html)
+      .replace(/\u00a0/g, " ")
+      .trim().length === 0 &&
+    !block.annotation &&
+    !block.brace
+  );
+}
+
+function ensureAlwaysActivePageLines(
+  blocks: StudyBlock[],
+) {
+  const expandedBlocks: StudyBlock[] = [];
+
+  /*
+   * 과거의 "새 페이지" 기능이 만든 units > 1 빈 spacer를
+   * 실제 1줄짜리 editable block들로 풀어낸다.
+   * 그래서 예전 문서도 빈 줄을 클릭하면 바로 입력할 수 있다.
+   */
+  for (const block of blocks) {
+    if (
+      isPlainEmptyStudyLine(block) &&
+      block.type === "text" &&
+      block.units > 1
+    ) {
+      expandedBlocks.push({
+        ...block,
+        units: 1,
+      });
+
+      for (
+        let index = 1;
+        index < Math.min(PAGE_LINE_LIMIT, block.units);
+        index += 1
+      ) {
+        expandedBlocks.push(createTextBlock());
+      }
+
+      continue;
+    }
+
+    expandedBlocks.push(block);
+  }
+
+  const normalizedBlocks =
+    expandedBlocks.length > 0
+      ? expandedBlocks
+      : [createTextBlock()];
+
+  const pages = paginateBlocks(normalizedBlocks);
+  const lastPage = pages.at(-1) ?? [];
+
+  const usedUnits = lastPage.reduce(
+    (sum, block) => {
+      if (
+        block.type === "image" &&
+        (
+          block.layout === "free" ||
+          block.layout === "float-right"
+        )
+      ) {
+        return sum;
+      }
+
+      return sum + getBlockUnits(block);
+    },
+    0,
+  );
+
+  const remainingLines = Math.max(
+    0,
+    PAGE_LINE_LIMIT - usedUnits,
+  );
+
+  return [
+    ...normalizedBlocks,
+    ...Array.from(
+      { length: remainingLines },
+      () => createTextBlock(),
+    ),
+  ];
+}
+
 async function getImageAspectRatio(src: string) {
   return new Promise<number>((resolve) => {
     const image = new Image();
@@ -857,6 +960,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const undoHistoryRef = useRef<
     Map<string, StudyNoteRecord[]>
   >(new Map());
+  const localMutationRevisionRef = useRef(0);
+  const cloudPullInProgressRef = useRef(false);
 
   useEffect(() => {
     let isCancelled = false;
@@ -931,10 +1036,18 @@ export default function StudyNote({ active }: StudyNoteProps) {
           savedNotes = await migrateLocalStorageNotesToIndexedDb();
         }
 
+        savedNotes = savedNotes.map((note) => ({
+          ...note,
+          blocks: ensureAlwaysActivePageLines(
+            note.blocks,
+          ),
+        }));
+
         if (isCancelled) {
           return;
         }
 
+        notesRef.current = savedNotes;
         setNotes(savedNotes);
         setTombstones(savedTombstones);
         setSelectedNoteId(savedNotes[0]?.id ?? null);
@@ -2352,6 +2465,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
           : note,
       );
 
+    localMutationRevisionRef.current += 1;
     notesRef.current = nextNotes;
     setNotes(nextNotes);
 
@@ -2484,6 +2598,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
           : note,
       );
 
+    localMutationRevisionRef.current += 1;
     notesRef.current = nextNotes;
     setNotes(nextNotes);
   }
@@ -2515,6 +2630,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
      * IndexedDB에도 즉시 저장해서 화면 전환 직후 동기화가 끼어들어도
      * 새 노트가 사라지지 않게 한다.
      */
+    localMutationRevisionRef.current += 1;
     notesRef.current = nextNotes;
     undoHistoryRef.current.set(
       nextNote.id,
@@ -3001,6 +3117,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
       })),
     ];
 
+    localMutationRevisionRef.current += 1;
     notesRef.current = nextNotes;
     setNotes(nextNotes);
     setTombstones(nextTombstones);
@@ -3196,6 +3313,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
           : note,
       );
 
+    localMutationRevisionRef.current += 1;
     notesRef.current = nextNotes;
     setNotes(nextNotes);
     setSelectedImageDeleteTarget(null);
@@ -3401,75 +3519,72 @@ export default function StudyNote({ active }: StudyNoteProps) {
       return;
     }
 
-    const currentPages = paginateBlocks(selectedNote.blocks);
-    const lastPage = currentPages.at(-1) ?? [];
+    const currentPages =
+      paginateBlocks(selectedNote.blocks);
+    const lastPage =
+      currentPages.at(-1) ?? [];
+
     const usedUnits = lastPage.reduce(
-      (sum, block) => sum + getBlockUnits(block),
+      (sum, block) => {
+        if (
+          block.type === "image" &&
+          (
+            block.layout === "free" ||
+            block.layout === "float-right"
+          )
+        ) {
+          return sum;
+        }
+
+        return sum + getBlockUnits(block);
+      },
       0,
     );
-    const remainingUnits = Math.max(
+
+    const remainingLines = Math.max(
       0,
       PAGE_LINE_LIMIT - usedUnits,
     );
 
-    /*
-     * 새 페이지를 만들기 위해 빈 text block을 여러 개 생성하지 않는다.
-     * 현재 페이지의 남은 줄은 하나의 spacer block으로 정확히 채우고,
-     * 그 다음에 실제 입력용 첫 줄을 추가한다.
-     *
-     * 결과:
-     * - 29줄 경계가 정확하게 유지됨
-     * - 페이지를 추가할 때 불필요한 빈 block이 수십 개 생기지 않음
-     * - 2/2, 3/3 페이지가 하나의 노트 blocks 안에 안정적으로 유지됨
-     * - IndexedDB/Supabase/정리본에서 페이지 이후 내용을 추적하기 쉬워짐
-     */
-    const spacerBlock: StudyTextBlock | null =
-      remainingUnits > 0
-        ? {
-            id: createId(),
-            type: "text",
-            html: "",
-            units: remainingUnits,
-            brace: false,
-          }
-        : null;
+    const currentPageFillers = Array.from(
+      { length: remainingLines },
+      () => createTextBlock(),
+    );
 
-    const focusBlock = createTextBlock();
+    const newPageLines = Array.from(
+      { length: PAGE_LINE_LIMIT },
+      () => createTextBlock(),
+    );
+
+    const focusBlock = newPageLines[0];
 
     updateSelectedNote((note) => ({
       ...note,
       blocks: [
         ...note.blocks,
-        ...(spacerBlock ? [spacerBlock] : []),
-        focusBlock,
+        ...currentPageFillers,
+        ...newPageLines,
       ],
     }));
 
-    window.setTimeout(() => {
-      document
-        .querySelector<HTMLElement>(
-          `[data-study-editable-id="${focusBlock.id}"]`,
-        )
-        ?.focus();
-    }, 0);
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        focusTextBlock(
+          focusBlock.id,
+          "start",
+        );
+      });
+    });
   }
 
   function isEditableTextBlock(
-    block: StudyTextBlock,
+    _block: StudyTextBlock,
   ) {
     /*
-     * 실제 페이지의 모든 text block은 항상 편집 가능하다.
-     * 페이지를 강제로 넘기기 위해 내부적으로 만든 큰 spacer만 제외한다.
+     * 페이지 안의 모든 text line은 항상 활성 상태다.
+     * 빈 줄도 클릭/포커스/연속 Enter가 가능하다.
      */
-    const isPageSpacer =
-      stripHtml(block.html)
-        .replace(/\u00a0/g, " ")
-        .trim().length === 0 &&
-      !block.annotation &&
-      !block.brace &&
-      block.units > 1;
-
-    return !isPageSpacer;
+    return true;
   }
 
   function focusTextBlock(
@@ -3907,6 +4022,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
         captureTypingFormatSnapshot();
 
       event.preventDefault();
+      event.stopPropagation();
 
       const editable = event.currentTarget;
       const selection = window.getSelection();
@@ -3914,11 +4030,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
       let beforeHtml = editable.innerHTML;
       let afterHtml = "";
 
-      /*
-       * Enter를 누른 실제 커서 위치에서 문단을 둘로 나눈다.
-       * 형광펜/밑줄처럼 HTML로 저장된 서식도 DocumentFragment로
-       * 함께 이동하므로 줄바꿈 뒤에도 최대한 그대로 유지된다.
-       */
       if (
         selection &&
         selection.rangeCount > 0 &&
@@ -3946,143 +4057,186 @@ export default function StudyNote({ active }: StudyNoteProps) {
         afterHtml = afterContainer.innerHTML;
       }
 
-      const currentMeasuredUnits = Math.max(
-        1,
-        Math.min(
-          PAGE_LINE_LIMIT,
-          Math.ceil(
-            editable.scrollHeight /
-              ROW_HEIGHT,
-          ),
-        ),
-      );
+      const currentNote =
+        notesRef.current.find(
+          (note) => note.id === selectedNoteId,
+        ) ?? selectedNote;
 
-      const nextBlock: StudyTextBlock = {
-        ...createTextBlock(),
-        html: afterHtml,
-      };
+      if (!currentNote) {
+        return;
+      }
 
-      updateSelectedNote((note) => {
-        const targetIndex =
-          note.blocks.findIndex(
-            (item) => item.id === block.id,
-          );
-
-        if (targetIndex < 0) {
-          return note;
-        }
-
-        const nextBlocks =
-          note.blocks.map((item) =>
-            item.id === block.id &&
-            item.type === "text"
-              ? {
-                  ...item,
-                  html: beforeHtml,
-                  units:
-                    currentMeasuredUnits,
-                }
-              : item,
-          );
-
-        nextBlocks.splice(
-          targetIndex + 1,
-          0,
-          nextBlock,
+      const currentIndex =
+        currentNote.blocks.findIndex(
+          (item) => item.id === block.id,
         );
 
-        return {
-          ...note,
-          blocks: nextBlocks,
-        };
-      });
+      if (currentIndex < 0) {
+        return;
+      }
 
-      window.setTimeout(() => {
-        const nextEditable =
-          document.querySelector<HTMLElement>(
-            `[data-study-editable-id="${nextBlock.id}"]`,
-          );
+      const nextExistingBlock =
+        currentNote.blocks[currentIndex + 1];
 
-        if (!nextEditable) {
-          return;
-        }
+      const canReuseNextLine =
+        nextExistingBlock?.type === "text" &&
+        isPlainEmptyStudyLine(
+          nextExistingBlock,
+        ) &&
+        nextExistingBlock.units === 1;
 
-        const nextMeasuredUnits = Math.max(
+      let nextFocusId = "";
+      const nextLineAlreadyExists =
+        canReuseNextLine;
+
+      if (canReuseNextLine) {
+        nextFocusId = nextExistingBlock.id;
+
+        const currentMeasuredUnits = Math.max(
           1,
           Math.min(
             PAGE_LINE_LIMIT,
             Math.ceil(
-              nextEditable.scrollHeight /
+              editable.scrollHeight /
                 ROW_HEIGHT,
             ),
           ),
         );
 
-        if (
-          nextMeasuredUnits !==
-          nextBlock.units
-        ) {
-          updateBlock(
-            nextBlock.id,
-            (currentBlock) =>
-              currentBlock.type === "text"
-                ? {
-                    ...currentBlock,
-                    units:
-                      nextMeasuredUnits,
-                  }
-                : currentBlock,
-          );
+        const needsStateChange =
+          beforeHtml !== block.html ||
+          afterHtml.trim().length > 0 ||
+          currentMeasuredUnits !== block.units;
+
+        if (needsStateChange) {
+          updateSelectedNote((note) => ({
+            ...note,
+            blocks: note.blocks.map((item) => {
+              if (
+                item.id === block.id &&
+                item.type === "text"
+              ) {
+                return {
+                  ...item,
+                  html: beforeHtml,
+                  units: currentMeasuredUnits,
+                };
+              }
+
+              if (
+                item.id === nextExistingBlock.id &&
+                item.type === "text"
+              ) {
+                return {
+                  ...item,
+                  html: afterHtml,
+                  units: 1,
+                };
+              }
+
+              return item;
+            }),
+          }));
         }
+      } else {
+        const nextBlock: StudyTextBlock = {
+          ...createTextBlock(),
+          html: afterHtml,
+        };
 
-        lastSelectedTextBlockIdRef.current =
-          nextBlock.id;
-        selectedBlockIdsRef.current = [
-          nextBlock.id,
-        ];
+        const extraActiveLines =
+          nextExistingBlock
+            ? []
+            : Array.from(
+                {
+                  length:
+                    PAGE_LINE_LIMIT - 1,
+                },
+                () => createTextBlock(),
+              );
 
-        nextEditable.focus();
+        nextFocusId = nextBlock.id;
 
-        const nextSelection =
-          window.getSelection();
+        updateSelectedNote((note) => {
+          const targetIndex =
+            note.blocks.findIndex(
+              (item) => item.id === block.id,
+            );
 
-        if (nextSelection) {
-          const nextRange =
-            document.createRange();
-
-          nextRange.selectNodeContents(
-            nextEditable,
-          );
-          nextRange.collapse(true);
-
-          nextSelection.removeAllRanges();
-          nextSelection.addRange(nextRange);
-
-          /*
-           * 굵게 / 기울임 / 밑줄 / 삭제선 / 폰트 색상 / 폰트 크기를
-           * Enter 이전 상태 그대로 새 줄의 커서에 이어 붙인다.
-           */
-          restoreTypingFormatSnapshot(
-            typingFormatSnapshot,
-          );
-
-          const restoredSelection =
-            window.getSelection();
-
-          if (
-            restoredSelection &&
-            restoredSelection.rangeCount > 0
-          ) {
-            selectionRangeRef.current =
-              restoredSelection
-                .getRangeAt(0)
-                .cloneRange();
-          } else {
-            selectionRangeRef.current =
-              nextRange.cloneRange();
+          if (targetIndex < 0) {
+            return note;
           }
+
+          const currentMeasuredUnits = Math.max(
+            1,
+            Math.min(
+              PAGE_LINE_LIMIT,
+              Math.ceil(
+                editable.scrollHeight /
+                  ROW_HEIGHT,
+              ),
+            ),
+          );
+
+          const nextBlocks = note.blocks.map(
+            (item) =>
+              item.id === block.id &&
+              item.type === "text"
+                ? {
+                    ...item,
+                    html: beforeHtml,
+                    units: currentMeasuredUnits,
+                  }
+                : item,
+          );
+
+          nextBlocks.splice(
+            targetIndex + 1,
+            0,
+            nextBlock,
+            ...extraActiveLines,
+          );
+
+          return {
+            ...note,
+            blocks: nextBlocks,
+          };
+        });
+      }
+
+      const focusNextLine = () => {
+        if (!nextFocusId) {
+          return;
         }
-      }, 0);
+
+        const focused = focusTextBlock(
+          nextFocusId,
+          "start",
+        );
+
+        if (!focused) {
+          return;
+        }
+
+        restoreTypingFormatSnapshot(
+          typingFormatSnapshot,
+        );
+      };
+
+      /*
+       * 이미 화면에 존재하는 빈 줄은 즉시 포커스한다.
+       * 그래서 Enter를 빠르게 여러 번 눌러도 매번 다음 활성 줄로 이동한다.
+       * 새 줄을 실제로 삽입한 경우에만 React render 두 프레임 뒤 포커스한다.
+       */
+      if (nextLineAlreadyExists) {
+        focusNextLine();
+      } else {
+        window.requestAnimationFrame(() => {
+          window.requestAnimationFrame(
+            focusNextLine,
+          );
+        });
+      }
 
       return;
     }
@@ -4109,118 +4263,22 @@ export default function StudyNote({ active }: StudyNoteProps) {
       event.key === "Backspace" &&
       stripHtml(
         event.currentTarget.innerHTML,
-      ).trim() === "" &&
-      selectedNote &&
-      selectedNote.blocks.length > 1
+      ).trim() === ""
     ) {
-      event.preventDefault();
-
-      const targetIndex =
-        selectedNote.blocks.findIndex(
-          (item) => item.id === block.id,
+      /*
+       * 빈 줄 자체를 삭제하지 않는다.
+       * 줄은 항상 존재해야 하므로 Backspace는 이전 줄로 커서만 이동한다.
+       */
+      const moved =
+        focusAdjacentEditableTextBlock(
+          block.id,
+          "previous",
         );
 
-      const immediatePrevious =
-        targetIndex > 0
-          ? selectedNote.blocks[
-              targetIndex - 1
-            ]
-          : null;
-
-      /*
-       * "새 페이지"가 만든 큰 빈 spacer 바로 뒤의 첫 빈 줄에서
-       * Backspace를 누르면 spacer도 함께 제거한다.
-       * 그러면 다음 페이지 내용이 자동으로 앞 페이지로 당겨진다.
-       */
-      const previousIsPageSpacer =
-        immediatePrevious?.type ===
-          "text" &&
-        stripHtml(
-          immediatePrevious.html,
-        ).trim() === "" &&
-        !immediatePrevious.annotation &&
-        !immediatePrevious.brace &&
-        immediatePrevious.units > 1;
-
-      const removeIds = new Set([
-        block.id,
-        ...(previousIsPageSpacer &&
-        immediatePrevious
-          ? [immediatePrevious.id]
-          : []),
-      ]);
-
-      const focusSearchEnd =
-        previousIsPageSpacer
-          ? targetIndex - 1
-          : targetIndex;
-
-      const previousTextBlock =
-        selectedNote.blocks
-          .slice(
-            0,
-            Math.max(
-              0,
-              focusSearchEnd,
-            ),
-          )
-          .reverse()
-          .find(
-            (
-              item,
-            ): item is StudyTextBlock =>
-              item.type === "text" &&
-              !removeIds.has(item.id),
-          );
-
-      updateSelectedNote((note) => ({
-        ...note,
-        blocks: note.blocks.filter(
-          (item) =>
-            !removeIds.has(item.id),
-        ),
-      }));
-
-      window.setTimeout(() => {
-        if (!previousTextBlock) {
-          return;
-        }
-
-        const previousEditable =
-          document.querySelector<HTMLElement>(
-            `[data-study-editable-id="${previousTextBlock.id}"]`,
-          );
-
-        if (!previousEditable) {
-          return;
-        }
-
-        lastSelectedTextBlockIdRef.current =
-          previousTextBlock.id;
-        selectedBlockIdsRef.current = [
-          previousTextBlock.id,
-        ];
-
-        previousEditable.focus();
-
-        const previousSelection =
-          window.getSelection();
-
-        if (previousSelection) {
-          const previousRange =
-            document.createRange();
-
-          previousRange.selectNodeContents(
-            previousEditable,
-          );
-          previousRange.collapse(false);
-
-          previousSelection.removeAllRanges();
-          previousSelection.addRange(
-            previousRange,
-          );
-        }
-      }, 0);
+      if (moved) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
     }
   }
 
@@ -7018,6 +7076,32 @@ export default function StudyNote({ active }: StudyNoteProps) {
       return;
     }
 
+    if (cloudPullInProgressRef.current) {
+      return;
+    }
+
+    const activeElement =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+
+    if (
+      activeElement?.closest(
+        "[data-study-editable-id], [data-study-last-page-id]",
+      )
+    ) {
+      /*
+       * 사용자가 실제로 타이핑 중일 때는 서버 pull로 편집 DOM/state를
+       * 덮어쓰지 않는다. 로컬 저장/sync가 먼저 끝난 뒤 다음 pull에서 병합한다.
+       */
+      return;
+    }
+
+    cloudPullInProgressRef.current = true;
+    const mutationRevisionAtStart =
+      localMutationRevisionRef.current;
+
+    try {
     const {
       data: { user },
       error: userError,
@@ -7395,10 +7479,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
           rawRow.category.trim()
             ? rawRow.category
             : DEFAULT_CATEGORIES[0],
-        blocks:
+        blocks: ensureAlwaysActivePageLines(
           nextBlocks.length > 0
             ? nextBlocks
             : [createTextBlock()],
+        ),
         lastPageHtml,
         createdAt: remoteUpdatedAt,
         updatedAt: remoteUpdatedAt,
@@ -7576,6 +7661,16 @@ export default function StudyNote({ active }: StudyNoteProps) {
       ),
     );
 
+    if (
+      localMutationRevisionRef.current !==
+      mutationRevisionAtStart
+    ) {
+      console.info(
+        "HOO터디 노트 서버 복원 생략: 로컬 편집이 진행 중입니다.",
+      );
+      return;
+    }
+
     /*
      * 가장 중요:
      * IndexedDB 저장 성공 여부와 관계없이 서버 노트를 먼저 화면에 띄운다.
@@ -7641,6 +7736,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
           mergedNotes.length,
       },
     );
+    } finally {
+      cloudPullInProgressRef.current = false;
+    }
   }
 
   async function syncStudyNotes(
@@ -7658,6 +7756,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
     syncInProgressRef.current = true;
     syncQueuedRef.current = false;
     setSaveLabel("동기화 중...");
+
+    const mutationRevisionAtStart =
+      localMutationRevisionRef.current;
 
     try {
       const {
@@ -8078,10 +8179,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
             row.category.trim()
               ? row.category
               : DEFAULT_CATEGORIES[0],
-          blocks:
+          blocks: ensureAlwaysActivePageLines(
             nextBlocks.length > 0
               ? nextBlocks
               : [createTextBlock()],
+          ),
           lastPageHtml,
           createdAt: remoteCreatedAt,
           updatedAt: remoteUpdatedAt,
@@ -8220,37 +8322,50 @@ export default function StudyNote({ active }: StudyNoteProps) {
       );
 
       /*
-       * 다른 기기에서 내려온 기록을 즉시 현재 기기의 IndexedDB에도 저장한다.
-       * 따라서 다음 실행부터는 네트워크가 없어도 마지막 동기화 기록을 볼 수 있다.
+       * 서버 조회가 진행되는 사이 사용자가 타이핑/사진삽입/삭제를 했다면
+       * 조회 시작 시점의 오래된 mergedSourceNotes를 화면에 다시 적용하지 않는다.
+       * 이것이 "입력했다가 지워져서 3번 이상 반복"되던 핵심 원인이었다.
        */
-      notesRef.current = mergedSourceNotes;
-      await replaceNotesInIndexedDb(
-        mergedSourceNotes,
-      );
+      const localChangedDuringRemoteMerge =
+        localMutationRevisionRef.current !==
+        mutationRevisionAtStart;
 
-      setNotes((previousNotes) => {
-        const previousSignature =
-          JSON.stringify(previousNotes);
-        const nextSignature =
-          JSON.stringify(mergedSourceNotes);
+      if (localChangedDuringRemoteMerge) {
+        mergedSourceNotes.splice(
+          0,
+          mergedSourceNotes.length,
+          ...notesRef.current,
+        );
+      } else {
+        notesRef.current = mergedSourceNotes;
+        await replaceNotesInIndexedDb(
+          mergedSourceNotes,
+        );
 
-        return previousSignature === nextSignature
-          ? previousNotes
-          : mergedSourceNotes;
-      });
+        setNotes((previousNotes) => {
+          const previousSignature =
+            JSON.stringify(previousNotes);
+          const nextSignature =
+            JSON.stringify(mergedSourceNotes);
 
-      setSelectedNoteId((previousId) => {
-        if (
-          previousId &&
-          mergedSourceNotes.some(
-            (note) => note.id === previousId,
-          )
-        ) {
-          return previousId;
-        }
+          return previousSignature === nextSignature
+            ? previousNotes
+            : mergedSourceNotes;
+        });
 
-        return mergedSourceNotes[0]?.id ?? null;
-      });
+        setSelectedNoteId((previousId) => {
+          if (
+            previousId &&
+            mergedSourceNotes.some(
+              (note) => note.id === previousId,
+            )
+          ) {
+            return previousId;
+          }
+
+          return mergedSourceNotes[0]?.id ?? null;
+        });
+      }
 
       let pushedCount = 0;
       let failedCount = 0;
@@ -8515,25 +8630,38 @@ export default function StudyNote({ active }: StudyNoteProps) {
         ),
       );
 
-      await replaceNotesInIndexedDb(
-        reconciledNotes,
-      );
+      const mutationRevisionBeforeFinalApply =
+        localMutationRevisionRef.current;
+
       await replaceStudyNoteTombstones(
         remainingTombstones,
       );
 
-      notesRef.current = reconciledNotes;
+      /*
+       * 업로드 도중 새 입력이 들어왔으면 reconciledNotes도 이미 과거 상태다.
+       * 그 경우 현재 notesRef를 절대 덮어쓰지 않고 다음 debounce 저장에 맡긴다.
+       */
+      if (
+        mutationRevisionBeforeFinalApply ===
+        localMutationRevisionRef.current
+      ) {
+        await replaceNotesInIndexedDb(
+          reconciledNotes,
+        );
 
-      setNotes((previousNotes) => {
-        const previousSignature =
-          JSON.stringify(previousNotes);
-        const nextSignature =
-          JSON.stringify(reconciledNotes);
+        notesRef.current = reconciledNotes;
 
-        return previousSignature === nextSignature
-          ? previousNotes
-          : reconciledNotes;
-      });
+        setNotes((previousNotes) => {
+          const previousSignature =
+            JSON.stringify(previousNotes);
+          const nextSignature =
+            JSON.stringify(reconciledNotes);
+
+          return previousSignature === nextSignature
+            ? previousNotes
+            : reconciledNotes;
+        });
+      }
 
       setTombstones(remainingTombstones);
 
