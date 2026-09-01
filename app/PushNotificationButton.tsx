@@ -22,31 +22,41 @@ function urlBase64ToUint8Array(base64String: string) {
 }
 
 export default function PushNotificationButton() {
-  const [isSupported, setIsSupported] = useState(false);
-  const [isSubscribed, setIsSubscribed] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [message, setMessage] = useState("");
+  const [isSupported, setIsSupported] =
+    useState(false);
+
+  const [isSubscribed, setIsSubscribed] =
+    useState(false);
+
+  const [isLoading, setIsLoading] =
+    useState(false);
+
+  const [message, setMessage] =
+    useState("");
 
   useEffect(() => {
-    const checkPushSubscription = async () => {
-      if (
-        !("serviceWorker" in navigator) ||
-        !("PushManager" in window) ||
-        !("Notification" in window)
-      ) {
-        return;
-      }
+    const checkPushSubscription =
+      async () => {
+        if (
+          !("serviceWorker" in navigator) ||
+          !("PushManager" in window) ||
+          !("Notification" in window)
+        ) {
+          return;
+        }
 
-      setIsSupported(true);
+        setIsSupported(true);
 
-      const registration =
-        await navigator.serviceWorker.ready;
+        const registration =
+          await navigator.serviceWorker.ready;
 
-      const subscription =
-        await registration.pushManager.getSubscription();
+        const subscription =
+          await registration.pushManager.getSubscription();
 
-      setIsSubscribed(Boolean(subscription));
-    };
+        setIsSubscribed(
+          Boolean(subscription),
+        );
+      };
 
     void checkPushSubscription();
   }, []);
@@ -59,7 +69,8 @@ export default function PushNotificationButton() {
 
     try {
       const vapidPublicKey =
-        process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+        process.env
+          .NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 
       if (!vapidPublicKey) {
         throw new Error(
@@ -71,7 +82,9 @@ export default function PushNotificationButton() {
         await Notification.requestPermission();
 
       if (permission !== "granted") {
-        setMessage("알림 권한이 허용되지 않았어요.");
+        setMessage(
+          "알림 권한이 허용되지 않았어요.",
+        );
         return;
       }
 
@@ -83,30 +96,47 @@ export default function PushNotificationButton() {
 
       if (!subscription) {
         subscription =
-          await registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey:
-              urlBase64ToUint8Array(vapidPublicKey),
-          });
+          await registration.pushManager.subscribe(
+            {
+              userVisibleOnly: true,
+              applicationServerKey:
+                urlBase64ToUint8Array(
+                  vapidPublicKey,
+                ),
+            },
+          );
       }
 
-      const subscriptionData = subscription.toJSON();
-      const endpoint = subscriptionData.endpoint;
-      const p256dh = subscriptionData.keys?.p256dh;
-      const auth = subscriptionData.keys?.auth;
+      const subscriptionData =
+        subscription.toJSON();
 
-      if (!endpoint || !p256dh || !auth) {
+      const endpoint =
+        subscriptionData.endpoint;
+
+      const p256dh =
+        subscriptionData.keys?.p256dh;
+
+      const auth =
+        subscriptionData.keys?.auth;
+
+      if (
+        !endpoint ||
+        !p256dh ||
+        !auth
+      ) {
         throw new Error(
           "푸시 구독 정보가 완전하지 않습니다.",
         );
       }
 
-      const supabase = createClient();
+      const supabase =
+        createClient();
 
       const {
         data: { user },
         error: userError,
-      } = await supabase.auth.getUser();
+      } =
+        await supabase.auth.getUser();
 
       if (userError || !user) {
         throw new Error(
@@ -114,31 +144,41 @@ export default function PushNotificationButton() {
         );
       }
 
-      const { error: saveError } = await supabase
-        .from("hoo_push_subscriptions")
-        .upsert(
-          {
-            user_id: user.id,
-            endpoint,
-            p256dh,
-            auth,
-            user_agent: navigator.userAgent,
-            is_active: true,
-            updated_at: new Date().toISOString(),
-          },
-          {
-            onConflict: "endpoint",
-          },
-        );
+      const { error: saveError } =
+        await supabase
+          .from(
+            "hoo_push_subscriptions",
+          )
+          .upsert(
+            {
+              user_id: user.id,
+              endpoint,
+              p256dh,
+              auth,
+              user_agent:
+                navigator.userAgent,
+              is_active: true,
+              updated_at:
+                new Date().toISOString(),
+            },
+            {
+              onConflict: "endpoint",
+            },
+          );
 
       if (saveError) {
         throw saveError;
       }
 
       setIsSubscribed(true);
-      setMessage("HOO 알림이 연결됐어요.");
+      setMessage(
+        "HOO 알림이 연결됐어요.",
+      );
     } catch (error) {
-      console.error("푸시 알림 구독 실패:", error);
+      console.error(
+        "푸시 알림 구독 실패:",
+        error,
+      );
 
       setMessage(
         error instanceof Error
@@ -157,27 +197,38 @@ export default function PushNotificationButton() {
     setMessage("");
 
     try {
-      const supabase = createClient();
+      const supabase =
+        createClient();
 
       const {
         data: { session },
         error: sessionError,
-      } = await supabase.auth.getSession();
+      } =
+        await supabase.auth.getSession();
 
-      if (sessionError || !session) {
+      if (
+        sessionError ||
+        !session
+      ) {
         throw new Error(
           "로그인 후 테스트해주세요.",
         );
       }
 
-      const response = await fetch("/api/push/test", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
-      });
+      const response =
+        await fetch(
+          "/api/push/test",
+          {
+            method: "POST",
+            headers: {
+              Authorization:
+                `Bearer ${session.access_token}`,
+            },
+          },
+        );
 
-      const result = await response.json();
+      const result =
+        await response.json();
 
       if (!response.ok) {
         throw new Error(
@@ -190,7 +241,10 @@ export default function PushNotificationButton() {
         `테스트 알림 ${result.successCount}건을 발송했어요.`,
       );
     } catch (error) {
-      console.error("테스트 푸시 발송 실패:", error);
+      console.error(
+        "테스트 푸시 발송 실패:",
+        error,
+      );
 
       setMessage(
         error instanceof Error
@@ -227,13 +281,13 @@ export default function PushNotificationButton() {
           </span>
 
           <span className="min-w-0">
-            <span className="block text-sm font-black text-white">
+            <span className="block whitespace-nowrap text-sm font-black text-white">
               {isLoading
                 ? isSubscribed
                   ? "발송 중..."
                   : "연결 중..."
                 : isSubscribed
-                  ? "테스트 알림 보내기"
+                  ? "테스트 알림"
                   : "HOO 알림 켜기"}
             </span>
 

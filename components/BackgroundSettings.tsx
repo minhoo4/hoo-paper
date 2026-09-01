@@ -18,8 +18,8 @@ export default function BackgroundSettings({
           </span>
 
           <span className="min-w-0">
-            <span className="block text-sm font-black text-white">
-              배경사진 변경
+            <span className="block whitespace-nowrap text-sm font-black text-white">
+              배경 변경
             </span>
 
             <span className="mt-0.5 block text-[10px] font-bold text-white/45">
@@ -37,7 +37,8 @@ export default function BackgroundSettings({
           accept="image/png,image/jpeg,image/webp"
           className="hidden"
           onChange={(event) => {
-            const file = event.target.files?.[0];
+            const file =
+              event.target.files?.[0];
 
             if (!file) {
               return;
@@ -61,8 +62,8 @@ export default function BackgroundSettings({
           </span>
 
           <span className="min-w-0">
-            <span className="block text-sm font-black text-white">
-              기본 배경으로 복원
+            <span className="block whitespace-nowrap text-sm font-black text-white">
+              기본배경
             </span>
 
             <span className="mt-0.5 block text-[10px] font-bold text-white/45">

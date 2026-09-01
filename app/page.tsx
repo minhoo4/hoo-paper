@@ -11591,6 +11591,25 @@ setSecretPinInput("");
             </div>
           </div>
 
+          <div className="mt-5 border-t border-white/10 pt-5">
+            <button
+              type="button"
+              aria-label="커피먹고 일해라"
+              onClick={() => {
+                window.location.href =
+                  "/gimme-some-coffee";
+              }}
+              className="group block w-full rounded-2xl border border-white/10 bg-white/[0.035] p-2.5 transition hover:border-[#d5ad72]/35 hover:bg-white/[0.07] active:scale-[0.98]"
+            >
+              <img
+                src="/gimme-some-coffee-icon.png"
+                alt="커피먹고 일해라"
+                draggable={false}
+                className="mx-auto block h-auto w-full max-w-[170px] select-none opacity-90 transition group-hover:opacity-100"
+              />
+            </button>
+          </div>
+
           <div className="mt-6 border-t border-white/10 pt-5">
             <p className="text-[10px] font-black tracking-[0.16em] text-white/40">
               UI APPEARANCE
@@ -15501,7 +15520,6 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
     </div>
   </button>
 )}
-
 
 
 <FocusMode
