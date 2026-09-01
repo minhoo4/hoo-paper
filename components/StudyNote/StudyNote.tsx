@@ -11460,6 +11460,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
                               style={{
                                 width: PAGE_SHEET_WIDTH,
                                 minWidth: PAGE_SHEET_WIDTH,
+                                fontSize: `${PAGE_TEXT_FONT_SIZE}px`,
+                                fontVariantNumeric: "tabular-nums",
+                                fontFeatureSettings: '"tnum" 1',
                               }}
                             >
                               <div
@@ -12826,6 +12829,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
                     style={{
                       width: PAGE_SHEET_WIDTH,
                       minWidth: PAGE_SHEET_WIDTH,
+                      fontSize: `${PAGE_TEXT_FONT_SIZE}px`,
+                      fontVariantNumeric: "tabular-nums",
+                      fontFeatureSettings: '"tnum" 1',
                     }}
                   >
                     <div
