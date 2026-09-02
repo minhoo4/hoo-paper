@@ -944,6 +944,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
   const [pendingPageDeleteIndex, setPendingPageDeleteIndex] =
     useState<number | null>(null);
+  const [pageMoveState, setPageMoveState] =
+    useState<{
+      noteId: string;
+      sourceIndex: number;
+      targetIndex: number;
+    } | null>(null);
   const [focusStudyNoteSession, setFocusStudyNoteSession] =
     useState<FocusStudyNoteSession | null>(null);
   const [isFocusStudyNotePanelOpen, setIsFocusStudyNotePanelOpen] =
@@ -973,6 +979,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const syncQueuedRef = useRef(false);
   const notesRef = useRef<StudyNoteRecord[]>([]);
   const dragSelectionCleanupRef = useRef<(() => void) | null>(null);
+  const pageMoveCleanupRef = useRef<(() => void) | null>(null);
   const activeFontSizeRef = useRef(14);
   const typingFontSizeRef = useRef(14);
   const undoHistoryRef = useRef<
@@ -991,6 +998,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
    * StudyNoteRecord/IndexedDB/Supabase 구조는 전혀 변경하지 않는다.
    */
   const activeEditorNoteIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      pageMoveCleanupRef.current?.();
+    };
+  }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -2173,11 +2186,21 @@ export default function StudyNote({ active }: StudyNoteProps) {
             categoryFilter === "전체" ||
             note.category === categoryFilter,
         )
-        .sort((first, second) =>
-          second.updatedAt.localeCompare(
-            first.updatedAt,
-          ),
-        ),
+        .sort((first, second) => {
+          /*
+           * 메인(전체)에서는 최근 수정 파일을 우선하고,
+           * 실제 카테고리 폴더 안에서는 파일 생성일 기준으로 정렬한다.
+           */
+          if (categoryFilter === "전체") {
+            return second.updatedAt.localeCompare(
+              first.updatedAt,
+            );
+          }
+
+          return second.createdAt.localeCompare(
+            first.createdAt,
+          );
+        }),
     [categoryFilter, notes],
   );
 
@@ -4099,6 +4122,387 @@ export default function StudyNote({ active }: StudyNoteProps) {
     setPendingPageDeleteIndex(null);
   }
 
+  function moveStudyPage(
+    noteId: string,
+    sourceIndex: number,
+    targetIndex: number,
+  ) {
+    if (
+      sourceIndex === targetIndex ||
+      sourceIndex < 0 ||
+      targetIndex < 0
+    ) {
+      return;
+    }
+
+    activateEditorNote(noteId);
+
+    updateSelectedNote((note) => {
+      if (note.id !== noteId) {
+        return note;
+      }
+
+      const currentPages =
+        paginateBlocks(note.blocks);
+
+      if (
+        sourceIndex >= currentPages.length ||
+        targetIndex >= currentPages.length
+      ) {
+        return note;
+      }
+
+      /*
+       * 페이지를 옮긴 뒤에도 서로 다른 페이지의 내용이 합쳐지지 않도록
+       * 각 페이지의 남은 줄을 실제 1줄짜리 빈 블록으로 채운 뒤 이동한다.
+       * 자유 배치 사진은 기존 페이지와 함께 이동하도록 anchor도 다시 매긴다.
+       */
+      const pageEntries =
+        currentPages.map(
+          (pageBlocks) => {
+            const freeImages =
+              pageBlocks.filter(
+                (
+                  block,
+                ): block is StudyImageBlock =>
+                  block.type === "image" &&
+                  block.layout === "free",
+              );
+
+            const flowBlocks =
+              pageBlocks.filter(
+                (block) =>
+                  !(
+                    block.type === "image" &&
+                    block.layout === "free"
+                  ),
+              );
+
+            const usedUnits =
+              flowBlocks.reduce(
+                (sum, block) => {
+                  if (
+                    block.type === "image" &&
+                    block.layout ===
+                      "float-right"
+                  ) {
+                    return sum;
+                  }
+
+                  return (
+                    sum +
+                    getBlockUnits(block)
+                  );
+                },
+                0,
+              );
+
+            const fillers =
+              Array.from(
+                {
+                  length: Math.max(
+                    0,
+                    PAGE_LINE_LIMIT -
+                      usedUnits,
+                  ),
+                },
+                () => createTextBlock(),
+              );
+
+            return {
+              flowBlocks: [
+                ...flowBlocks,
+                ...fillers,
+              ],
+              freeImages,
+            };
+          },
+        );
+
+      const [movedPage] =
+        pageEntries.splice(
+          sourceIndex,
+          1,
+        );
+
+      if (!movedPage) {
+        return note;
+      }
+
+      pageEntries.splice(
+        targetIndex,
+        0,
+        movedPage,
+      );
+
+      const nextBlocks =
+        pageEntries.flatMap(
+          (
+            entry,
+            pageIndex,
+          ) => [
+            ...entry.flowBlocks,
+            ...entry.freeImages.map(
+              (block) => ({
+                ...block,
+                pageAnchorIndex:
+                  pageIndex,
+              }),
+            ),
+          ],
+        );
+
+      return {
+        ...note,
+        blocks: nextBlocks,
+      };
+    });
+
+    selectedBlockIdsRef.current = [];
+    selectionRangeRef.current = null;
+    lastSelectedTextBlockIdRef.current = null;
+  }
+
+  function beginStudyPageLongPress(
+    event: ReactPointerEvent<HTMLElement>,
+    noteId: string,
+    pageIndex: number,
+  ) {
+    if (
+      event.button !== 0 ||
+      pageMoveState
+    ) {
+      return;
+    }
+
+    const target =
+      event.target as HTMLElement;
+
+    const isMoveHandle =
+      Boolean(
+        target.closest(
+          "[data-study-page-move-handle='true']",
+        ),
+      );
+
+    const isInteractiveContent =
+      Boolean(
+        target.closest(
+          [
+            "[data-study-editable-id]",
+            "[data-study-image-wrapper-id]",
+            "[data-study-annotation-id]",
+            "button",
+            "input",
+            "textarea",
+            "select",
+            "[contenteditable='true']",
+          ].join(","),
+        ),
+      );
+
+    /*
+     * 텍스트 드래그/사진 조작과 충돌하지 않게
+     * 페이지 여백 또는 왼쪽 위 이동 핸들을 길게 눌렀을 때만 시작한다.
+     */
+    if (
+      isInteractiveContent &&
+      !isMoveHandle
+    ) {
+      return;
+    }
+
+    pageMoveCleanupRef.current?.();
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let targetIndex = pageIndex;
+    let isActivated = false;
+    let longPressTimer:
+      number | null = null;
+
+    const previousUserSelect =
+      document.body.style.userSelect;
+    const previousCursor =
+      document.body.style.cursor;
+
+    const cleanup = () => {
+      if (longPressTimer !== null) {
+        window.clearTimeout(
+          longPressTimer,
+        );
+        longPressTimer = null;
+      }
+
+      window.removeEventListener(
+        "pointermove",
+        handleMove,
+      );
+      window.removeEventListener(
+        "pointerup",
+        handleUp,
+      );
+      window.removeEventListener(
+        "pointercancel",
+        handleCancel,
+      );
+
+      if (isActivated) {
+        document.body.style.userSelect =
+          previousUserSelect;
+        document.body.style.cursor =
+          previousCursor;
+      }
+
+      setPageMoveState(null);
+
+      if (
+        pageMoveCleanupRef.current ===
+        cleanup
+      ) {
+        pageMoveCleanupRef.current =
+          null;
+      }
+    };
+
+    const getTargetPageIndex = (
+      clientX: number,
+      clientY: number,
+    ) => {
+      const pointTarget =
+        document.elementFromPoint(
+          clientX,
+          clientY,
+        ) as HTMLElement | null;
+
+      const pageElement =
+        pointTarget?.closest<HTMLElement>(
+          "[data-study-page-container='true']",
+        );
+
+      if (
+        !pageElement ||
+        pageElement.dataset.studyNoteId !==
+          noteId
+      ) {
+        return null;
+      }
+
+      const nextIndex = Number(
+        pageElement.dataset
+          .studyPageIndex,
+      );
+
+      return Number.isInteger(nextIndex)
+        ? nextIndex
+        : null;
+    };
+
+    const handleMove = (
+      moveEvent: PointerEvent,
+    ) => {
+      const distance = Math.hypot(
+        moveEvent.clientX - startX,
+        moveEvent.clientY - startY,
+      );
+
+      if (!isActivated) {
+        if (distance > 6) {
+          cleanup();
+        }
+        return;
+      }
+
+      moveEvent.preventDefault();
+
+      const nextTargetIndex =
+        getTargetPageIndex(
+          moveEvent.clientX,
+          moveEvent.clientY,
+        );
+
+      if (nextTargetIndex === null) {
+        return;
+      }
+
+      targetIndex =
+        nextTargetIndex;
+
+      setPageMoveState({
+        noteId,
+        sourceIndex: pageIndex,
+        targetIndex,
+      });
+    };
+
+    const handleUp = (
+      upEvent: PointerEvent,
+    ) => {
+      if (isActivated) {
+        const releasedTargetIndex =
+          getTargetPageIndex(
+            upEvent.clientX,
+            upEvent.clientY,
+          );
+
+        if (
+          releasedTargetIndex !== null
+        ) {
+          targetIndex =
+            releasedTargetIndex;
+        }
+
+        if (
+          targetIndex !== pageIndex
+        ) {
+          moveStudyPage(
+            noteId,
+            pageIndex,
+            targetIndex,
+          );
+        }
+      }
+
+      cleanup();
+    };
+
+    const handleCancel = () => {
+      cleanup();
+    };
+
+    longPressTimer =
+      window.setTimeout(() => {
+        isActivated = true;
+        document.body.style.userSelect =
+          "none";
+        document.body.style.cursor =
+          "grabbing";
+
+        setPageMoveState({
+          noteId,
+          sourceIndex: pageIndex,
+          targetIndex: pageIndex,
+        });
+      }, 450);
+
+    window.addEventListener(
+      "pointermove",
+      handleMove,
+      { passive: false },
+    );
+    window.addEventListener(
+      "pointerup",
+      handleUp,
+    );
+    window.addEventListener(
+      "pointercancel",
+      handleCancel,
+    );
+
+    pageMoveCleanupRef.current =
+      cleanup;
+  }
+
   function isEditableTextBlock(
     _block: StudyTextBlock,
   ) {
@@ -4765,8 +5169,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
 
     if (
-      event.key === "ArrowUp" ||
-      event.key === "ArrowDown"
+      !event.shiftKey &&
+      (
+        event.key === "ArrowUp" ||
+        event.key === "ArrowDown"
+      )
     ) {
       const moved =
         focusAdjacentEditableTextBlock(
@@ -4805,9 +5212,100 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
   }
 
+  function getStudyEditorRootForRange(
+    range: Range | null,
+  ) {
+    if (!range) {
+      return null;
+    }
+
+    const commonNode =
+      range.commonAncestorContainer;
+
+    const commonElement =
+      commonNode instanceof HTMLElement
+        ? commonNode
+        : commonNode.parentElement;
+
+    return (
+      commonElement?.closest<HTMLElement>(
+        "[data-study-editor-root]",
+      ) ?? null
+    );
+  }
+
+  function getActiveStudyEditorRoot() {
+    const activeBlockId =
+      lastSelectedTextBlockIdRef.current;
+
+    if (!activeBlockId) {
+      return null;
+    }
+
+    return (
+      document
+        .querySelector<HTMLElement>(
+          `[data-study-editable-id="${activeBlockId}"]`,
+        )
+        ?.closest<HTMLElement>(
+          "[data-study-editor-root]",
+        ) ?? null
+    );
+  }
+
+  function restoreCapturedTextSelectionForToolbar() {
+    const selection =
+      window.getSelection();
+
+    if (!selection) {
+      return false;
+    }
+
+    const currentRange =
+      selection.rangeCount > 0
+        ? selection.getRangeAt(0)
+        : null;
+
+    /*
+     * 현재 선택이 아직 에디터 안에 살아 있으면 그대로 쓴다.
+     * 툴바가 포커스를 가져가 선택이 사라졌을 때만 저장된 Range를 복원한다.
+     */
+    if (
+      currentRange &&
+      getStudyEditorRootForRange(
+        currentRange,
+      )
+    ) {
+      return true;
+    }
+
+    const savedRange =
+      selectionRangeRef.current;
+
+    if (
+      !savedRange ||
+      !getStudyEditorRootForRange(
+        savedRange,
+      )
+    ) {
+      return false;
+    }
+
+    try {
+      selection.removeAllRanges();
+      selection.addRange(
+        savedRange.cloneRange(),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function captureSelection(fallbackBlockId?: string) {
     const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+
+    if (!selection || selection.rangeCount === 0) {
       if (fallbackBlockId) {
         lastSelectedTextBlockIdRef.current = fallbackBlockId;
         selectedBlockIdsRef.current = [fallbackBlockId];
@@ -4816,9 +5314,24 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
 
     const range = selection.getRangeAt(0);
-    const editorRoot = document.querySelector("[data-study-editor-root]");
 
-    if (!editorRoot || !editorRoot.contains(range.commonAncestorContainer)) {
+    if (selection.isCollapsed) {
+      selectionRangeRef.current =
+        range.cloneRange();
+
+      if (fallbackBlockId) {
+        lastSelectedTextBlockIdRef.current = fallbackBlockId;
+        selectedBlockIdsRef.current = [fallbackBlockId];
+      }
+      return;
+    }
+
+    const editorRoot =
+      getStudyEditorRootForRange(
+        range,
+      );
+
+    if (!editorRoot) {
       return;
     }
 
@@ -5006,6 +5519,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
       | "underline"
       | "strikeThrough",
   ) {
+    restoreCapturedTextSelectionForToolbar();
     const selection =
       window.getSelection();
 
@@ -5020,9 +5534,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
       selection.getRangeAt(0);
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(
+        range,
+      ) ??
+      getActiveStudyEditorRoot();
 
     if (
       !editorRoot ||
@@ -5132,6 +5647,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   function applyUnderlineColor(
     color: string,
   ) {
+    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -5142,9 +5658,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(
+        range,
+      ) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -5398,6 +5915,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   function applyStrikeColor(
     color: string,
   ) {
+    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -5408,9 +5926,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(
+        range,
+      ) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -5664,6 +6183,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   function applyFontColor(
     color: string,
   ) {
+    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -5674,9 +6194,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(
+        range,
+      ) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -5790,6 +6311,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
   function toggleHighlightFormat() {
+    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -5800,9 +6322,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(
+        range,
+      ) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -5966,6 +6489,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   function applyFontSize(
     fontSize: number,
   ) {
+    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -5976,9 +6500,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(
+        range,
+      ) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -7524,7 +8049,25 @@ export default function StudyNote({ active }: StudyNoteProps) {
       }
 
       selection.removeAllRanges();
-      selection.addRange(nextRange);
+
+      /*
+       * Selection 자체는 실제 드래그 방향(anchor → focus)을 유지한다.
+       * Range는 DOM 규칙상 앞→뒤로 정규화되므로 저장용으로만 사용한다.
+       * 이 분리로 오른쪽→왼쪽 역방향 드래그도 정상 선택된다.
+       */
+      if (
+        typeof selection.setBaseAndExtent ===
+        "function"
+      ) {
+        selection.setBaseAndExtent(
+          anchorNode,
+          anchorOffset,
+          currentRange.startContainer,
+          currentRange.startOffset,
+        );
+      } else {
+        selection.addRange(nextRange);
+      }
 
       selectionRangeRef.current =
         nextRange.cloneRange();
@@ -10761,6 +11304,18 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 ? "pointer-events-none ml-0 max-w-0 translate-x-8 border-transparent px-0 opacity-0"
                 : "ml-1 max-w-[calc(100%-36px)] flex-1 translate-x-0 px-2 opacity-100"
             }`}
+            onMouseDownCapture={() => {
+              const selection =
+                window.getSelection();
+
+              if (
+                selection &&
+                selection.rangeCount > 0 &&
+                !selection.isCollapsed
+              ) {
+                captureSelection();
+              }
+            }}
           >
             <button
               type="button"
@@ -11554,12 +12109,49 @@ export default function StudyNote({ active }: StudyNoteProps) {
                           {panePages.map((pageBlocks, pageIndex) => (
                             <article
                               key={`${paneNote.id}-page-${pageIndex}`}
+                              data-study-page-container="true"
+                              data-study-note-id={paneNote.id}
+                              data-study-page-index={pageIndex}
+                              onPointerDownCapture={(event) =>
+                                beginStudyPageLongPress(
+                                  event,
+                                  paneNote.id,
+                                  pageIndex,
+                                )
+                              }
                               className={`relative overflow-hidden border ${
                                 isDarkMode
                                   ? "border-[#303238] bg-[#17191d] text-[#efefef]"
                                   : "border-[#deded9] bg-[#fff] text-[#2a2a2a]"
+                              } ${
+                                pageMoveState?.noteId ===
+                                  paneNote.id &&
+                                pageMoveState.sourceIndex ===
+                                  pageIndex
+                                  ? "cursor-grabbing opacity-80"
+                                  : ""
+                              } ${
+                                pageMoveState?.noteId ===
+                                  paneNote.id &&
+                                pageMoveState.targetIndex ===
+                                  pageIndex
+                                  ? "ring-2 ring-[#d6b522] ring-inset"
+                                  : ""
                               }`}
                             >
+                              <span
+                                data-study-page-move-handle="true"
+                                className={`absolute left-2 top-2 z-40 flex h-7 w-7 cursor-grab items-center justify-center rounded-full border text-[14px] font-black opacity-45 transition hover:opacity-90 ${
+                                  isDarkMode
+                                    ? "border-white/10 bg-[#111316]/90"
+                                    : "border-black/10 bg-white/90"
+                                }`}
+                                title="길게 눌러 페이지 이동"
+                                aria-label="길게 눌러 페이지 이동"
+                              >
+                                ⠿
+                              </span>
+
                               <button
                                 type="button"
                                 onClick={() =>
@@ -12162,10 +12754,33 @@ export default function StudyNote({ active }: StudyNoteProps) {
             >
               <button
                 type="button"
-                className="text-[22px] leading-none opacity-80"
-                title="메뉴"
+                onClick={() => {
+                  if (focusStudyNoteSession) {
+                    returnToMainFocusScreen(
+                      "resume",
+                    );
+                    return;
+                  }
+
+                  window.location.href = "/";
+                }}
+                className={`rounded-md border px-3 py-2 text-[11px] font-black tracking-[0.08em] transition ${
+                  isDarkMode
+                    ? "border-white/15 bg-white/5 text-white hover:bg-white/10"
+                    : "border-black/10 bg-white text-[#292929] hover:bg-[#f5f3ec]"
+                }`}
+                title={
+                  focusStudyNoteSession
+                    ? "포커스 화면으로 돌아가기"
+                    : "HOO로 돌아가기"
+                }
+                aria-label={
+                  focusStudyNoteSession
+                    ? "포커스 화면으로 돌아가기"
+                    : "HOO로 돌아가기"
+                }
               >
-                ☰
+                [ HOO ]
               </button>
               <h1 className="text-[17px] font-black tracking-[-0.03em]">HOO터디 노트</h1>
             </div>
@@ -12923,12 +13538,49 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 {notePages.map((pageBlocks, pageIndex) => (
                   <article
                     key={`${selectedNote.id}-page-${pageIndex}`}
+                    data-study-page-container="true"
+                    data-study-note-id={selectedNote.id}
+                    data-study-page-index={pageIndex}
+                    onPointerDownCapture={(event) =>
+                      beginStudyPageLongPress(
+                        event,
+                        selectedNote.id,
+                        pageIndex,
+                      )
+                    }
                     className={`relative overflow-hidden border ${
                       isDarkMode
                         ? "border-[#303238] bg-[#17191d] text-[#efefef]"
                         : "border-[#deded9] bg-[#fff] text-[#2a2a2a]"
+                    } ${
+                      pageMoveState?.noteId ===
+                        selectedNote.id &&
+                      pageMoveState.sourceIndex ===
+                        pageIndex
+                        ? "cursor-grabbing opacity-80"
+                        : ""
+                    } ${
+                      pageMoveState?.noteId ===
+                        selectedNote.id &&
+                      pageMoveState.targetIndex ===
+                        pageIndex
+                        ? "ring-2 ring-[#d6b522] ring-inset"
+                        : ""
                     }`}
                   >
+                    <span
+                      data-study-page-move-handle="true"
+                      className={`absolute left-2 top-2 z-40 flex h-7 w-7 cursor-grab items-center justify-center rounded-full border text-[14px] font-black opacity-45 transition hover:opacity-90 ${
+                        isDarkMode
+                          ? "border-white/10 bg-[#111316]/90"
+                          : "border-black/10 bg-white/90"
+                      }`}
+                      title="길게 눌러 페이지 이동"
+                      aria-label="길게 눌러 페이지 이동"
+                    >
+                      ⠿
+                    </span>
+
                     <button
                       type="button"
                       onClick={() =>
