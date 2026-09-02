@@ -353,212 +353,6 @@ useEffect(() => {
     setWasRunningBeforeExitConfirm,
   ] = useState(false);
 
-  useEffect(() => {
-    const shouldReturnToFocus =
-      window.sessionStorage.getItem(
-        "hoo-focus-return-from-study-note",
-      ) === "true";
-
-    if (!shouldReturnToFocus) {
-      return;
-    }
-
-    const savedSession =
-      window.sessionStorage.getItem(
-        "hoo-focus-study-note-session-v1",
-      );
-
-    window.sessionStorage.removeItem(
-      "hoo-focus-return-from-study-note",
-    );
-    window.sessionStorage.removeItem(
-      "hoo-focus-return-action",
-    );
-
-    if (!savedSession) {
-      return;
-    }
-
-    try {
-      const parsedSession = JSON.parse(
-        savedSession,
-      ) as {
-        goal?: unknown;
-        initialSeconds?: unknown;
-        remainingSeconds?: unknown;
-        focusStartedAt?: unknown;
-        focusEndsAt?: unknown;
-        isRunning?: unknown;
-        selectedDuration?: unknown;
-        customHours?: unknown;
-        customMinutes?: unknown;
-        customSeconds?: unknown;
-      };
-
-      if (
-        typeof parsedSession.goal !==
-          "string" ||
-        !Number.isFinite(
-          Number(
-            parsedSession.initialSeconds,
-          ),
-        ) ||
-        !Number.isFinite(
-          Number(
-            parsedSession.remainingSeconds,
-          ),
-        )
-      ) {
-        return;
-      }
-
-      const now = Date.now();
-
-      const savedRemainingSeconds =
-        Math.max(
-          0,
-          Math.floor(
-            Number(
-              parsedSession.remainingSeconds,
-            ),
-          ),
-        );
-
-      const savedFocusEndsAt =
-        Number.isFinite(
-          Number(
-            parsedSession.focusEndsAt,
-          ),
-        )
-          ? Number(
-              parsedSession.focusEndsAt,
-            )
-          : null;
-
-      const wasRunning =
-        parsedSession.isRunning === true;
-
-      const currentRemainingSeconds =
-        wasRunning &&
-        savedFocusEndsAt !== null
-          ? Math.max(
-              0,
-              Math.ceil(
-                (
-                  savedFocusEndsAt -
-                  now
-                ) / 1000,
-              ),
-            )
-          : savedRemainingSeconds;
-
-      const restoredDuration:
-        FocusDuration =
-        parsedSession.selectedDuration ===
-          25 ||
-        parsedSession.selectedDuration ===
-          60 ||
-        parsedSession.selectedDuration ===
-          "custom"
-          ? parsedSession.selectedDuration
-          : "custom";
-
-      setFocusGoal(
-        parsedSession.goal,
-      );
-
-      setSelectedDuration(
-        restoredDuration,
-      );
-
-      if (
-        restoredDuration === "custom"
-      ) {
-        setCustomHours(
-          Math.max(
-            0,
-            Math.floor(
-              Number(
-                parsedSession.customHours,
-              ) || 0,
-            ),
-          ),
-        );
-
-        setCustomMinutes(
-          Math.max(
-            0,
-            Math.min(
-              59,
-              Math.floor(
-                Number(
-                  parsedSession.customMinutes,
-                ) || 0,
-              ),
-            ),
-          ),
-        );
-
-        setCustomSeconds(
-          Math.max(
-            0,
-            Math.min(
-              59,
-              Math.floor(
-                Number(
-                  parsedSession.customSeconds,
-                ) || 0,
-              ),
-            ),
-          ),
-        );
-      }
-
-      setRemainingSeconds(
-        currentRemainingSeconds,
-      );
-
-      setFocusStartedAt(
-        typeof
-          parsedSession.focusStartedAt ===
-          "string"
-          ? parsedSession.focusStartedAt
-          : null,
-      );
-
-      const shouldResume =
-        wasRunning &&
-        currentRemainingSeconds > 0;
-
-      setFocusEndsAt(
-        shouldResume
-          ? savedFocusEndsAt ??
-              now +
-                currentRemainingSeconds *
-                  1000
-          : null,
-      );
-
-      setIsRunning(
-        shouldResume,
-      );
-
-      setIsExitConfirmOpen(false);
-      setIsOpen(true);
-
-      setView(
-        currentRemainingSeconds > 0
-          ? "timer"
-          : "completed",
-      );
-    } catch (error) {
-      console.error(
-        "후터디노트 포커스 복귀 실패:",
-        error,
-      );
-    }
-  }, []);
-
 const {
   profileImageUrl,
   isProfileImageLoading,
@@ -1786,12 +1580,38 @@ function openFocusStudyNote() {
 
   function saveFocusHistory(
   actualSeconds: number,
+  source?: {
+    goal?: string;
+    plannedSeconds?: number;
+    startedAt?: string | null;
+  },
 ) {
+  const sourcePlannedSeconds =
+    Number(
+      source?.plannedSeconds ??
+        initialSeconds,
+    );
+
+  const safePlannedSeconds =
+    Number.isFinite(
+      sourcePlannedSeconds,
+    )
+      ? Math.max(
+          1,
+          Math.floor(
+            sourcePlannedSeconds,
+          ),
+        )
+      : Math.max(
+          1,
+          initialSeconds,
+        );
+
   const safeActualSeconds =
     Math.max(
       0,
       Math.min(
-        initialSeconds,
+        safePlannedSeconds,
         Math.floor(actualSeconds),
       ),
     );
@@ -1800,29 +1620,44 @@ function openFocusStudyNote() {
     return false;
   }
 
+  const historyGoal =
+    typeof source?.goal === "string"
+      ? source.goal.trim()
+      : trimmedGoal;
+
+  const historyStartedAt =
+    source &&
+    Object.prototype.hasOwnProperty.call(
+      source,
+      "startedAt",
+    )
+      ? source.startedAt ?? null
+      : focusStartedAt;
+
   try {
     saveFocusHistoryRecord({
-      goal: trimmedGoal,
+      goal: historyGoal,
       plannedSeconds:
-        initialSeconds,
+        safePlannedSeconds,
       actualSeconds:
         safeActualSeconds,
       startedAt:
-        focusStartedAt,
+        historyStartedAt,
     });
 
     /*
      * 로그인한 이용자의 집중시간을
      * 후코인 서버 보상 시스템으로 전달한다.
      *
-     * 10분(600초)당 후코인 1개.
+     * 후터디노트에서 복귀한 기록도
+     * 원래 포커스 시작 시각을 그대로 사용한다.
      *
      * 실제 코인 지급과 중복 방지는
      * 서버 API에서 최종 검증한다.
      */
     if (
       isLoggedIn &&
-      focusStartedAt
+      historyStartedAt
     ) {
       void fetch(
         "/api/hoo-coins/focus",
@@ -1836,7 +1671,7 @@ function openFocusStudyNote() {
 
           body: JSON.stringify({
             startedAt:
-              focusStartedAt,
+              historyStartedAt,
 
             actualSeconds:
               safeActualSeconds,
@@ -1889,6 +1724,299 @@ function openFocusStudyNote() {
     return false;
   }
 }
+
+/*
+ * 후터디노트에서 메인 포커스 화면으로 돌아올 때
+ * sessionStorage에 보관한 실제 포커스 시간을 복원한다.
+ *
+ * - 아직 시간이 남아 있으면 기존 타이머를 그대로 이어서 실행한다.
+ * - 후터디노트에 있는 동안 시간이 끝났으면 즉시 집중 기록을 저장한다.
+ * - 사용자가 후터디노트에 머문 시간도 focusEndsAt 기준으로 계산하므로
+ *   HOO 프로필의 집중시간/통계에서 빠지지 않는다.
+ */
+useEffect(() => {
+  const shouldReturnToFocus =
+    window.sessionStorage.getItem(
+      "hoo-focus-return-from-study-note",
+    ) === "true";
+
+  if (!shouldReturnToFocus) {
+    return;
+  }
+
+  const savedSession =
+    window.sessionStorage.getItem(
+      "hoo-focus-study-note-session-v1",
+    );
+
+  const returnAction =
+    window.sessionStorage.getItem(
+      "hoo-focus-return-action",
+    );
+
+  /*
+   * React Strict Mode의 개발 환경 재실행에서도
+   * 같은 포커스 기록이 두 번 저장되지 않도록
+   * 복귀 신호는 한 번만 소비한다.
+   */
+  window.sessionStorage.removeItem(
+    "hoo-focus-return-from-study-note",
+  );
+  window.sessionStorage.removeItem(
+    "hoo-focus-return-action",
+  );
+
+  if (!savedSession) {
+    return;
+  }
+
+  try {
+    const parsedSession = JSON.parse(
+      savedSession,
+    ) as {
+      goal?: unknown;
+      initialSeconds?: unknown;
+      remainingSeconds?: unknown;
+      focusStartedAt?: unknown;
+      focusEndsAt?: unknown;
+      isRunning?: unknown;
+      selectedDuration?: unknown;
+      customHours?: unknown;
+      customMinutes?: unknown;
+      customSeconds?: unknown;
+      finishedWhileInStudyNote?: unknown;
+    };
+
+    if (
+      typeof parsedSession.goal !==
+        "string" ||
+      !Number.isFinite(
+        Number(
+          parsedSession.initialSeconds,
+        ),
+      ) ||
+      !Number.isFinite(
+        Number(
+          parsedSession.remainingSeconds,
+        ),
+      )
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+
+    const restoredInitialSeconds =
+      Math.max(
+        1,
+        Math.floor(
+          Number(
+            parsedSession.initialSeconds,
+          ),
+        ),
+      );
+
+    const savedRemainingSeconds =
+      Math.max(
+        0,
+        Math.min(
+          restoredInitialSeconds,
+          Math.floor(
+            Number(
+              parsedSession.remainingSeconds,
+            ),
+          ),
+        ),
+      );
+
+    const savedFocusEndsAt =
+      typeof
+          parsedSession.focusEndsAt ===
+        "number" &&
+      Number.isFinite(
+        parsedSession.focusEndsAt,
+      )
+        ? parsedSession.focusEndsAt
+        : null;
+
+    const wasRunning =
+      parsedSession.isRunning === true;
+
+    const currentRemainingSeconds =
+      wasRunning &&
+      savedFocusEndsAt !== null
+        ? Math.max(
+            0,
+            Math.min(
+              restoredInitialSeconds,
+              Math.ceil(
+                (
+                  savedFocusEndsAt -
+                  now
+                ) / 1000,
+              ),
+            ),
+          )
+        : savedRemainingSeconds;
+
+    const restoredDuration:
+      FocusDuration =
+      parsedSession.selectedDuration ===
+        25 ||
+      parsedSession.selectedDuration ===
+        60 ||
+      parsedSession.selectedDuration ===
+        "custom"
+        ? parsedSession.selectedDuration
+        : "custom";
+
+    const restoredStartedAt =
+      typeof
+          parsedSession.focusStartedAt ===
+        "string"
+        ? parsedSession.focusStartedAt
+        : null;
+
+    setFocusGoal(
+      parsedSession.goal,
+    );
+
+    setSelectedDuration(
+      restoredDuration,
+    );
+
+    if (
+      restoredDuration === "custom"
+    ) {
+      setCustomHours(
+        Math.max(
+          0,
+          Math.floor(
+            Number(
+              parsedSession.customHours,
+            ) || 0,
+          ),
+        ),
+      );
+
+      setCustomMinutes(
+        Math.max(
+          0,
+          Math.min(
+            59,
+            Math.floor(
+              Number(
+                parsedSession.customMinutes,
+              ) || 0,
+            ),
+          ),
+        ),
+      );
+
+      setCustomSeconds(
+        Math.max(
+          0,
+          Math.min(
+            59,
+            Math.floor(
+              Number(
+                parsedSession.customSeconds,
+              ) || 0,
+            ),
+          ),
+        ),
+      );
+    }
+
+    setRemainingSeconds(
+      currentRemainingSeconds,
+    );
+
+    setFocusStartedAt(
+      restoredStartedAt,
+    );
+
+    setIsExitConfirmOpen(false);
+    setIsOpen(true);
+
+    const finishedInStudyNote =
+      currentRemainingSeconds <= 0 ||
+      parsedSession
+        .finishedWhileInStudyNote ===
+        true ||
+      returnAction === "finish";
+
+    if (finishedInStudyNote) {
+      const actualSeconds =
+        restoredInitialSeconds -
+        currentRemainingSeconds;
+
+      const didSave =
+        saveFocusHistory(
+          actualSeconds,
+          {
+            goal:
+              parsedSession.goal,
+            plannedSeconds:
+              restoredInitialSeconds,
+            startedAt:
+              restoredStartedAt,
+          },
+        );
+
+      if (didSave) {
+        refreshProfileData();
+
+        if (isLoggedIn) {
+          void syncProfileDataWithCloud();
+        }
+      }
+
+      setFocusEndsAt(null);
+      setIsRunning(false);
+      setView("completed");
+
+      window.sessionStorage.removeItem(
+        "hoo-focus-study-note-session-v1",
+      );
+
+      return;
+    }
+
+    const shouldResume =
+      wasRunning &&
+      currentRemainingSeconds > 0;
+
+    setFocusEndsAt(
+      shouldResume
+        ? savedFocusEndsAt ??
+            now +
+              currentRemainingSeconds *
+                1000
+        : null,
+    );
+
+    setIsRunning(
+      shouldResume,
+    );
+
+    setView("timer");
+
+    /*
+     * 메인 FocusMode state로 복원이 끝났으므로
+     * 이전 후터디노트 세션은 제거한다.
+     * 다시 집중노트로 이동하면 최신 state로 새 세션을 만든다.
+     */
+    window.sessionStorage.removeItem(
+      "hoo-focus-study-note-session-v1",
+    );
+  } catch (error) {
+    console.error(
+      "후터디노트 포커스 복귀/기록 저장 실패:",
+      error,
+    );
+  }
+}, []);
 
 
  function toggleTimer() {
