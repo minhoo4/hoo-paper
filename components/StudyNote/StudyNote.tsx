@@ -5019,21 +5019,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
       if (canReuseNextLine) {
         nextFocusId = nextExistingBlock.id;
 
-        const currentMeasuredUnits = Math.max(
-          1,
-          Math.min(
-            PAGE_LINE_LIMIT,
-            Math.ceil(
-              editable.scrollHeight /
-                ROW_HEIGHT,
-            ),
-          ),
-        );
+        /* Enter로 줄을 나눌 때도 기존 units를 유지한다. */
 
         const needsStateChange =
           beforeHtml !== block.html ||
-          afterHtml.trim().length > 0 ||
-          currentMeasuredUnits !== block.units;
+          afterHtml.trim().length > 0 ;
 
         if (needsStateChange) {
           updateSelectedNote((note) => ({
@@ -5046,7 +5036,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 return {
                   ...item,
                   html: beforeHtml,
-                  units: currentMeasuredUnits,
                 };
               }
 
@@ -5094,16 +5083,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
             return note;
           }
 
-          const currentMeasuredUnits = Math.max(
-            1,
-            Math.min(
-              PAGE_LINE_LIMIT,
-              Math.ceil(
-                editable.scrollHeight /
-                  ROW_HEIGHT,
-              ),
-            ),
-          );
+          /* Enter로 줄을 나눌 때도 기존 units를 유지한다. */
 
           const nextBlocks = note.blocks.map(
             (item) =>
@@ -5112,7 +5092,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 ? {
                     ...item,
                     html: beforeHtml,
-                    units: currentMeasuredUnits,
                   }
                 : item,
           );
@@ -12545,16 +12524,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
                                             typingFontSizeRef.current,
                                           );
           
-                                          const measuredUnits = Math.max(
-                                            1,
-                                            Math.min(
-                                              PAGE_LINE_LIMIT,
-                                              Math.ceil(
-                                                element.scrollHeight /
-                                                  ROW_HEIGHT,
-                                              ),
-                                            ),
-                                          );
+                                          /* 편집 중에는 기존 페이지 줄 점유수(units)를 유지한다. */
           
                                           updateBlock(
                                             block.id,
@@ -12563,7 +12533,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
                                                 ? {
                                                     ...currentBlock,
                                                     html: element.innerHTML,
-                                                    units: measuredUnits,
                                                   }
                                                 : currentBlock,
                                           );
@@ -13974,16 +13943,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
                                   typingFontSizeRef.current,
                                 );
 
-                                const measuredUnits = Math.max(
-                                  1,
-                                  Math.min(
-                                    PAGE_LINE_LIMIT,
-                                    Math.ceil(
-                                      element.scrollHeight /
-                                        ROW_HEIGHT,
-                                    ),
-                                  ),
-                                );
+                                /* 편집 중에는 기존 페이지 줄 점유수(units)를 유지한다. */
 
                                 updateBlock(
                                   block.id,
@@ -13992,7 +13952,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
                                       ? {
                                           ...currentBlock,
                                           html: element.innerHTML,
-                                          units: measuredUnits,
                                         }
                                       : currentBlock,
                                 );
