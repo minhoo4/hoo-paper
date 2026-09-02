@@ -1170,9 +1170,34 @@ function handleDisableHooWorldPrompt() {
  *   권한 state가 아직 복원되지 않았거나 별도 권한을 수락하지 않았어도
  *   Focus가 끝날 때까지 Presence를 유지한다.
  */
+/*
+ * HOO WORLD -> Focus Mode handoff를
+ * React state 복원보다 먼저 직접 확인한다.
+ *
+ * 페이지 전환 직후
+ * isHooWorldFocusPresencePinned가 아직 false여도
+ * sessionStorage에 정상적인 Focus handoff가 남아 있다면
+ * Presence 연결을 즉시 시작한다.
+ *
+ * 이렇게 해서 HOO WORLD -> 메인 Focus Mode 전환 순간의
+ * Presence 공백 시간을 최대한 제거한다.
+ */
+const hasHooWorldFocusHandoffNow =
+  typeof window !== "undefined" &&
+  window.sessionStorage.getItem(
+    "hoo-world-open-focus",
+  ) === "true" &&
+  Boolean(
+    window.sessionStorage.getItem(
+      "hoo-world-focus-position",
+    ),
+  );
+
 const shouldEnableHooWorldPresence =
   isHooWorldConnected === true ||
-  isHooWorldFocusPresencePinned;
+  isHooWorldFocusPresencePinned ||
+  hasHooWorldFocusHandoffNow;
+
 
 const {
   players: hooWorldPlayers,
@@ -1231,6 +1256,21 @@ useEffect(() => {
   }
 
   /*
+   * 이미 Focus Presence 복원을 시작했거나
+   * 실제 집중 상태가 활성화된 뒤라면
+   * 동일한 handoff를 다시 복원하지 않는다.
+   *
+   * updatePosition / updateStatus 호출로 발생하는 렌더링 때문에
+   * 이 effect가 다시 실행되더라도 Presence track이 반복되는 것을 막는다.
+   */
+  if (
+    hooWorldFocusPendingRef.current ||
+    hooWorldFocusActiveRef.current
+  ) {
+    return;
+  }
+
+  /*
    * 저장된 Focus 좌표가 확인된 순간부터
    * Focus 종료 이벤트가 올 때까지 Presence를 고정 유지한다.
    */
@@ -1243,8 +1283,10 @@ useEffect(() => {
     savedPosition;
 
   /*
-   * FocusMode가 실제 running=true를 알리기 전까지
-   * 초기 false 이벤트는 무시해야 한다.
+   * 지금부터 Focus Presence 복원이 진행 중임을 먼저 표시한다.
+   *
+   * 이후 React 재렌더가 발생해도
+   * 위 guard에서 차단된다.
    */
   hooWorldFocusPendingRef.current =
     true;
@@ -1292,9 +1334,7 @@ useEffect(() => {
       }
 
       /*
-       * 월드에서 멈춘 좌표를 먼저 확정한다.
-       * moving=false로 보내 포커스 캐릭터가
-       * 이동 중 상태로 남지 않게 한다.
+       * 포커스 시작 지점을 정지 상태로 한 번만 복원한다.
        */
       await updateHooWorldPosition(
         x,
@@ -1307,6 +1347,9 @@ useEffect(() => {
         return;
       }
 
+      /*
+       * 좌표 확정 후 focusing Presence도 한 번만 송출한다.
+       */
       await updateHooWorldStatus(
         "focusing",
       );

@@ -699,42 +699,84 @@ const fieldIdRef =
       ]);
     }
 
-    function scheduleReconnect() {
-      if (
-        !active ||
-        reconnectTimer !==
-          null
-      ) {
-        return;
-      }
+function scheduleReconnect() {
+  if (
+    !active ||
+    reconnectTimer !==
+      null
+  ) {
+    return;
+  }
 
-      setIsConnected(false);
+  setIsConnected(false);
 
-      reconnectAttempt += 1;
+  reconnectAttempt += 1;
 
-      const delay =
-        Math.min(
-          600 *
-            2 **
-              Math.min(
-                reconnectAttempt -
-                  1,
-                3,
-              ),
-          4000,
-        );
+  const delay =
+    Math.min(
+      600 *
+        2 **
+          Math.min(
+            reconnectAttempt -
+              1,
+            3,
+          ),
+      4000,
+    );
 
-      reconnectTimer =
-        window.setTimeout(
-          () => {
-            reconnectTimer =
-              null;
+  reconnectTimer =
+    window.setTimeout(
+      () => {
+        reconnectTimer =
+          null;
 
-            void connect();
-          },
-          delay,
-        );
-    }
+        /*
+         * 재연결 직전에 Focus handoff를 다시 읽는다.
+         *
+         * 네트워크가 잠깐 끊겼거나
+         * Presence 채널이 재생성되는 동안에도
+         * focusing 상태와 마지막 월드 좌표가
+         * 기본 리스폰 값으로 되돌아가지 않게 한다.
+         */
+        const focusHandoff =
+          readHooWorldFocusHandoff();
+
+        if (focusHandoff) {
+          positionRef.current = {
+            x: focusHandoff.x,
+            y: focusHandoff.y,
+          };
+
+          statusRef.current =
+            "focusing";
+
+          setStatus(
+            "focusing",
+          );
+
+          movingRef.current =
+            false;
+
+          if (
+            focusHandoff.facing
+          ) {
+            facingRef.current =
+              focusHandoff.facing;
+          }
+
+          if (
+            focusHandoff.fieldId
+          ) {
+            preferredFieldIdRef.current =
+              focusHandoff.fieldId;
+          }
+        }
+
+        void connect();
+      },
+      delay,
+    );
+}
 
     function getDirectoryPlayers() {
       if (
@@ -1443,6 +1485,105 @@ const fieldIdRef =
             setTotalOnlineCount(
               directoryPlayers.length,
             );
+
+            /*
+             * directory Presence는
+             * HOO WORLD 전체 이용자의 durable snapshot이다.
+             *
+             * 기존에는 여기서 ref와 인원수만 갱신했기 때문에
+             * field Presence sync가 먼저 끝난 경우,
+             * 늦게 들어온 focusing 이용자가 화면에 반영되지 않는
+             * 타이밍 문제가 발생할 수 있었다.
+             *
+             * 이제 directory sync가 발생할 때마다
+             * 현재 필드의 이용자 목록도 즉시 다시 만든다.
+             */
+            const activeFieldId =
+              fieldIdRef.current ??
+              currentFieldId;
+
+            if (activeFieldId !== null) {
+              const directoryFieldPlayers =
+                directoryPlayers.filter(
+                  (player) =>
+                    player.fieldId ===
+                    activeFieldId,
+                );
+
+              const activeUserIds =
+                new Set(
+                  directoryFieldPlayers.map(
+                    (player) =>
+                      player.userId,
+                  ),
+                );
+
+              /*
+               * 현재 directory에 없는 이용자의
+               * 오래된 이동 스냅샷은 제거한다.
+               */
+              for (
+                const userId of
+                movementSnapshotByUserRef.current.keys()
+              ) {
+                if (
+                  !activeUserIds.has(
+                    userId,
+                  )
+                ) {
+                  movementSnapshotByUserRef.current.delete(
+                    userId,
+                  );
+                }
+              }
+
+              /*
+               * 이미 Broadcast로 최신 좌표를 받은 이용자는
+               * directory의 오래된 좌표 대신
+               * 최신 이동 스냅샷을 유지한다.
+               *
+               * focusing 유저는 Broadcast가 없어도
+               * directory에 저장된 마지막 좌표가 그대로 사용된다.
+               */
+              const nextPlayers =
+                directoryFieldPlayers.map(
+                  (player) => {
+                    const snapshot =
+                      movementSnapshotByUserRef.current.get(
+                        player.userId,
+                      );
+
+                    if (!snapshot) {
+                      return player;
+                    }
+
+                    if (
+                      snapshot.joinedAt !==
+                      player.joinedAt
+                    ) {
+                      movementSnapshotByUserRef.current.delete(
+                        player.userId,
+                      );
+
+                      return player;
+                    }
+
+                    return {
+                      ...player,
+                      x: snapshot.x,
+                      y: snapshot.y,
+                      facing:
+                        snapshot.facing,
+                      moving:
+                        snapshot.moving,
+                    };
+                  },
+                );
+
+              setPlayers(
+                nextPlayers,
+              );
+            }
 
             if (
               !directorySyncResolved
