@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import {
   memo,
@@ -37,6 +38,15 @@ import {
 
 const HOO_WORLD_ACCESSORY_SLOT_COUNT =
   10;
+
+const HOO_WORLD_FOCUS_READY_KEY =
+  "hoo-world-focus-presence-ready";
+
+const HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY =
+  "hoo-world-focus-character-slot";
+
+const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
+  "hoo-world-focus-operator-skin";
 
 function getAccessorySlotId(
   slotNumber: number,
@@ -773,6 +783,8 @@ const HooWorldBoundaryForest =
 
 
 export default function HooWorldPage() {
+  const router = useRouter();
+
   const supabase = useMemo(
     () => createClient(),
     [],
@@ -898,10 +910,12 @@ export default function HooWorldPage() {
   const {
     players,
     onlineCount,
+    fieldId,
     isConnected,
     status,
     updateStatus,
     updatePosition,
+    refreshPresence,
   } = useHooWorldPresence({
     enabled: true,
     nickname,
@@ -1560,7 +1574,18 @@ export default function HooWorldPage() {
       setSelectedAccessoryId(
         previousAccessoryId,
       );
+
+      return;
     }
+
+    /*
+     * DB 저장 직후 현재 Presence를 즉시 다시 track한다.
+     * 상대 이용자가 재접속하거나 내 status가 바뀔 때까지 기다리지 않고
+     * 같은 순간에 새 characterSlot을 받게 한다.
+     */
+    await refreshPresence(
+      slotNumber ?? 4,
+    );
   }
 
   /*
@@ -3135,7 +3160,11 @@ export default function HooWorldPage() {
     }, []);
 
   async function enterFocusModeFromHooWorld() {
-    if (isEnteringFocusMode) {
+    if (
+      isEnteringFocusMode ||
+      !isConnected ||
+      fieldId === null
+    ) {
       return;
     }
 
@@ -3162,12 +3191,6 @@ export default function HooWorldPage() {
 
     previousMovementTimeRef.current = 0;
 
-    /*
-     * playerPositionRef는 현재 화면에서 실제로 이동한
-     * 캐릭터의 최종 좌표를 가지고 있다.
-     *
-     * 이 값을 포커스 진입 좌표의 단일 기준점으로 사용한다.
-     */
     const currentPosition = {
       x: playerPositionRef.current.x,
       y: playerPositionRef.current.y,
@@ -3175,13 +3198,39 @@ export default function HooWorldPage() {
 
     try {
       /*
-       * 중요:
-       * updateStatus("focusing")보다 먼저 현재 좌표를 저장한다.
+       * Focus handoff의 핵심 값은 페이지를 떠나기 전에
+       * HOO WORLD 페이지가 직접 모두 저장한다.
        *
-       * Presence 훅의 focusing 처리도 이 handoff 값을 읽기 때문에
-       * 이전 포커스 좌표나 기본 리스폰 좌표가 끼어들지 않고
-       * 방금 이동을 멈춘 실제 위치를 그대로 사용하게 된다.
+       * updateStatus() 내부 Realtime 채널이 순간적으로 재연결 중이어도
+       * 메인 페이지는 정확한 field/x/y/facing을 복원할 수 있다.
        */
+      /*
+       * 이전 포커스 전환의 완료 마커가 남아 있으면
+       * 기존 Presence가 너무 일찍 정리될 수 있으므로
+       * 새 handoff 시작 전에 반드시 제거한다.
+       */
+      window.sessionStorage.removeItem(
+        HOO_WORLD_FOCUS_READY_KEY,
+      );
+
+      const focusCharacterSlot =
+        Number(
+          selectedAccessoryId,
+        );
+
+      window.sessionStorage.setItem(
+        HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY,
+        String(
+          Number.isInteger(
+            focusCharacterSlot,
+          ) &&
+          focusCharacterSlot >= 1 &&
+          focusCharacterSlot <= 7
+            ? focusCharacterSlot
+            : 4,
+        ),
+      );
+
       window.sessionStorage.setItem(
         "hoo-world-focus-position",
         JSON.stringify(
@@ -3194,9 +3243,21 @@ export default function HooWorldPage() {
         "true",
       );
 
+      if (fieldId !== null) {
+        window.sessionStorage.setItem(
+          "hoo-world-focus-field-id",
+          String(fieldId),
+        );
+      }
+
+      window.sessionStorage.setItem(
+        "hoo-world-focus-facing",
+        playerFacingRef.current,
+      );
+
       /*
-       * 현재 실제 좌표와 바라보는 방향을
-       * 정지 상태로 Broadcast에 마지막 한 번 확정한다.
+       * 이미 같은 필드에 있는 이용자는 Broadcast로
+       * 마지막 좌표/정지 상태를 먼저 받는다.
        */
       await updatePosition(
         currentPosition.x,
@@ -3206,19 +3267,29 @@ export default function HooWorldPage() {
       );
 
       /*
-       * 최신 좌표가 저장된 뒤 focusing Presence를 갱신하므로
-       * 다른 이용자와 늦게 들어온 이용자 모두 같은 좌표를 본다.
+       * directory + field Presence에도 focusing 상태와
+       * 현재 좌표/스킨을 확정한다.
        */
-      await updateStatus(
-        "focusing",
-      );
+      const focusPresenceUpdated =
+        await updateStatus(
+          "focusing",
+        );
 
-      window.location.assign("/");
-    } catch (error) {
+      if (!focusPresenceUpdated) {
+        throw new Error(
+          "HOO WORLD focusing Presence를 확정하지 못했습니다.",
+        );
+      }
+
       /*
-       * 포커스 진입에 실패했다면
-       * 실패한 handoff가 다음 진입에 남지 않도록 정리한다.
+       * window.location.assign()은 전체 문서를 새로 로드하면서
+       * 기존 Supabase 연결을 즉시 끊어 Presence leave가 먼저 발생한다.
+       *
+       * Next.js 클라이언트 라우팅을 사용해 기존 연결을
+       * grace handoff 시간 동안 유지한 채 메인 Presence로 넘긴다.
        */
+      router.push("/");
+    } catch (error) {
       window.sessionStorage.removeItem(
         "hoo-world-focus-position",
       );
@@ -3233,6 +3304,14 @@ export default function HooWorldPage() {
 
       window.sessionStorage.removeItem(
         "hoo-world-focus-facing",
+      );
+
+      window.sessionStorage.removeItem(
+        HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY,
+      );
+
+      window.sessionStorage.removeItem(
+        HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
       );
 
       console.error(
@@ -4687,6 +4766,10 @@ export default function HooWorldPage() {
                     remotePlayer.characterSlot ??
                     4
                   }
+                  isAdmin={
+                    remotePlayer.operatorSkin ===
+                    true
+                  }
                   accessoryIds={[]}
                 />
               </div>
@@ -5036,7 +5119,11 @@ export default function HooWorldPage() {
         onClick={() => {
           void enterFocusModeFromHooWorld();
         }}
-        disabled={isEnteringFocusMode}
+        disabled={
+          isEnteringFocusMode ||
+          !isConnected ||
+          fieldId === null
+        }
         className="fixed bottom-5 right-5 z-[100] flex h-12 items-center gap-2 rounded-2xl border border-white/35 bg-[#1d2f24] px-5 text-sm font-black text-white shadow-[0_8px_24px_rgba(20,35,24,0.38)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-[#294132] disabled:cursor-wait disabled:opacity-60 sm:bottom-6 sm:right-6"
         aria-label="포커스모드 시작"
       >
@@ -5050,7 +5137,10 @@ export default function HooWorldPage() {
         <span>
           {isEnteringFocusMode
             ? "연결 중..."
-            : "포커스모드"}
+            : !isConnected ||
+                fieldId === null
+              ? "후월드 연결 중..."
+              : "포커스모드"}
         </span>
       </button>
 

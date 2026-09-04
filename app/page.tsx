@@ -866,6 +866,18 @@ const HOO_WORLD_PERMISSION_KEY =
 const HOO_WORLD_PROMPT_DISABLED_KEY =
   "hoo-world-prompt-disabled";
 
+const HOO_WORLD_FOCUS_READY_KEY =
+  "hoo-world-focus-presence-ready";
+
+const HOO_WORLD_FOCUS_READY_EVENT =
+  "hoo-world:focus-presence-ready";
+
+const HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY =
+  "hoo-world-focus-character-slot";
+
+const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
+  "hoo-world-focus-operator-skin";
+
 
   useEffect(() => {
     let cancelled = false;
@@ -1171,32 +1183,16 @@ function handleDisableHooWorldPrompt() {
  *   Focus가 끝날 때까지 Presence를 유지한다.
  */
 /*
- * HOO WORLD -> Focus Mode handoff를
- * React state 복원보다 먼저 직접 확인한다.
+ * SSR 첫 렌더에서는 sessionStorage를 직접 읽지 않는다.
+ * Focus handoff 여부는 위 useEffect가 pinned state로 복원하고,
+ * 이전 HOO WORLD Presence는 handoff-ready 신호가 올 때까지 유지된다.
  *
- * 페이지 전환 직후
- * isHooWorldFocusPresencePinned가 아직 false여도
- * sessionStorage에 정상적인 Focus handoff가 남아 있다면
- * Presence 연결을 즉시 시작한다.
- *
- * 이렇게 해서 HOO WORLD -> 메인 Focus Mode 전환 순간의
- * Presence 공백 시간을 최대한 제거한다.
+ * 따라서 서버/클라이언트 첫 렌더가 달라지는 Hydration 위험 없이
+ * 포커스 전환 중 Presence 공백도 막을 수 있다.
  */
-const hasHooWorldFocusHandoffNow =
-  typeof window !== "undefined" &&
-  window.sessionStorage.getItem(
-    "hoo-world-open-focus",
-  ) === "true" &&
-  Boolean(
-    window.sessionStorage.getItem(
-      "hoo-world-focus-position",
-    ),
-  );
-
 const shouldEnableHooWorldPresence =
   isHooWorldConnected === true ||
-  isHooWorldFocusPresencePinned ||
-  hasHooWorldFocusHandoffNow;
+  isHooWorldFocusPresencePinned;
 
 
 const {
@@ -1336,10 +1332,27 @@ useEffect(() => {
       /*
        * 포커스 시작 지점을 정지 상태로 한 번만 복원한다.
        */
+      const savedFacing =
+        window.sessionStorage.getItem(
+          "hoo-world-focus-facing",
+        );
+
+      const restoredFacing:
+        | "left"
+        | "right"
+        | "up"
+        | "down" =
+        savedFacing === "left" ||
+        savedFacing === "right" ||
+        savedFacing === "up" ||
+        savedFacing === "down"
+          ? savedFacing
+          : "down";
+
       await updateHooWorldPosition(
         x,
         y,
-        "down",
+        restoredFacing,
         false,
       );
 
@@ -1350,8 +1363,31 @@ useEffect(() => {
       /*
        * 좌표 확정 후 focusing Presence도 한 번만 송출한다.
        */
-      await updateHooWorldStatus(
-        "focusing",
+      const focusPresenceUpdated =
+        await updateHooWorldStatus(
+          "focusing",
+        );
+
+      if (
+        !focusPresenceUpdated ||
+        cancelled
+      ) {
+        return;
+      }
+
+      /*
+       * 새 메인 페이지 Presence가 좌표 + focusing 상태까지
+       * 모두 올린 뒤에만 이전 /hoo-world Presence를 정리한다.
+       */
+      window.sessionStorage.setItem(
+        HOO_WORLD_FOCUS_READY_KEY,
+        "true",
+      );
+
+      window.dispatchEvent(
+        new Event(
+          HOO_WORLD_FOCUS_READY_EVENT,
+        ),
       );
     } catch {
       /*
@@ -15721,10 +15757,27 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
                 Number.isFinite(x) &&
                 Number.isFinite(y)
               ) {
+                const savedFacing =
+                  window.sessionStorage.getItem(
+                    "hoo-world-focus-facing",
+                  );
+
+                const restoredFacing:
+                  | "left"
+                  | "right"
+                  | "up"
+                  | "down" =
+                  savedFacing === "left" ||
+                  savedFacing === "right" ||
+                  savedFacing === "up" ||
+                  savedFacing === "down"
+                    ? savedFacing
+                    : "down";
+
                 await updateHooWorldPosition(
                   x,
                   y,
-                  "down",
+                  restoredFacing,
                   false,
                 );
               }
@@ -15737,8 +15790,24 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
           }
         }
 
-        await updateHooWorldStatus(
-          "focusing",
+        const focusPresenceUpdated =
+          await updateHooWorldStatus(
+            "focusing",
+          );
+
+        if (!focusPresenceUpdated) {
+          return;
+        }
+
+        window.sessionStorage.setItem(
+          HOO_WORLD_FOCUS_READY_KEY,
+          "true",
+        );
+
+        window.dispatchEvent(
+          new Event(
+            HOO_WORLD_FOCUS_READY_EVENT,
+          ),
         );
 
         return;
@@ -15794,6 +15863,26 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
 
       window.sessionStorage.removeItem(
         "hoo-world-open-focus",
+      );
+
+      window.sessionStorage.removeItem(
+        "hoo-world-focus-field-id",
+      );
+
+      window.sessionStorage.removeItem(
+        "hoo-world-focus-facing",
+      );
+
+      window.sessionStorage.removeItem(
+        HOO_WORLD_FOCUS_READY_KEY,
+      );
+
+      window.sessionStorage.removeItem(
+        HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY,
+      );
+
+      window.sessionStorage.removeItem(
+        HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
       );
 
       const savedPermission =
@@ -16165,3 +16254,4 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
   </main>
 );
 }
+

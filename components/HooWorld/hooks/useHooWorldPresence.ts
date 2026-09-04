@@ -110,6 +110,21 @@ const HOO_WORLD_FOCUS_FIELD_KEY =
 const HOO_WORLD_FOCUS_FACING_KEY =
   "hoo-world-focus-facing";
 
+const HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY =
+  "hoo-world-focus-character-slot";
+
+const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
+  "hoo-world-focus-operator-skin";
+
+const HOO_WORLD_FOCUS_READY_KEY =
+  "hoo-world-focus-presence-ready";
+
+const HOO_WORLD_FOCUS_READY_EVENT =
+  "hoo-world:focus-presence-ready";
+
+const HOO_WORLD_FOCUS_HANDOFF_GRACE_MS =
+  20000;
+
 type HooWorldFocusHandoff = {
   x: number;
   y: number;
@@ -119,6 +134,8 @@ type HooWorldFocusHandoff = {
     | "right"
     | "up"
     | "down";
+  characterSlot?: number;
+  operatorSkin?: boolean;
 };
 
 type HooWorldMovementSnapshot = {
@@ -211,6 +228,35 @@ function readHooWorldFocusHandoff():
         ? storedFacing
         : undefined;
 
+    const rawCharacterSlot =
+      Number(
+        window.sessionStorage.getItem(
+          HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY,
+        ),
+      );
+
+    const characterSlot =
+      Number.isInteger(
+        rawCharacterSlot,
+      ) &&
+      rawCharacterSlot >= 1 &&
+      rawCharacterSlot <= 7
+        ? rawCharacterSlot
+        : undefined;
+
+    const storedOperatorSkin =
+      window.sessionStorage.getItem(
+        HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
+      );
+
+    const operatorSkin:
+      boolean | undefined =
+      storedOperatorSkin === "true"
+        ? true
+        : storedOperatorSkin === "false"
+          ? false
+          : undefined;
+
     return {
       x: Math.max(
         0,
@@ -234,10 +280,89 @@ function readHooWorldFocusHandoff():
           ? rawFieldId
           : undefined,
       facing,
+      characterSlot,
+      operatorSkin,
     };
   } catch {
     return null;
   }
+}
+
+function normalizeHooWorldCharacterSlot(
+  value: unknown,
+  fallback = 4,
+) {
+  const slot = Number(value);
+
+  return Number.isInteger(slot) &&
+    slot >= 1 &&
+    slot <= 7
+    ? slot
+    : fallback;
+}
+
+function getPresenceTimestamp(
+  player: HooWorldPresencePlayer,
+) {
+  const onlineAt =
+    Date.parse(
+      typeof player.onlineAt === "string"
+        ? player.onlineAt
+        : "",
+    );
+
+  if (Number.isFinite(onlineAt)) {
+    return onlineAt;
+  }
+
+  const joinedAt =
+    Date.parse(
+      typeof player.joinedAt === "string"
+        ? player.joinedAt
+        : "",
+    );
+
+  return Number.isFinite(joinedAt)
+    ? joinedAt
+    : 0;
+}
+
+function getPresenceCompletenessScore(
+  player: HooWorldPresencePlayer,
+) {
+  let score = 0;
+
+  if (
+    Number.isInteger(
+      player.characterSlot,
+    )
+  ) {
+    score += 1;
+  }
+
+  if (
+    Number.isFinite(
+      Number(player.x),
+    ) &&
+    Number.isFinite(
+      Number(player.y),
+    )
+  ) {
+    score += 2;
+  }
+
+  if (player.facing) {
+    score += 1;
+  }
+
+  if (
+    typeof player.moving ===
+    "boolean"
+  ) {
+    score += 1;
+  }
+
+  return score;
 }
 
 function normalizePresencePlayers(
@@ -263,10 +388,37 @@ function normalizePresencePlayers(
         player.userId,
       );
 
+    if (!previous) {
+      playerMap.set(
+        player.userId,
+        player,
+      );
+      continue;
+    }
+
+    const playerTimestamp =
+      getPresenceTimestamp(
+        player,
+      );
+
+    const previousTimestamp =
+      getPresenceTimestamp(
+        previous,
+      );
+
     if (
-      !previous ||
-      player.onlineAt >
-        previous.onlineAt
+      playerTimestamp >
+        previousTimestamp ||
+      (
+        playerTimestamp ===
+          previousTimestamp &&
+        getPresenceCompletenessScore(
+          player,
+        ) >
+          getPresenceCompletenessScore(
+            previous,
+          )
+      )
     ) {
       playerMap.set(
         player.userId,
@@ -501,6 +653,16 @@ const fieldIdRef =
     useRef(false);
 
   /*
+   * 프로필 조회가 순간적으로 실패해도 상대 화면의 스킨이
+   * user-4 기본값으로 튀지 않도록 마지막 정상 값을 보관한다.
+   */
+  const characterSlotRef =
+    useRef(4);
+
+  const operatorSkinRef =
+    useRef(false);
+
+  /*
    * HOO WORLD -> Focus Mode 전환 때 사용하던 필드.
    * 페이지가 바뀌어 훅이 다시 생성되어도 같은 필드로 복귀한다.
    */
@@ -603,6 +765,21 @@ const fieldIdRef =
       preferredFieldIdRef.current =
         focusHandoff.fieldId ??
         null;
+
+      if (
+        focusHandoff.characterSlot
+      ) {
+        characterSlotRef.current =
+          focusHandoff.characterSlot;
+      }
+
+      if (
+        typeof focusHandoff.operatorSkin ===
+        "boolean"
+      ) {
+        operatorSkinRef.current =
+          focusHandoff.operatorSkin;
+      }
     }
 
     let active = true;
@@ -770,6 +947,21 @@ function scheduleReconnect() {
             preferredFieldIdRef.current =
               focusHandoff.fieldId;
           }
+
+          if (
+            focusHandoff.characterSlot
+          ) {
+            characterSlotRef.current =
+              focusHandoff.characterSlot;
+          }
+
+          if (
+            typeof focusHandoff.operatorSkin ===
+            "boolean"
+          ) {
+            operatorSkinRef.current =
+              focusHandoff.operatorSkin;
+          }
         }
 
         void connect();
@@ -931,26 +1123,32 @@ function scheduleReconnect() {
         ),
       ]);
 
-      const rawCharacterSlot =
-        Number(
-          profileResult.data
-            ?.hoo_world_accessory_slot,
-        );
+      let characterSlot =
+        characterSlotRef.current;
 
-      const characterSlot =
-        Number.isInteger(
-          rawCharacterSlot,
-        ) &&
-        rawCharacterSlot >= 1 &&
-        rawCharacterSlot <= 7
-          ? rawCharacterSlot
-          : 4;
+      if (!profileResult.error) {
+        characterSlot =
+          normalizeHooWorldCharacterSlot(
+            profileResult.data
+              ?.hoo_world_accessory_slot,
+            4,
+          );
 
-      const operatorSkin =
-        operatorSkinResult.error
-          ? false
-          : operatorSkinResult.data ===
-              true;
+        characterSlotRef.current =
+          characterSlot;
+      }
+
+      let operatorSkin =
+        operatorSkinRef.current;
+
+      if (!operatorSkinResult.error) {
+        operatorSkin =
+          operatorSkinResult.data ===
+          true;
+
+        operatorSkinRef.current =
+          operatorSkin;
+      }
 
       /*
        * Focus Mode 전환 중이거나 이미 focusing 상태라면
@@ -987,6 +1185,27 @@ function scheduleReconnect() {
           ) {
             preferredFieldIdRef.current =
               focusHandoff.fieldId;
+          }
+
+          if (
+            focusHandoff.characterSlot
+          ) {
+            characterSlot =
+              focusHandoff.characterSlot;
+
+            characterSlotRef.current =
+              focusHandoff.characterSlot;
+          }
+
+          if (
+            typeof focusHandoff.operatorSkin ===
+            "boolean"
+          ) {
+            operatorSkin =
+              focusHandoff.operatorSkin;
+
+            operatorSkinRef.current =
+              focusHandoff.operatorSkin;
           }
         }
       }
@@ -1738,20 +1957,107 @@ function scheduleReconnect() {
       directoryPlayersRef.current =
         [];
 
-      if (
-        currentFieldChannel
-      ) {
-        void removeChannelSafely(
-          currentFieldChannel,
-        );
-      }
+      /*
+       * /hoo-world -> 메인 Focus Mode 전환은 같은 브라우저 안의
+       * Next.js 라우트 전환으로 처리한다.
+       *
+       * 이 순간 기존 Presence를 즉시 untrack하면
+       * 새 메인 페이지의 Presence가 SUBSCRIBED 되기 전에
+       * 다른 이용자에게 "leave"가 먼저 전달되어 캐릭터가 사라진다.
+       *
+       * Focus handoff가 살아 있는 경우에만 기존 채널을 8초 동안
+       * 겹쳐 유지한다. 새 페이지가 같은 userId로 Presence를 올리면
+       * 두 meta는 normalizePresencePlayers에서 한 사용자로 합쳐지고,
+       * 8초 뒤 이전 채널만 정리되므로 화면에서 끊김이 없다.
+       */
+      const shouldGraceFocusHandoff =
+        readHooWorldFocusHandoff() !==
+        null;
 
-      if (
-        currentDirectoryChannel
-      ) {
-        void removeChannelSafely(
-          currentDirectoryChannel,
-        );
+      let released = false;
+      let graceTimer:
+        number | null = null;
+      let readyPollTimer:
+        number | null = null;
+
+      const releasePreviousChannels =
+        () => {
+          if (released) {
+            return;
+          }
+
+          released = true;
+
+          window.removeEventListener(
+            HOO_WORLD_FOCUS_READY_EVENT,
+            releasePreviousChannels,
+          );
+
+          if (graceTimer !== null) {
+            window.clearTimeout(
+              graceTimer,
+            );
+          }
+
+          if (readyPollTimer !== null) {
+            window.clearInterval(
+              readyPollTimer,
+            );
+          }
+
+          if (
+            currentFieldChannel
+          ) {
+            void removeChannelSafely(
+              currentFieldChannel,
+            );
+          }
+
+          if (
+            currentDirectoryChannel
+          ) {
+            void removeChannelSafely(
+              currentDirectoryChannel,
+            );
+          }
+        };
+
+      if (shouldGraceFocusHandoff) {
+        const isNextPresenceReady =
+          () =>
+            window.sessionStorage.getItem(
+              HOO_WORLD_FOCUS_READY_KEY,
+            ) === "true";
+
+        if (isNextPresenceReady()) {
+          releasePreviousChannels();
+        } else {
+          window.addEventListener(
+            HOO_WORLD_FOCUS_READY_EVENT,
+            releasePreviousChannels,
+            { once: true },
+          );
+
+          readyPollTimer =
+            window.setInterval(
+              () => {
+                if (
+                  isNextPresenceReady()
+                ) {
+                  releasePreviousChannels();
+                }
+              },
+              250,
+            );
+
+          graceTimer =
+            window.setTimeout(
+              releasePreviousChannels,
+              HOO_WORLD_FOCUS_HANDOFF_GRACE_MS,
+            );
+        }
+      } else {
+        releasePreviousChannels();
       }
     };
   }, [
@@ -1922,6 +2228,11 @@ movementChannel.on(
   /*
    * 닉네임 변경 때문에 Realtime effect 전체를 끊었다가 다시 연결하지 않는다.
    * 이미 연결된 Presence payload만 가볍게 갱신한다.
+   *
+   * 중요:
+   * Presence payload를 다시 track할 때 characterSlot/operatorSkin까지
+   * 항상 같이 넣는다. 일부 필드만 다시 track하면 기존 스킨 메타데이터가
+   * 사라져 상대 화면에서 user-4 기본 캐릭터로 떨어질 수 있다.
    */
   useEffect(() => {
     if (
@@ -1948,11 +2259,6 @@ movementChannel.on(
       return;
     }
 
-    /*
-     * async 함수 경계를 넘어가면 TypeScript가
-     * 바깥쪽 null narrowing을 보존하지 않을 수 있다.
-     * guard 직후 확정 타입의 로컬 상수로 고정한다.
-     */
     const activeFieldId: number =
       nextFieldId;
 
@@ -1979,6 +2285,57 @@ movementChannel.on(
         !user
       ) {
         return;
+      }
+
+      const [
+        profileResult,
+        operatorSkinResult,
+      ] = await Promise.all([
+        supabase
+          .from("profiles")
+          .select(
+            "hoo_world_accessory_slot",
+          )
+          .eq(
+            "id",
+            user.id,
+          )
+          .maybeSingle(),
+
+        supabase.rpc(
+          "has_hoo_world_operator_skin",
+        ),
+      ]);
+
+      if (cancelled) {
+        return;
+      }
+
+      let characterSlot =
+        characterSlotRef.current;
+
+      if (!profileResult.error) {
+        characterSlot =
+          normalizeHooWorldCharacterSlot(
+            profileResult.data
+              ?.hoo_world_accessory_slot,
+            4,
+          );
+
+        characterSlotRef.current =
+          characterSlot;
+      }
+
+      let operatorSkin =
+        operatorSkinRef.current;
+
+      if (!operatorSkinResult.error) {
+        operatorSkin =
+          operatorSkinResult.data ===
+          true;
+
+        operatorSkinRef.current =
+          operatorSkin;
       }
 
       const now =
@@ -2009,6 +2366,10 @@ movementChannel.on(
 
           onlineAt:
             now,
+
+          characterSlot,
+
+          operatorSkin,
 
           x:
             positionRef.current.x,
@@ -2050,6 +2411,225 @@ movementChannel.on(
     nickname,
     supabase,
   ]);
+
+  async function trackPresencePayloadWithRetry(
+    payload: HooWorldPresencePlayer,
+  ) {
+    for (
+      let attempt = 0;
+      attempt < 3;
+      attempt += 1
+    ) {
+      const directoryChannel =
+        directoryChannelRef.current;
+
+      const fieldChannel =
+        fieldChannelRef.current;
+
+      if (
+        !directoryChannel ||
+        !fieldChannel
+      ) {
+        return false;
+      }
+
+      try {
+        await Promise.all([
+          directoryChannel.track(
+            payload,
+          ),
+          fieldChannel.track(
+            payload,
+          ),
+        ]);
+
+        return true;
+      } catch {
+        if (attempt >= 2) {
+          break;
+        }
+
+        await new Promise<void>(
+          (resolve) => {
+            window.setTimeout(
+              resolve,
+              150 *
+                (attempt + 1),
+            );
+          },
+        );
+      }
+    }
+
+    /*
+     * track 단발 실패만으로 연결 전체를 끊지는 않는다.
+     * 실제 채널 CLOSED / TIMED_OUT / CHANNEL_ERROR는
+     * subscribe 상태 콜백이 기존 재연결 로직으로 처리한다.
+     */
+    console.warn(
+      "HOO WORLD Presence 상태 송출을 재시도했지만 완료하지 못했습니다.",
+    );
+
+    return false;
+  }
+
+  /*
+   * 캐릭터 스킨/프로필 값이 바뀐 직후 현재 Presence를
+   * 즉시 다시 송출하기 위한 명시적 갱신 함수.
+   *
+   * 페이지를 재접속하거나 status가 바뀔 때까지 기다리지 않고
+   * 현재 x/y/status/facing을 유지한 채 최신 characterSlot을
+   * directory + field Presence 양쪽에 동시에 반영한다.
+   */
+  async function refreshPresence(
+    characterSlotOverride?: number,
+  ) {
+    if (
+      !enabled ||
+      !isConnected
+    ) {
+      return false;
+    }
+
+    const nextFieldId =
+      fieldIdRef.current;
+
+    const directoryChannel =
+      directoryChannelRef.current;
+
+    const fieldChannel =
+      fieldChannelRef.current;
+
+    if (
+      nextFieldId === null ||
+      !directoryChannel ||
+      !fieldChannel
+    ) {
+      return false;
+    }
+
+    const {
+      data: {
+        user,
+      },
+    } =
+      await supabase.auth.getUser();
+
+    if (!user) {
+      return false;
+    }
+
+    const normalizedOverride =
+      normalizeHooWorldCharacterSlot(
+        characterSlotOverride,
+        0,
+      );
+
+    if (normalizedOverride !== 0) {
+      characterSlotRef.current =
+        normalizedOverride;
+    }
+
+    const [
+      profileResult,
+      operatorSkinResult,
+    ] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select(
+          "hoo_world_accessory_slot",
+        )
+        .eq(
+          "id",
+          user.id,
+        )
+        .maybeSingle(),
+
+      supabase.rpc(
+        "has_hoo_world_operator_skin",
+      ),
+    ]);
+
+    let characterSlot =
+      characterSlotRef.current;
+
+    if (normalizedOverride !== 0) {
+      characterSlot =
+        normalizedOverride;
+    } else if (!profileResult.error) {
+      characterSlot =
+        normalizeHooWorldCharacterSlot(
+          profileResult.data
+            ?.hoo_world_accessory_slot,
+          4,
+        );
+    }
+
+    characterSlotRef.current =
+      characterSlot;
+
+    let operatorSkin =
+      operatorSkinRef.current;
+
+    if (!operatorSkinResult.error) {
+      operatorSkin =
+        operatorSkinResult.data ===
+        true;
+
+      operatorSkinRef.current =
+        operatorSkin;
+    }
+
+    const now =
+      new Date().toISOString();
+
+    const payload:
+      HooWorldPresencePlayer =
+      {
+        userId:
+          user.id,
+
+        nickname:
+          nicknameRef.current?.trim() ||
+          user.email?.split(
+            "@",
+          )[0] ||
+          "HOO",
+
+        status:
+          statusRef.current,
+
+        fieldId:
+          nextFieldId,
+
+        joinedAt:
+          joinedAtRef.current ??
+          now,
+
+        onlineAt:
+          now,
+
+        characterSlot,
+
+        operatorSkin,
+
+        x:
+          positionRef.current.x,
+
+        y:
+          positionRef.current.y,
+
+        facing:
+          facingRef.current,
+
+        moving:
+          movingRef.current,
+      };
+
+    return await trackPresencePayloadWithRetry(
+      payload,
+    );
+  }
 
   async function updateStatus(
     nextStatus:
@@ -2097,7 +2677,7 @@ movementChannel.on(
     }
 
     if (!enabled) {
-      return;
+      return false;
     }
 
     const nextFieldId =
@@ -2114,7 +2694,7 @@ movementChannel.on(
       !directoryChannel ||
       !fieldChannel
     ) {
-      return;
+      return false;
     }
 
     /*
@@ -2154,6 +2734,14 @@ movementChannel.on(
         window.sessionStorage.removeItem(
           HOO_WORLD_FOCUS_FACING_KEY,
         );
+
+        window.sessionStorage.removeItem(
+          HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY,
+        );
+
+        window.sessionStorage.removeItem(
+          HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
+        );
       }
     }
 
@@ -2165,7 +2753,7 @@ movementChannel.on(
       await supabase.auth.getUser();
 
     if (!user) {
-      return;
+      return false;
     }
 
     const [
@@ -2188,26 +2776,47 @@ movementChannel.on(
       ),
     ]);
 
-    const rawCharacterSlot =
-      Number(
-        profileResult.data
-          ?.hoo_world_accessory_slot,
+    let characterSlot =
+      characterSlotRef.current;
+
+    if (!profileResult.error) {
+      characterSlot =
+        normalizeHooWorldCharacterSlot(
+          profileResult.data
+            ?.hoo_world_accessory_slot,
+          4,
+        );
+
+      characterSlotRef.current =
+        characterSlot;
+    }
+
+    let operatorSkin =
+      operatorSkinRef.current;
+
+    if (!operatorSkinResult.error) {
+      operatorSkin =
+        operatorSkinResult.data ===
+        true;
+
+      operatorSkinRef.current =
+        operatorSkin;
+    }
+
+    if (
+      typeof window !== "undefined" &&
+      nextStatus === "focusing"
+    ) {
+      window.sessionStorage.setItem(
+        HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY,
+        String(characterSlot),
       );
 
-    const characterSlot =
-      Number.isInteger(
-        rawCharacterSlot,
-      ) &&
-      rawCharacterSlot >= 1 &&
-      rawCharacterSlot <= 7
-        ? rawCharacterSlot
-        : 4;
-
-    const operatorSkin =
-      operatorSkinResult.error
-        ? false
-        : operatorSkinResult.data ===
-            true;
+      window.sessionStorage.setItem(
+        HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
+        String(operatorSkin),
+      );
+    }
 
     const now =
       new Date().toISOString();
@@ -2255,28 +2864,31 @@ movementChannel.on(
           movingRef.current,
       };
 
-    try {
-      await Promise.all([
-        directoryChannel.track(
-          payload,
-        ),
-        fieldChannel.track(
-          payload,
-        ),
-      ]);
+    const tracked =
+      await trackPresencePayloadWithRetry(
+        payload,
+      );
 
-      /*
-       * 이미 월드에 있는 이용자는 Broadcast로 즉시 정지 좌표를 받는다.
-       * Presence sync를 기다리지 않고 포커스 시작 지점에서 바로 멈춘다.
-       */
-      if (
-        nextStatus ===
-        "focusing"
-      ) {
-        const movementChannel =
-          movementChannelRef.current;
+    if (!tracked) {
+      return false;
+    }
 
-        if (movementChannel) {
+    /*
+     * 이미 월드에 있는 이용자는 Broadcast로 즉시 정지 좌표를 받는다.
+     * Presence sync를 기다리지 않고 포커스 시작 지점에서 바로 멈춘다.
+     *
+     * Broadcast 한 번의 실패가 Presence 성공까지 무효화하지 않도록
+     * 별도 best-effort 처리한다.
+     */
+    if (
+      nextStatus ===
+      "focusing"
+    ) {
+      const movementChannel =
+        movementChannelRef.current;
+
+      if (movementChannel) {
+        try {
           await movementChannel.send({
             type: "broadcast",
             event: "player-move",
@@ -2293,11 +2905,13 @@ movementChannel.on(
                 false,
             },
           });
+        } catch {
+          // Presence가 성공했다면 이동 Broadcast 단발 실패는 무시한다.
         }
       }
-    } catch {
-      setIsConnected(false);
     }
+
+    return true;
   }
 
 async function updatePosition(
@@ -2426,5 +3040,8 @@ async function updatePosition(
     updateStatus,
 
     updatePosition,
+
+    refreshPresence,
   };
 }
+
