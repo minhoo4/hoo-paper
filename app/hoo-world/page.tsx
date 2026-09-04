@@ -837,6 +837,15 @@ export default function HooWorldPage() {
   ] = useState(false);
 
   const [
+    isClientReady,
+    setIsClientReady,
+  ] = useState(false);
+
+  useEffect(() => {
+    setIsClientReady(true);
+  }, []);
+
+  const [
     selectedAccessoryId,
     setSelectedAccessoryId,
   ] = useState<string | null>(
@@ -5120,6 +5129,7 @@ export default function HooWorldPage() {
           void enterFocusModeFromHooWorld();
         }}
         disabled={
+          !isClientReady ||
           isEnteringFocusMode ||
           !isConnected ||
           fieldId === null
@@ -5135,12 +5145,14 @@ export default function HooWorldPage() {
         </span>
 
         <span>
-          {isEnteringFocusMode
-            ? "연결 중..."
-            : !isConnected ||
-                fieldId === null
-              ? "후월드 연결 중..."
-              : "포커스모드"}
+          {!isClientReady
+            ? "후월드 연결 중..."
+            : isEnteringFocusMode
+              ? "연결 중..."
+              : !isConnected ||
+                  fieldId === null
+                ? "후월드 연결 중..."
+                : "포커스모드"}
         </span>
       </button>
 
