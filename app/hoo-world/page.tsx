@@ -4,6 +4,7 @@ import Link from "next/link";
 
 import {
   memo,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -17,6 +18,18 @@ import HooWorldPlayer, {
 import {
   useHooWorldPresence,
 } from "@/components/HooWorld/hooks/useHooWorldPresence";
+
+import HooWorldBackgroundMusic from "@/components/HooWorld/audio/HooWorldBackgroundMusic";
+import HooWorldNatureAmbience from "@/components/HooWorld/audio/HooWorldNatureAmbience";
+import HooWorldDayNightCycle from "@/components/HooWorld/environment/HooWorldDayNightCycle";
+import {
+  HOO_WORLD_MUSIC_TRACKS,
+} from "@/components/HooWorld/audio/hooWorldMusicPlaylist";
+
+import HooWorldCampfire from "@/components/HooWorld/items/HooWorldCampfire";
+import HooWorldDeliveryGate from "@/components/HooWorld/items/HooWorldDeliveryGate";
+import HooWorldFirewood from "@/components/HooWorld/items/HooWorldFirewood";
+import HooWorldStall from "@/components/HooWorld/items/HooWorldStall";
 
 import {
   createClient,
@@ -783,6 +796,30 @@ export default function HooWorldPage() {
   ] = useState(false);
 
   const [
+    isBackgroundMusicEnabled,
+    setIsBackgroundMusicEnabled,
+  ] = useState(true);
+
+  const [
+    isNatureAmbienceEnabled,
+    setIsNatureAmbienceEnabled,
+  ] = useState(true);
+
+  type FirewoodFieldItem = {
+    itemId: string;
+    x: number;
+    y: number;
+    revision: number;
+  };
+
+  const [
+    firewoodFieldItems,
+    setFirewoodFieldItems,
+  ] = useState<FirewoodFieldItem[]>(
+    [],
+  );
+
+  const [
     isEnteringFocusMode,
     setIsEnteringFocusMode,
   ] = useState(false);
@@ -882,6 +919,424 @@ export default function HooWorldPage() {
 
   updatePositionRef.current =
     updatePosition;
+
+  /*
+   * HOO WORLD 배경 노래 ON/OFF 설정.
+   * 기본값은 ON이며 브라우저에 저장한다.
+   */
+  useEffect(() => {
+    const savedValue =
+      window.localStorage.getItem(
+        "hoo-world-background-music-enabled",
+      );
+
+    if (savedValue === "false") {
+      setIsBackgroundMusicEnabled(
+        false,
+      );
+    }
+  }, []);
+
+  function toggleBackgroundMusic() {
+    setIsBackgroundMusicEnabled(
+      (current) => {
+        const nextValue =
+          !current;
+
+        window.localStorage.setItem(
+          "hoo-world-background-music-enabled",
+          String(nextValue),
+        );
+
+        return nextValue;
+      },
+    );
+  }
+
+  /*
+   * HOO WORLD 자연음 ON/OFF 설정.
+   * 기본값은 ON이며 배경 노래와 독립적으로 저장한다.
+   */
+  useEffect(() => {
+    const savedValue =
+      window.localStorage.getItem(
+        "hoo-world-nature-ambience-enabled",
+      );
+
+    if (savedValue === "false") {
+      setIsNatureAmbienceEnabled(
+        false,
+      );
+    }
+  }, []);
+
+  function toggleNatureAmbience() {
+    setIsNatureAmbienceEnabled(
+      (current) => {
+        const nextValue =
+          !current;
+
+        window.localStorage.setItem(
+          "hoo-world-nature-ambience-enabled",
+          String(nextValue),
+        );
+
+        return nextValue;
+      },
+    );
+  }
+
+  /*
+   * HOO WORLD 필드에 존재하는 모든 장작을 DB에서 불러온다.
+   *
+   * 중요:
+   * - 장작 개수 / 좌표를 page.tsx에 하드코딩하지 않는다.
+   * - hoo_world_item_states의 firewood + is_installed=true가
+   *   현재 월드에 실제로 존재하는 장작의 단일 기준점이다.
+   * - INSERT / UPDATE / DELETE를 Realtime으로 받아
+   *   모든 이용자 화면의 장작 목록을 동일하게 유지한다.
+   *
+   * 각 장작의 실제 X 이동 / 좌표 저장은 기존 HooWorldItem이
+   * 그대로 담당하므로 장작이 몇 개가 생겨도 각각 독립 이동 가능하다.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    function normalizeFirewoodRow(
+      value: unknown,
+    ): (
+      FirewoodFieldItem & {
+        isInstalled: boolean;
+      }
+    ) | null {
+      if (
+        !value ||
+        typeof value !== "object" ||
+        Array.isArray(value)
+      ) {
+        return null;
+      }
+
+      const row =
+        value as Record<
+          string,
+          unknown
+        >;
+
+      if (
+        row.item_type !==
+        "firewood"
+      ) {
+        return null;
+      }
+
+      const itemId =
+        typeof row.item_id ===
+        "string"
+          ? row.item_id
+          : "";
+
+      const x =
+        Number(
+          row.x,
+        );
+
+      const y =
+        Number(
+          row.y,
+        );
+
+      const revision =
+        Number(
+          row.revision ?? 0,
+        );
+
+      if (
+        !itemId ||
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        !Number.isFinite(
+          revision,
+        )
+      ) {
+        return null;
+      }
+
+      return {
+        itemId,
+        x,
+        y,
+        revision:
+          Math.max(
+            0,
+            Math.floor(
+              revision,
+            ),
+          ),
+        isInstalled:
+          row.is_installed !==
+          false,
+      };
+    }
+
+    function sortFirewoodItems(
+      items: FirewoodFieldItem[],
+    ) {
+      return [
+        ...items,
+      ].sort(
+        (
+          first,
+          second,
+        ) =>
+          first.itemId.localeCompare(
+            second.itemId,
+          ),
+      );
+    }
+
+    function applyRealtimeRow(
+      value: unknown,
+    ) {
+      const row =
+        normalizeFirewoodRow(
+          value,
+        );
+
+      if (!row) {
+        return;
+      }
+
+      setFirewoodFieldItems(
+        (current) => {
+          if (
+            !row.isInstalled
+          ) {
+            return current.filter(
+              (item) =>
+                item.itemId !==
+                row.itemId,
+            );
+          }
+
+          const existingIndex =
+            current.findIndex(
+              (item) =>
+                item.itemId ===
+                row.itemId,
+            );
+
+          if (
+            existingIndex === -1
+          ) {
+            return sortFirewoodItems([
+              ...current,
+              {
+                itemId:
+                  row.itemId,
+                x:
+                  row.x,
+                y:
+                  row.y,
+                revision:
+                  row.revision,
+              },
+            ]);
+          }
+
+          const existing =
+            current[
+              existingIndex
+            ];
+
+          if (
+            row.revision <
+            existing.revision
+          ) {
+            return current;
+          }
+
+          if (
+            existing.x ===
+              row.x &&
+            existing.y ===
+              row.y &&
+            existing.revision ===
+              row.revision
+          ) {
+            return current;
+          }
+
+          const next = [
+            ...current,
+          ];
+
+          next[
+            existingIndex
+          ] = {
+            itemId:
+              row.itemId,
+            x:
+              row.x,
+            y:
+              row.y,
+            revision:
+              row.revision,
+          };
+
+          return next;
+        },
+      );
+    }
+
+    async function loadFirewoodField() {
+      const {
+        data,
+        error,
+      } =
+        await supabase
+          .from(
+            "hoo_world_item_states",
+          )
+          .select(
+            "item_id, item_type, x, y, is_installed, revision",
+          )
+          .eq(
+            "item_type",
+            "firewood",
+          )
+          .eq(
+            "is_installed",
+            true,
+          );
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        console.error(
+          "HOO WORLD 장작 필드를 불러오지 못했습니다.",
+          error,
+        );
+
+        return;
+      }
+
+      const nextItems =
+        (
+          data ?? []
+        )
+          .map(
+            normalizeFirewoodRow,
+          )
+          .filter(
+            (
+              item,
+            ): item is (
+              FirewoodFieldItem & {
+                isInstalled: boolean;
+              }
+            ) =>
+              item !== null &&
+              item.isInstalled,
+          )
+          .map(
+            (item) => ({
+              itemId:
+                item.itemId,
+              x:
+                item.x,
+              y:
+                item.y,
+              revision:
+                item.revision,
+            }),
+          );
+
+      setFirewoodFieldItems(
+        sortFirewoodItems(
+          nextItems,
+        ),
+      );
+    }
+
+    void loadFirewoodField();
+
+    const channel =
+      supabase
+        .channel(
+          "hoo-world-firewood-field",
+        )
+        .on(
+          "postgres_changes",
+          {
+            event:
+              "*",
+            schema:
+              "public",
+            table:
+              "hoo_world_item_states",
+          },
+          (
+            payload,
+          ) => {
+            if (
+              payload.eventType ===
+              "DELETE"
+            ) {
+              const oldRow =
+                payload.old &&
+                typeof payload.old ===
+                  "object"
+                  ? payload.old as Record<
+                      string,
+                      unknown
+                    >
+                  : null;
+
+              const deletedItemId =
+                typeof oldRow
+                  ?.item_id ===
+                  "string"
+                  ? oldRow.item_id
+                  : "";
+
+              if (
+                !deletedItemId
+              ) {
+                return;
+              }
+
+              setFirewoodFieldItems(
+                (current) =>
+                  current.filter(
+                    (item) =>
+                      item.itemId !==
+                      deletedItemId,
+                  ),
+              );
+
+              return;
+            }
+
+            applyRealtimeRow(
+              payload.new,
+            );
+          },
+        )
+        .subscribe();
+
+    return () => {
+      cancelled = true;
+
+      void supabase.removeChannel(
+        channel,
+      );
+    };
+  }, [
+    supabase,
+  ]);
 
   /*
    * 실시간 좌표 송출 주기를 제한한다.
@@ -1127,6 +1582,13 @@ export default function HooWorldPage() {
     const movementInput =
       movementInputRef.current;
 
+    /*
+     * 공용 HooWorldItem이 X 이동모드를 시작하면
+     * 캐릭터 WASD/방향키 이동을 잠시 잠근다.
+     */
+    let isWorldItemMoveModeActive =
+      false;
+
     function hasMovementInput() {
       return (
         movementInput.left ||
@@ -1175,6 +1637,231 @@ export default function HooWorldPage() {
       movementInput.right = false;
       movementInput.up = false;
       movementInput.down = false;
+    }
+
+    /*
+     * HooWorldItem의 공용 X 이동모드와 캐릭터 이동을 연결한다.
+     *
+     * active=true:
+     * - 이미 눌려 있던 이동 입력 제거
+     * - 캐릭터 RAF 정지
+     * - 걷기 모션 정지
+     *
+     * active=false:
+     * - 이후부터 캐릭터 이동키를 다시 정상 처리
+     */
+    function handleWorldItemMoveMode(
+      event: Event,
+    ) {
+      const customEvent =
+        event as CustomEvent<{
+          active?: boolean;
+          itemId?: string;
+        }>;
+
+      isWorldItemMoveModeActive =
+        customEvent.detail?.active ===
+        true;
+
+      /*
+       * X 이동모드가 끝나는 순간에도
+       * 캐릭터의 최종 좌표와 정지 상태를 다른 이용자에게 확정한다.
+       */
+      if (
+        !isWorldItemMoveModeActive
+      ) {
+        clearMovementInput();
+
+        previousMovementTimeRef.current =
+          0;
+
+        resetPlayerWalkMotion();
+
+        stopMovementFrame();
+
+        const current =
+          playerPositionRef.current;
+
+        lastMovementBroadcastAtRef.current =
+          0;
+
+        void updatePositionRef.current(
+          current.x,
+          current.y,
+          playerFacingRef.current,
+          false,
+        );
+
+        return;
+      }
+
+      clearMovementInput();
+
+      previousMovementTimeRef.current =
+        0;
+
+      resetPlayerWalkMotion();
+
+      stopMovementFrame();
+
+      const current =
+        playerPositionRef.current;
+
+      lastMovementBroadcastAtRef.current =
+        0;
+
+      void updatePositionRef.current(
+        current.x,
+        current.y,
+        playerFacingRef.current,
+        false,
+      );
+    }
+
+    /*
+     * 공용 HooWorldItem이 방향키로 이동할 때
+     * 해당 아이템의 실제 이동 delta만큼 캐릭터도 같이 움직인다.
+     *
+     * 이 이벤트는 HooWorldItem의 movable 공용 로직에서 발생하므로
+     * 장작 / 가판대뿐 아니라 앞으로 추가될 모든 movable 아이템에
+     * 별도 연결 코드 없이 자동 적용된다.
+     */
+    function handleWorldItemMoveStep(
+      event: Event,
+    ) {
+      if (
+        !isWorldItemMoveModeActive
+      ) {
+        return;
+      }
+
+      const customEvent =
+        event as CustomEvent<{
+          itemId?: string;
+          itemType?: string;
+          deltaX?: number;
+          deltaY?: number;
+          x?: number;
+          y?: number;
+        }>;
+
+      const deltaX =
+        Number(
+          customEvent.detail
+            ?.deltaX ?? 0,
+        );
+
+      const deltaY =
+        Number(
+          customEvent.detail
+            ?.deltaY ?? 0,
+        );
+
+      if (
+        !Number.isFinite(
+          deltaX,
+        ) ||
+        !Number.isFinite(
+          deltaY,
+        ) ||
+        (
+          Math.abs(deltaX) <
+            0.0001 &&
+          Math.abs(deltaY) <
+            0.0001
+        )
+      ) {
+        return;
+      }
+
+      const current =
+        playerPositionRef.current;
+
+      const previousX =
+        current.x;
+
+      const previousY =
+        current.y;
+
+      /*
+       * 아이템 이동 중에는 현재 잡고 있는 아이템 자체와의
+       * 충돌 판정 때문에 캐릭터가 밀려나지 않도록
+       * 일반 오브젝트 충돌 대신 월드 외곽 범위만 적용한다.
+       *
+       * 아이템의 공용 이동 한계와 같은 범위를 사용하므로
+       * 캐릭터와 아이템이 끝까지 함께 움직인다.
+       */
+      current.x =
+        clamp(
+          current.x +
+            deltaX,
+          5,
+          95,
+        );
+
+      current.y =
+        clamp(
+          current.y +
+            deltaY,
+          9,
+          93,
+        );
+
+      const didMove =
+        Math.abs(
+          current.x -
+            previousX,
+        ) >
+          0.0001 ||
+        Math.abs(
+          current.y -
+            previousY,
+        ) >
+          0.0001;
+
+      if (!didMove) {
+        return;
+      }
+
+      applyPlayerFacingDirection(
+        deltaX,
+        deltaY,
+      );
+
+      applyPlayerTransform();
+
+      const currentTime =
+        performance.now();
+
+      /*
+       * 제자리에서 아이템만 미끄러지는 느낌이 나지 않도록
+       * 기존 캐릭터 걷기 바운스를 그대로 사용한다.
+       */
+      applyPlayerWalkMotion(
+        currentTime,
+        true,
+      );
+
+      /*
+       * 다른 이용자 화면에서도
+       * "A가 아이템과 함께 이동하는 모습"을 볼 수 있게
+       * 기존 Presence/Broadcast 좌표 동기화를 그대로 사용한다.
+       */
+      if (
+        currentTime -
+          lastMovementBroadcastAtRef.current >=
+        50
+      ) {
+        lastMovementBroadcastAtRef.current =
+          currentTime;
+
+        void updatePositionRef.current(
+          current.x,
+          current.y,
+          playerFacingRef.current,
+          true,
+        );
+      }
     }
 
     function clamp(
@@ -1268,6 +1955,12 @@ export default function HooWorldPage() {
       let x = nextX;
       let y = nextY;
 
+      /*
+       * 1. 기존 맵 고정 오브젝트 충돌
+       *
+       * 기존 나무 / 중앙 오브젝트 등의 충돌은
+       * 지금까지 사용하던 좌표 기반 방식을 그대로 유지한다.
+       */
       for (
         const zone of
         staticCollisionZones
@@ -1439,6 +2132,302 @@ export default function HooWorldPage() {
 
         y =
           zone.maxY;
+      }
+
+      /*
+       * 2. 독립 WorldItem 충돌
+       *
+       * collision=true인 HooWorldItem은 자기 DOM에
+       * data-hoo-world-collision-object="true"를 가진다.
+       *
+       * 따라서 가판대 / 의자 / 텐트 / 배송 아이템 등
+       * 앞으로 추가되는 아이템은 맵의 고정 좌표를
+       * 충돌 엔진에 따로 등록할 필요가 없다.
+       *
+       * 아이템 자체가 이동하면 getBoundingClientRect()가
+       * 이동된 실제 위치를 반환하므로 충돌영역도 같이 이동한다.
+       */
+      const collisionObjects =
+        document.querySelectorAll<HTMLElement>(
+          '[data-hoo-world-collision-object="true"]',
+        );
+
+      if (
+        collisionObjects.length ===
+        0
+      ) {
+        return {
+          x,
+          y,
+        };
+      }
+
+      const viewportWidth =
+        window.innerWidth;
+
+      const viewportHeight =
+        window.innerHeight;
+
+      if (
+        viewportWidth <= 0 ||
+        viewportHeight <= 0
+      ) {
+        return {
+          x,
+          y,
+        };
+      }
+
+      /*
+       * 중요:
+       * playerPositionRef의 x/y는 캐릭터 이미지의 "발" 좌표가 아니라
+       * 캐릭터 전체 래퍼의 기준 좌표다.
+       *
+       * 따라서 그 좌표를 그대로 아이템 접지면과 비교하면
+       * 캐릭터 발이 아직 멀리 떨어져 있는데도 충돌할 수 있다.
+       *
+       * 실제 화면에 그려진 마스코트의 하단 중앙(발/접지점)을 읽고,
+       * 다음 이동 좌표에서도 그 접지점이 어디에 올지 계산한다.
+       */
+      const playerElement =
+        playerElementRef.current;
+
+      const playerCharacterElement =
+        playerElement?.querySelector<HTMLElement>(
+          '[data-hoo-world-character="bubble-mascot"]',
+        ) ?? null;
+
+      const currentPlayerPosition =
+        playerPositionRef.current;
+
+      const currentPlayerPixelX =
+        (
+          currentPlayerPosition.x /
+          100
+        ) *
+        viewportWidth;
+
+      const currentPlayerPixelY =
+        (
+          currentPlayerPosition.y /
+          100
+        ) *
+        viewportHeight;
+
+      const playerCharacterRect =
+        playerCharacterElement?.getBoundingClientRect() ??
+        null;
+
+      /*
+       * 캐릭터 실제 접지점이 playerPositionRef 기준점에서
+       * 얼마나 떨어져 있는지 매 프레임 DOM 기준으로 계산한다.
+       *
+       * 캐릭터 크기 / 스케일 / 스킨이 바뀌어도
+       * 고정 숫자를 다시 맞출 필요가 없다.
+       */
+      const playerGroundOffsetX =
+        playerCharacterRect
+          ? playerCharacterRect.left +
+            playerCharacterRect.width /
+              2 -
+            currentPlayerPixelX
+          : 0;
+
+      const playerGroundOffsetY =
+        playerCharacterRect
+          ? playerCharacterRect.bottom -
+            currentPlayerPixelY
+          : 0;
+
+      for (
+        const collisionObject of
+        collisionObjects
+      ) {
+        const collisionAnchor =
+          collisionObject.querySelector<HTMLElement>(
+            '[data-hoo-world-collision-anchor="true"]',
+          );
+
+        const itemRect =
+          collisionAnchor
+            ? collisionAnchor.getBoundingClientRect()
+            : collisionObject.getBoundingClientRect();
+
+        if (
+          itemRect.width <= 0 ||
+          itemRect.height <= 0
+        ) {
+          continue;
+        }
+
+        const rawBottomRatio =
+          Number(
+            collisionObject.dataset
+              .hooWorldCollisionBottomRatio ??
+              1,
+          );
+
+        const collisionBottomRatio =
+          Number.isFinite(
+            rawBottomRatio,
+          )
+            ? Math.max(
+                0.01,
+                Math.min(
+                  1,
+                  rawBottomRatio,
+                ),
+              )
+            : 1;
+
+        const collisionTopPixel =
+          collisionAnchor
+            ? itemRect.top
+            : itemRect.bottom -
+              itemRect.height *
+                collisionBottomRatio;
+
+        /*
+         * 다음 프레임의 "캐릭터 발" 실제 예상 좌표.
+         *
+         * 이제 x/y 중심점이 아니라 이 점이
+         * 아이템의 실제 접지 충돌면에 닿을 때만 막힌다.
+         */
+        const nextPlayerGroundPixelX =
+          (
+            x /
+            100
+          ) *
+            viewportWidth +
+          playerGroundOffsetX;
+
+        const nextPlayerGroundPixelY =
+          (
+            y /
+            100
+          ) *
+            viewportHeight +
+          playerGroundOffsetY;
+
+        const isInside =
+          nextPlayerGroundPixelX >
+            itemRect.left &&
+          nextPlayerGroundPixelX <
+            itemRect.right &&
+          nextPlayerGroundPixelY >
+            collisionTopPixel &&
+          nextPlayerGroundPixelY <
+            itemRect.bottom;
+
+        if (!isInside) {
+          continue;
+        }
+
+        const distances = [
+          {
+            side:
+              "left" as const,
+            value:
+              Math.abs(
+                nextPlayerGroundPixelX -
+                  itemRect.left,
+              ),
+          },
+          {
+            side:
+              "right" as const,
+            value:
+              Math.abs(
+                itemRect.right -
+                  nextPlayerGroundPixelX,
+              ),
+          },
+          {
+            side:
+              "top" as const,
+            value:
+              Math.abs(
+                nextPlayerGroundPixelY -
+                  collisionTopPixel,
+              ),
+          },
+          {
+            side:
+              "bottom" as const,
+            value:
+              Math.abs(
+                itemRect.bottom -
+                  nextPlayerGroundPixelY,
+              ),
+          },
+        ].sort(
+          (
+            first,
+            second,
+          ) =>
+            first.value -
+            second.value,
+        );
+
+        const nearest =
+          distances[0];
+
+        /*
+         * 발 접지점을 충돌면 경계에 맞춘 뒤,
+         * 다시 playerPositionRef의 중심 좌표로 환산한다.
+         */
+        if (
+          nearest.side ===
+          "left"
+        ) {
+          x =
+            (
+              itemRect.left -
+              playerGroundOffsetX
+            ) /
+            viewportWidth *
+            100;
+
+          continue;
+        }
+
+        if (
+          nearest.side ===
+          "right"
+        ) {
+          x =
+            (
+              itemRect.right -
+              playerGroundOffsetX
+            ) /
+            viewportWidth *
+            100;
+
+          continue;
+        }
+
+        if (
+          nearest.side ===
+          "top"
+        ) {
+          y =
+            (
+              collisionTopPixel -
+              playerGroundOffsetY
+            ) /
+            viewportHeight *
+            100;
+
+          continue;
+        }
+
+        y =
+          (
+            itemRect.bottom -
+            playerGroundOffsetY
+          ) /
+          viewportHeight *
+          100;
       }
 
       return {
@@ -1868,6 +2857,22 @@ export default function HooWorldPage() {
     function handleKeyDown(
       event: KeyboardEvent,
     ) {
+      if (
+        isWorldItemMoveModeActive
+      ) {
+        const handled =
+          setMovementInput(
+            event.code,
+            false,
+          );
+
+        if (handled) {
+          event.preventDefault();
+        }
+
+        return;
+      }
+
       const handled =
         setMovementInput(
           event.code,
@@ -1886,6 +2891,28 @@ export default function HooWorldPage() {
     function handleKeyUp(
       event: KeyboardEvent,
     ) {
+      if (
+        isWorldItemMoveModeActive
+      ) {
+        const handled =
+          setMovementInput(
+            event.code,
+            false,
+          );
+
+        if (handled) {
+          event.preventDefault();
+
+          /*
+           * 아이템 방향키를 놓으면
+           * 캐릭터의 따라걷기 모션도 즉시 정지한다.
+           */
+          resetPlayerWalkMotion();
+        }
+
+        return;
+      }
+
       const handled =
         setMovementInput(
           event.code,
@@ -1998,6 +3025,16 @@ export default function HooWorldPage() {
       );
 
     window.addEventListener(
+      "hoo-world:item-move-mode",
+      handleWorldItemMoveMode,
+    );
+
+    window.addEventListener(
+      "hoo-world:item-move-step",
+      handleWorldItemMoveStep,
+    );
+
+    window.addEventListener(
       "keydown",
       handleKeyDown,
     );
@@ -2029,6 +3066,16 @@ export default function HooWorldPage() {
       clearMovementInput();
 
       window.removeEventListener(
+        "hoo-world:item-move-mode",
+        handleWorldItemMoveMode,
+      );
+
+      window.removeEventListener(
+        "hoo-world:item-move-step",
+        handleWorldItemMoveStep,
+      );
+
+      window.removeEventListener(
         "keydown",
         handleKeyDown,
       );
@@ -2049,6 +3096,43 @@ export default function HooWorldPage() {
       );
     };
   }, []);
+
+  /*
+   * 기능형 월드 아이템의 UI를 열기 직전에
+   * 캐릭터 이동 입력과 RAF를 완전히 정지한다.
+   *
+   * 가판대뿐 아니라 앞으로 추가될 모든 기능형 아이템이
+   * 동일하게 재사용할 수 있는 공용 처리다.
+   */
+  const stopPlayerMovementForWorldItemInteraction =
+    useCallback(() => {
+      movementInputRef.current.left =
+        false;
+
+      movementInputRef.current.right =
+        false;
+
+      movementInputRef.current.up =
+        false;
+
+      movementInputRef.current.down =
+        false;
+
+      if (
+        movementFrameRef.current !==
+        null
+      ) {
+        cancelAnimationFrame(
+          movementFrameRef.current,
+        );
+
+        movementFrameRef.current =
+          null;
+      }
+
+      previousMovementTimeRef.current =
+        0;
+    }, []);
 
   async function enterFocusModeFromHooWorld() {
     if (isEnteringFocusMode) {
@@ -2243,6 +3327,22 @@ export default function HooWorldPage() {
 
   return (
     <main className="relative h-[100dvh] min-h-[640px] w-full overflow-hidden bg-[#7fa75d] text-[#2d3329]">
+      <HooWorldNatureAmbience
+        enabled={
+          isNatureAmbienceEnabled
+        }
+      />
+
+      <HooWorldDayNightCycle />
+
+      <HooWorldBackgroundMusic
+        enabled={
+          isBackgroundMusicEnabled
+        }
+        tracks={
+          HOO_WORLD_MUSIC_TRACKS
+        }
+      />
     
     
       {/* ─────────────────────────
@@ -2632,12 +3732,80 @@ export default function HooWorldPage() {
         ),
       )}
 
-      {/* 중앙 활동 구역 쪽으로 자연스럽게 시선이 모이는 아주 약한 밝기 */}
-      <div className="pointer-events-none absolute left-1/2 top-[50%] z-[2] h-[48%] w-[52%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] bg-[#d7db91]/4 blur-[32px]" />
+    {/* 중앙 활동 구역 쪽으로 자연스럽게 시선이 모이는 아주 약한 밝기 */}
+<div className="pointer-events-none absolute left-1/2 top-[50%] z-[2] h-[48%] w-[52%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] bg-[#d7db91]/4 blur-[32px]" />
 
-      {/* ─────────────────────────
-          중앙 흙 공터
-      ───────────────────────── */}
+{/* ─────────────────────────
+    HOO WORLD 배송 대문 + 배송 상자
+
+    내 배송정보 없음:
+    - 대문 닫힘
+    - 상자 숨김
+
+    내 배송정보 있음:
+    - 대문 활짝 열림
+    - 대문 안쪽 필드에 배송 상자 등장
+
+    상자 열기 / 아이템 꺼내기는 다음 단계에서
+    HooWorldDeliveryGate 컴포넌트에 이어서 연결한다.
+───────────────────────── */}
+<HooWorldDeliveryGate />
+
+{/* ─────────────────────────
+    독립 월드 아이템: HOO COIN 가판대
+
+    가판대의 그래픽 / 위치 / 충돌 설정 /
+    F 상호작용 / 모금 / 요청 기능은
+    HooWorldStall.tsx가 직접 소유한다.
+───────────────────────── */}
+<HooWorldStall
+  x={77}
+  y={58}
+  playerPositionRef={
+    playerPositionRef
+  }
+  onBeforeOpen={
+    stopPlayerMovementForWorldItemInteraction
+  }
+  onBalanceChange={
+    setHooCoinBalance
+  }
+/>
+
+{/* ─────────────────────────
+    독립 월드 아이템: 장작
+
+    hoo_world_item_states에 실제로 존재하는
+    모든 firewood를 Realtime으로 렌더링한다.
+
+    각 장작은 고유 itemId를 가지므로
+    기존 HooWorldItem의 X 이동 / 좌표 저장 /
+    Realtime 공유 / 재접속 복원이 각각 독립 적용된다.
+───────────────────────── */}
+{firewoodFieldItems.map(
+  (firewood) => (
+    <HooWorldFirewood
+      key={
+        firewood.itemId
+      }
+      itemId={
+        firewood.itemId
+      }
+      x={
+        firewood.x
+      }
+      y={
+        firewood.y
+      }
+    />
+  ),
+)}
+
+{/* ─────────────────────────
+    중앙 흙 공터
+───────────────────────── */}
+
+
 
       {/* 잔디와 흙 사이의 흐릿한 경계 */}
       <div
@@ -2707,78 +3875,12 @@ export default function HooWorldPage() {
         <div className="absolute left-1/2 top-[47%] h-[22%] w-[24%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] bg-[#e5a04b]/5 blur-[15px]" />
 
         {/* 중앙 공동 허브 - HOO 공동 캠프파이어 */}
-        <div className="absolute left-1/2 top-[47%] h-[31%] w-[27%] -translate-x-1/2 -translate-y-1/2">
-          {/* 많이 밟힌 중앙 흙자리 */}
-          <div className="absolute left-1/2 top-1/2 h-[88%] w-[92%] -translate-x-1/2 -translate-y-1/2 rounded-[48%_52%_46%_54%] bg-[#6f4d36]/7 blur-[2px]" />
-          <div className="absolute left-1/2 top-1/2 h-[64%] w-[68%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] border border-[#6e4e38]/10 bg-[#8b6244]/5" />
+        <HooWorldCampfire
+          onBeforeUse={
+            stopPlayerMovementForWorldItemInteraction
+          }
+        />
 
-          {/* 불 주변의 그을린 흙 */}
-          <div className="absolute left-1/2 top-[51%] h-[44%] w-[48%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] bg-[#4c392f]/15 blur-[3px]" />
-          <div className="absolute left-1/2 top-[51%] h-[31%] w-[35%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] bg-[#332b27]/16" />
-
-          {/* 돌 화덕 */}
-          {[
-            [50, 25, 19, 11, -3],
-            [67, 30, 18, 11, 9],
-            [77, 43, 19, 11, 18],
-            [76, 59, 18, 11, -10],
-            [64, 72, 19, 11, 7],
-            [48, 76, 19, 11, -4],
-            [32, 70, 18, 11, 10],
-            [22, 57, 19, 11, -13],
-            [23, 41, 18, 11, 8],
-            [34, 29, 19, 11, -8],
-          ].map(
-            (
-              [
-                left,
-                top,
-                width,
-                height,
-                rotate,
-              ],
-              index,
-            ) => (
-              <span
-                key={`camp-hub-stone-${index}`}
-                className="absolute z-[2] rounded-[48%_52%_45%_55%] border border-[#69675c]/45 bg-gradient-to-br from-[#aaa48f] via-[#858379] to-[#65665f] shadow-[0_2px_3px_rgba(52,47,41,0.20)]"
-                style={{
-                  left: `${left}%`,
-                  top: `${top}%`,
-                  width: `${width}%`,
-                  height: `${height}%`,
-                  transform: `translate(-50%, -50%) rotate(${rotate}deg)`,
-                }}
-              >
-                <span className="absolute left-[14%] top-[12%] h-[20%] w-[38%] rounded-full bg-white/12" />
-              </span>
-            ),
-          )}
-
-          {/* 장작 두 개 */}
-          <div className="absolute left-1/2 top-[52%] z-[3] h-[11%] w-[43%] -translate-x-1/2 -translate-y-1/2 rotate-[22deg] overflow-hidden rounded-full border border-[#4e3328]/70 bg-gradient-to-r from-[#4d3025] via-[#805039] to-[#4c3026] shadow-[0_3px_4px_rgba(47,34,27,0.23)]">
-            <span className="absolute left-[18%] top-[24%] h-[16%] w-[49%] rounded-full bg-[#b2754e]/24" />
-          </div>
-          <div className="absolute left-1/2 top-[52%] z-[3] h-[11%] w-[43%] -translate-x-1/2 -translate-y-1/2 -rotate-[22deg] overflow-hidden rounded-full border border-[#4d3227]/70 bg-gradient-to-r from-[#4a2f25] via-[#78503a] to-[#4b3026] shadow-[0_3px_4px_rgba(47,34,27,0.23)]">
-            <span className="absolute left-[22%] top-[25%] h-[16%] w-[44%] rounded-full bg-[#b2754e]/21" />
-          </div>
-
-          {/* 작은 공동 불꽃 */}
-          <div className="absolute left-1/2 top-[42%] z-[4] h-[42%] w-[35%] -translate-x-1/2">
-            <div className="absolute bottom-[3%] left-1/2 h-[76%] w-[88%] -translate-x-1/2 rounded-full bg-[#ff9b43]/12 blur-[9px]" />
-            <div className="absolute bottom-[15%] left-1/2 h-[46%] w-[62%] -translate-x-1/2 rounded-full bg-[#ffd66f]/7 blur-[7px]" />
-
-            <div className="absolute bottom-[7%] left-[18%] h-[55%] w-[34%] -rotate-[13deg] rounded-[65%_35%_55%_45%] bg-gradient-to-t from-[#d94f2e] via-[#f47b38] to-[#ffc465]" />
-            <div className="absolute bottom-[6%] right-[17%] h-[60%] w-[35%] rotate-[12deg] rounded-[45%_55%_64%_36%] bg-gradient-to-t from-[#df5930] via-[#f98a3d] to-[#ffd473]" />
-            <div className="absolute bottom-[5%] left-1/2 h-[72%] w-[43%] -translate-x-1/2 rounded-[55%_45%_62%_38%] bg-gradient-to-t from-[#e8572d] via-[#ff963f] to-[#ffe086] shadow-[0_0_8px_rgba(255,141,54,0.38)]" />
-            <div className="absolute bottom-[12%] left-1/2 h-[45%] w-[23%] -translate-x-1/2 rounded-[60%_40%_58%_42%] bg-gradient-to-t from-[#ffc849] to-[#fff2ad]" />
-          </div>
-
-          {/* 불씨 */}
-          <span className="absolute left-[44%] top-[25%] z-[5] h-[3px] w-[3px] rounded-full bg-[#ffd477]/80 shadow-[0_0_3px_rgba(255,207,103,0.55)]" />
-          <span className="absolute left-[57%] top-[31%] z-[5] h-[2px] w-[2px] rounded-full bg-[#ffbe5e]/75" />
-          <span className="absolute left-[50%] top-[20%] z-[5] h-[2px] w-[2px] rounded-full bg-[#ffe09a]/70" />
-        </div>
 
         {/* 중앙 캠프파이어 주변 공동 휴식자리 */}
         <div className="absolute left-[37%] top-[34%] h-[12%] w-[16%] -rotate-[11deg]">
@@ -3601,6 +4703,7 @@ export default function HooWorldPage() {
         ref={
           playerElementRef
         }
+        data-hoo-world-local-player="true"
         className="absolute left-0 top-0 z-30 will-change-transform"
         style={{
           transform:
@@ -3790,9 +4893,98 @@ export default function HooWorldPage() {
     </button>
 
     <p className="mt-3 px-1 text-[10px] font-bold leading-4 text-white/45">
-      user-1.png ~ user-7.png가 각 번호에
-      직접 연결됩니다.
+    
     </p>
+
+    <div className="mt-3 border-t border-white/10 pt-3">
+      <div className="flex items-center justify-between gap-3 rounded-xl bg-white/5 px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-[10px] font-black tracking-[0.14em] text-white/45">
+            HOO MUSIC
+          </p>
+
+          <p className="mt-0.5 text-xs font-black text-white">
+            배경 노래
+          </p>
+
+          <p className="mt-1 text-[9px] font-bold leading-4 text-white/40">
+            
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={
+            toggleBackgroundMusic
+          }
+          aria-pressed={
+            isBackgroundMusicEnabled
+          }
+          className={`relative h-7 w-12 shrink-0 rounded-full border transition ${
+            isBackgroundMusicEnabled
+              ? "border-emerald-300/45 bg-emerald-400/80"
+              : "border-white/15 bg-white/10"
+          }`}
+        >
+          <span
+            className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full bg-white shadow-sm transition ${
+              isBackgroundMusicEnabled
+                ? "left-[25px]"
+                : "left-[3px]"
+            }`}
+          />
+
+          <span className="sr-only">
+            배경 노래
+            {isBackgroundMusicEnabled
+              ? " 끄기"
+              : " 켜기"}
+          </span>
+        </button>
+      </div>
+
+      <div className="mt-2 flex items-center justify-between gap-3 rounded-xl bg-white/5 px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="text-[10px] font-black tracking-[0.14em] text-white/45">
+            HOO NATURE
+          </p>
+
+          <p className="mt-0.5 text-xs font-black text-white">
+            자연 소리
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={
+            toggleNatureAmbience
+          }
+          aria-pressed={
+            isNatureAmbienceEnabled
+          }
+          className={`relative h-7 w-12 shrink-0 rounded-full border transition ${
+            isNatureAmbienceEnabled
+              ? "border-emerald-300/45 bg-emerald-400/80"
+              : "border-white/15 bg-white/10"
+          }`}
+        >
+          <span
+            className={`absolute top-1/2 h-5 w-5 -translate-y-1/2 rounded-full bg-white shadow-sm transition ${
+              isNatureAmbienceEnabled
+                ? "left-[25px]"
+                : "left-[3px]"
+            }`}
+          />
+
+          <span className="sr-only">
+            자연 소리
+            {isNatureAmbienceEnabled
+              ? " 끄기"
+              : " 켜기"}
+          </span>
+        </button>
+      </div>
+    </div>
   </div>
 )}
 
