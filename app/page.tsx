@@ -7329,6 +7329,58 @@ useEffect(() => {
       return "pending";
     }
 
+    function getSyncErrorInfo(
+      value: unknown,
+    ) {
+      if (
+        !value ||
+        typeof value !== "object"
+      ) {
+        return {
+          message:
+            typeof value === "string"
+              ? value
+              : "알 수 없는 동기화 오류",
+          code: "",
+          details: "",
+          hint: "",
+          name: "",
+        };
+      }
+
+      const error =
+        value as {
+          message?: unknown;
+          code?: unknown;
+          details?: unknown;
+          hint?: unknown;
+          name?: unknown;
+        };
+
+      return {
+        message:
+          typeof error.message === "string"
+            ? error.message
+            : "알 수 없는 동기화 오류",
+        code:
+          typeof error.code === "string"
+            ? error.code
+            : "",
+        details:
+          typeof error.details === "string"
+            ? error.details
+            : "",
+        hint:
+          typeof error.hint === "string"
+            ? error.hint
+            : "",
+        name:
+          typeof error.name === "string"
+            ? error.name
+            : "",
+      };
+    }
+
     try {
       /*
        * getUser()를 바로 호출하면
@@ -7345,11 +7397,22 @@ useEffect(() => {
       } =
         await supabase.auth.getSession();
 
-      if (
-        sessionError ||
-        !session?.user ||
-        cancelled
-      ) {
+      if (cancelled) {
+        return;
+      }
+
+      if (sessionError) {
+        console.warn(
+          "HOO 일정 동기화 세션 확인 실패. 현재 화면을 유지합니다.",
+          getSyncErrorInfo(
+            sessionError,
+          ),
+        );
+
+        return;
+      }
+
+      if (!session?.user) {
         return;
       }
 
@@ -7358,6 +7421,12 @@ useEffect(() => {
       /*
        * 캘린더 일정, 오늘의 투두,
        * 아침 브리핑을 서버에서 동기화한다.
+       *
+       * 중요:
+       * RPC 오류는 개발모드 전체 화면 오류로
+       * 승격시키지 않는다.
+       * 자동 동기화는 보조 기능이므로 실패 시
+       * 현재 투두/브리핑 화면을 그대로 유지한다.
        */
       const {
         data: changedTodoCount,
@@ -7371,11 +7440,18 @@ useEffect(() => {
           },
         );
 
-      if (generationError) {
-        throw generationError;
+      if (cancelled) {
+        return;
       }
 
-      if (cancelled) {
+      if (generationError) {
+        console.warn(
+          "HOO 오늘의 일정 자동 생성 RPC 실패. 현재 화면을 유지합니다.",
+          getSyncErrorInfo(
+            generationError,
+          ),
+        );
+
         return;
       }
 
@@ -7472,23 +7548,37 @@ useEffect(() => {
           .maybeSingle(),
       ]);
 
-      if (updatedTodosResult.error) {
-        throw updatedTodosResult.error;
-      }
-
-      if (updatedBriefingResult.error) {
-        throw updatedBriefingResult.error;
-      }
-
       if (cancelled) {
         return;
       }
 
+      if (updatedTodosResult.error) {
+        console.warn(
+          "HOO 최신 투두 조회 실패. 기존 투두를 유지합니다.",
+          getSyncErrorInfo(
+            updatedTodosResult.error,
+          ),
+        );
+      }
+
+      if (updatedBriefingResult.error) {
+        console.warn(
+          "HOO 최신 브리핑 조회 실패. 기존 브리핑을 유지합니다.",
+          getSyncErrorInfo(
+            updatedBriefingResult.error,
+          ),
+        );
+      }
+
       /*
        * 최신 투두를 화면에 반영한다.
+       * 투두 조회만 실패한 경우에는
+       * 브리핑 갱신까지 막지 않는다.
        */
       const updatedTodos =
-        updatedTodosResult.data;
+        updatedTodosResult.error
+          ? null
+          : updatedTodosResult.data;
 
       if (Array.isArray(updatedTodos)) {
         const normalizedTodos:
@@ -7571,9 +7661,13 @@ useEffect(() => {
 
       /*
        * 최신 아침·저녁 브리핑을 화면에 반영한다.
+       * 브리핑 조회만 실패한 경우에는
+       * 투두 갱신 결과를 그대로 유지한다.
        */
       const updatedBriefing =
-        updatedBriefingResult.data;
+        updatedBriefingResult.error
+          ? null
+          : updatedBriefingResult.data;
 
       if (updatedBriefing) {
         const normalizedBriefing:
@@ -7675,16 +7769,17 @@ useEffect(() => {
 
         setIsMorningBriefingOpen(true);
       }
-    } catch (error) {
-      console.error(
-        "HOO 오늘의 일정과 브리핑 동기화 실패:",
-        error,
-      );
-
+    } catch (error: unknown) {
       /*
-       * 자동 동기화가 실패해도
-       * 현재 화면과 기존 기능은 유지한다.
+       * 예상하지 못한 오류도 개발모드의
+       * 전체 화면 Console Error로 승격시키지 않는다.
+       * 대신 원인을 추적할 수 있도록
+       * 직렬화 가능한 정보만 warning으로 남긴다.
        */
+      console.warn(
+        "HOO 오늘의 일정과 브리핑 동기화 중 예외가 발생했습니다. 현재 화면을 유지합니다.",
+        getSyncErrorInfo(error),
+      );
     }
   }
 

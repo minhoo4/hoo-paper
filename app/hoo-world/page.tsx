@@ -20,6 +20,8 @@ import {
   useHooWorldPresence,
 } from "@/components/HooWorld/hooks/useHooWorldPresence";
 
+import type { RealtimeChannel } from "@supabase/supabase-js";
+
 import HooWorldBackgroundMusic from "@/components/HooWorld/audio/HooWorldBackgroundMusic";
 import HooWorldNatureAmbience from "@/components/HooWorld/audio/HooWorldNatureAmbience";
 import HooWorldDayNightCycle from "@/components/HooWorld/environment/HooWorldDayNightCycle";
@@ -47,6 +49,179 @@ const HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY =
 
 const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
   "hoo-world-focus-operator-skin";
+
+const HOO_WORLD_ADMIN_CONTROL_TARGET_KEY =
+  "hoo-world-admin-control-target";
+
+const HOO_WORLD_ADMIN_CONTROL_TARGET_EVENT =
+  "hoo-world-admin-control-target-change";
+
+type HooWorldAdminControlTarget =
+  | "self"
+  | "operator";
+
+type HooWorldAdminCharacterState = {
+  enabled: boolean;
+  imageUrl: string;
+  messageText: string;
+  messageRevision: number;
+  messageSentAt: string | null;
+  scalePercent: number;
+  speedPercent: number;
+  fieldId: number;
+  x: number;
+  y: number;
+  facing: HooWorldPlayerFacing;
+  isMoving: boolean;
+  updatedAt: string | null;
+};
+
+function normalizeHooWorldAdminCharacterRow(
+  value: unknown,
+): HooWorldAdminCharacterState | null {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const row =
+    value as Record<string, unknown>;
+
+  const fieldId =
+    Number(row.field_id);
+
+  const x =
+    Number(row.x);
+
+  const y =
+    Number(row.y);
+
+  const scalePercent =
+    Number(row.scale_percent);
+
+  const speedPercent =
+    Number(row.speed_percent);
+
+  const messageRevision =
+    Number(row.message_revision);
+
+  const rawFacing =
+    row.facing;
+
+  const facing:
+    HooWorldPlayerFacing =
+      rawFacing === "left" ||
+      rawFacing === "right" ||
+      rawFacing === "up" ||
+      rawFacing === "down"
+        ? rawFacing
+        : "down";
+
+  if (
+    !Number.isFinite(fieldId) ||
+    fieldId < 1 ||
+    !Number.isFinite(x) ||
+    !Number.isFinite(y) ||
+    !Number.isFinite(scalePercent) ||
+    !Number.isFinite(speedPercent) ||
+    !Number.isFinite(messageRevision)
+  ) {
+    return null;
+  }
+
+  return {
+    enabled:
+      row.enabled === true,
+
+    imageUrl:
+      typeof row.image_url ===
+        "string"
+        ? row.image_url.trim()
+        : "",
+
+    messageText:
+      typeof row.message_text ===
+        "string"
+        ? row.message_text
+        : "",
+
+    messageRevision:
+      Math.max(
+        0,
+        Math.floor(
+          messageRevision,
+        ),
+      ),
+
+    messageSentAt:
+      typeof row.message_sent_at ===
+        "string"
+        ? row.message_sent_at
+        : null,
+
+    scalePercent:
+      Math.max(
+        1,
+        Math.min(
+          3000,
+          Math.round(
+            scalePercent,
+          ),
+        ),
+      ),
+
+    speedPercent:
+      Math.max(
+        -50,
+        Math.min(
+          50,
+          Math.round(
+            speedPercent,
+          ),
+        ),
+      ),
+
+    fieldId:
+      Math.max(
+        1,
+        Math.floor(
+          fieldId,
+        ),
+      ),
+
+    x:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          x,
+        ),
+      ),
+
+    y:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          y,
+        ),
+      ),
+
+    facing,
+
+    isMoving:
+      row.is_moving === true,
+
+    updatedAt:
+      typeof row.updated_at ===
+        "string"
+        ? row.updated_at
+        : null,
+  };
+}
 
 function getAccessorySlotId(
   slotNumber: number,
@@ -943,6 +1118,1028 @@ export default function HooWorldPage() {
   updatePositionRef.current =
     updatePosition;
 
+  const [
+    adminCharacter,
+    setAdminCharacter,
+  ] =
+    useState<HooWorldAdminCharacterState | null>(
+      null,
+    );
+
+  const [
+    isAdminCharacterMessageVisible,
+    setIsAdminCharacterMessageVisible,
+  ] = useState(false);
+
+  /*
+   * 관리자 캐릭터 이동 Broadcast가 최근에 도착했다면
+   * 뒤늦게 도착한 DB 스냅샷이 캐릭터를 과거 좌표로 되돌리지 않게 한다.
+   */
+  const adminCharacterMovementBroadcastAtRef =
+    useRef(0);
+
+
+  /*
+   * 관리자 운영 캐릭터 조종용 상태.
+   *
+   * - 일반 이용자에게는 버튼 자체가 보이지 않는다.
+   * - 관리자 + canManage 권한을 가진 계정만 조종 가능하다.
+   * - 실제 이동 중 React 렌더를 60fps로 돌리지 않고 DOM transform을 직접 갱신한다.
+   * - Broadcast는 50ms 간격, DB는 이동 종료 시 최종 스냅샷만 저장한다.
+   */
+  const [
+    isWorldAdminOperator,
+    setIsWorldAdminOperator,
+  ] = useState(false);
+
+  const [
+    adminControlTarget,
+    setAdminControlTarget,
+  ] =
+    useState<HooWorldAdminControlTarget>(
+      "self",
+    );
+
+  const [
+    isControllingAdminCharacter,
+    setIsControllingAdminCharacter,
+  ] = useState(false);
+
+  const isControllingAdminCharacterRef =
+    useRef(false);
+
+  const adminCharacterRef =
+    useRef<HooWorldAdminCharacterState | null>(
+      null,
+    );
+
+  adminCharacterRef.current =
+    adminCharacter;
+
+  const currentFieldIdRef =
+    useRef<number | null>(
+      fieldId,
+    );
+
+  currentFieldIdRef.current =
+    fieldId;
+
+  const adminCharacterElementRef =
+    useRef<HTMLDivElement | null>(
+      null,
+    );
+
+  const adminCharacterControlPositionRef =
+    useRef({
+      x: 50,
+      y: 78,
+    });
+
+  const adminCharacterControlFacingRef =
+    useRef<HooWorldPlayerFacing>(
+      "down",
+    );
+
+  const adminCharacterMovementChannelRef =
+    useRef<RealtimeChannel | null>(
+      null,
+    );
+
+  const lastAdminCharacterControlBroadcastAtRef =
+    useRef(0);
+
+  /*
+   * 현재 로그인 계정이 후월드 운영 캐릭터를 조종할 수 있는지 확인한다.
+   * 기존 관리자 API의 isAdmin + canManage 값을 그대로 사용한다.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(
+      "/api/admin/me",
+      {
+        cache: "no-store",
+      },
+    )
+      .then(
+        (response) =>
+          response.json(),
+      )
+      .then(
+        (result: {
+          isLoggedIn?: boolean;
+          isAdmin?: boolean;
+          canManage?: boolean;
+        }) => {
+          if (cancelled) {
+            return;
+          }
+
+          /*
+           * 관리자 페이지 API 버전에 따라 canManage가
+           * 생략될 수 있으므로, 명시적으로 false일 때만
+           * 조종 권한을 막는다.
+           *
+           * 실제 DB 저장 권한은 Supabase RLS가 최종적으로
+           * 다시 검증하므로 여기서는 UI 노출만 안전하게 복원한다.
+           */
+          setIsWorldAdminOperator(
+            result.isLoggedIn === true &&
+            result.isAdmin === true &&
+            result.canManage !== false,
+          );
+        },
+      )
+      .catch(() => {
+        if (!cancelled) {
+          setIsWorldAdminOperator(
+            false,
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /*
+   * 관리자 페이지에서 선택한 조종 대상을 읽는다.
+   *
+   * - 같은 브라우저의 다른 탭: storage 이벤트
+   * - 같은 문서에서의 갱신: custom event
+   * - 새로고침: localStorage 값 복원
+   */
+  useEffect(() => {
+    function normalizeControlTarget(
+      value: unknown,
+    ): HooWorldAdminControlTarget {
+      return value === "operator"
+        ? "operator"
+        : "self";
+    }
+
+    setAdminControlTarget(
+      normalizeControlTarget(
+        window.localStorage.getItem(
+          HOO_WORLD_ADMIN_CONTROL_TARGET_KEY,
+        ),
+      ),
+    );
+
+    function handleStorage(
+      event: StorageEvent,
+    ) {
+      if (
+        event.key !==
+        HOO_WORLD_ADMIN_CONTROL_TARGET_KEY
+      ) {
+        return;
+      }
+
+      setAdminControlTarget(
+        normalizeControlTarget(
+          event.newValue,
+        ),
+      );
+    }
+
+    function handleControlTargetEvent(
+      event: Event,
+    ) {
+      const customEvent =
+        event as CustomEvent<{
+          target?: unknown;
+        }>;
+
+      setAdminControlTarget(
+        normalizeControlTarget(
+          customEvent.detail?.target,
+        ),
+      );
+    }
+
+    window.addEventListener(
+      "storage",
+      handleStorage,
+    );
+
+    window.addEventListener(
+      HOO_WORLD_ADMIN_CONTROL_TARGET_EVENT,
+      handleControlTargetEvent,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "storage",
+        handleStorage,
+      );
+
+      window.removeEventListener(
+        HOO_WORLD_ADMIN_CONTROL_TARGET_EVENT,
+        handleControlTargetEvent,
+      );
+    };
+  }, []);
+
+  /*
+   * 운영 캐릭터를 직접 조종하고 있지 않을 때만
+   * DB / Realtime에서 받은 좌표를 조종용 ref에 동기화한다.
+   */
+  useEffect(() => {
+    if (
+      !adminCharacter ||
+      isControllingAdminCharacterRef.current
+    ) {
+      return;
+    }
+
+    adminCharacterControlPositionRef.current = {
+      x: adminCharacter.x,
+      y: adminCharacter.y,
+    };
+
+    adminCharacterControlFacingRef.current =
+      adminCharacter.facing;
+  }, [
+    adminCharacter,
+  ]);
+
+  function applyAdminCharacterControlTransform() {
+    const element =
+      adminCharacterElementRef.current;
+
+    if (!element) {
+      return;
+    }
+
+    const current =
+      adminCharacterControlPositionRef.current;
+
+    element.style.transform =
+      `translate3d(${current.x}vw, ${current.y}vh, 0) translate(-50%, -50%)`;
+  }
+
+  function broadcastAdminCharacterMovement(
+    x: number,
+    y: number,
+    facing: HooWorldPlayerFacing,
+    isMoving: boolean,
+  ) {
+    const channel =
+      adminCharacterMovementChannelRef.current;
+
+    const currentFieldId =
+      currentFieldIdRef.current;
+
+    if (
+      !channel ||
+      currentFieldId === null
+    ) {
+      return;
+    }
+
+    void channel.send({
+      type: "broadcast",
+      event: "movement",
+      payload: {
+        field_id:
+          currentFieldId,
+        x,
+        y,
+        facing,
+        is_moving:
+          isMoving,
+        sent_at:
+          new Date().toISOString(),
+      },
+    });
+  }
+
+  async function persistAdminCharacterSnapshot(
+    isMoving = false,
+  ) {
+    const currentFieldId =
+      currentFieldIdRef.current;
+
+    if (currentFieldId === null) {
+      return;
+    }
+
+    const current =
+      adminCharacterControlPositionRef.current;
+
+    const facing =
+      adminCharacterControlFacingRef.current;
+
+    const {
+      error,
+    } =
+      await supabase
+        .from(
+          "hoo_world_admin_character",
+        )
+        .update({
+          field_id:
+            currentFieldId,
+          x:
+            current.x,
+          y:
+            current.y,
+          facing,
+          is_moving:
+            isMoving,
+          updated_at:
+            new Date().toISOString(),
+        })
+        .eq(
+          "state_id",
+          "world",
+        );
+
+    if (error) {
+      console.error(
+        "HOO WORLD 관리자 캐릭터 최종 좌표 저장 실패:",
+        error,
+      );
+    }
+  }
+
+  function finishAdminCharacterMovement(
+    persist = true,
+  ) {
+    const current =
+      adminCharacterControlPositionRef.current;
+
+    const facing =
+      adminCharacterControlFacingRef.current;
+
+    adminCharacterMovementBroadcastAtRef.current =
+      Date.now();
+
+    setAdminCharacter(
+      (previous) =>
+        previous
+          ? {
+              ...previous,
+              fieldId:
+                currentFieldIdRef.current ??
+                previous.fieldId,
+              x: current.x,
+              y: current.y,
+              facing,
+              isMoving: false,
+            }
+          : previous,
+    );
+
+    broadcastAdminCharacterMovement(
+      current.x,
+      current.y,
+      facing,
+      false,
+    );
+
+    if (persist) {
+      void persistAdminCharacterSnapshot(
+        false,
+      );
+    }
+  }
+
+  async function toggleAdminCharacterControl() {
+    const current =
+      adminCharacterRef.current;
+
+    const currentFieldId =
+      currentFieldIdRef.current;
+
+    if (
+      !isWorldAdminOperator ||
+      !current?.enabled ||
+      currentFieldId === null
+    ) {
+      return;
+    }
+
+    /*
+     * 운영 캐릭터 조종 종료 -> 현재 좌표를 DB에 확정.
+     */
+    if (
+      isControllingAdminCharacterRef.current
+    ) {
+      movementInputRef.current.left =
+        false;
+      movementInputRef.current.right =
+        false;
+      movementInputRef.current.up =
+        false;
+      movementInputRef.current.down =
+        false;
+
+      if (
+        movementFrameRef.current !==
+        null
+      ) {
+        cancelAnimationFrame(
+          movementFrameRef.current,
+        );
+
+        movementFrameRef.current =
+          null;
+      }
+
+      previousMovementTimeRef.current =
+        0;
+
+      finishAdminCharacterMovement(
+        true,
+      );
+
+      isControllingAdminCharacterRef.current =
+        false;
+
+      setIsControllingAdminCharacter(
+        false,
+      );
+
+      return;
+    }
+
+    /*
+     * 내 캐릭터가 이동 중이었다면 먼저 정지 상태를 확정한다.
+     */
+    movementInputRef.current.left =
+      false;
+    movementInputRef.current.right =
+      false;
+    movementInputRef.current.up =
+      false;
+    movementInputRef.current.down =
+      false;
+
+    if (
+      movementFrameRef.current !==
+      null
+    ) {
+      cancelAnimationFrame(
+        movementFrameRef.current,
+      );
+
+      movementFrameRef.current =
+        null;
+    }
+
+    previousMovementTimeRef.current =
+      0;
+
+    const localPosition =
+      playerPositionRef.current;
+
+    lastMovementBroadcastAtRef.current =
+      0;
+
+    void updatePositionRef.current(
+      localPosition.x,
+      localPosition.y,
+      playerFacingRef.current,
+      false,
+    );
+
+    adminCharacterControlPositionRef.current = {
+      x: current.x,
+      y: current.y,
+    };
+
+    adminCharacterControlFacingRef.current =
+      current.facing;
+
+    isControllingAdminCharacterRef.current =
+      true;
+
+    setIsControllingAdminCharacter(
+      true,
+    );
+
+    /*
+     * 운영 캐릭터가 다른 필드에 있더라도
+     * 조종 버튼을 누른 관리자의 현재 필드로 이동시킨다.
+     * 좌표 자체는 마지막 좌표를 유지한다.
+     */
+    adminCharacterMovementBroadcastAtRef.current =
+      Date.now();
+
+    setAdminCharacter(
+      (previous) =>
+        previous
+          ? {
+              ...previous,
+              fieldId:
+                currentFieldId,
+              isMoving:
+                false,
+            }
+          : previous,
+    );
+
+    applyAdminCharacterControlTransform();
+
+    broadcastAdminCharacterMovement(
+      current.x,
+      current.y,
+      current.facing,
+      false,
+    );
+
+    const {
+      error,
+    } =
+      await supabase
+        .from(
+          "hoo_world_admin_character",
+        )
+        .update({
+          field_id:
+            currentFieldId,
+          x:
+            current.x,
+          y:
+            current.y,
+          facing:
+            current.facing,
+          is_moving:
+            false,
+          updated_at:
+            new Date().toISOString(),
+        })
+        .eq(
+          "state_id",
+          "world",
+        );
+
+    if (error) {
+      console.error(
+        "HOO WORLD 관리자 캐릭터 조종 시작 필드 저장 실패:",
+        error,
+      );
+    }
+  }
+
+  /*
+   * 관리자 페이지의 조종 대상 선택을 실제 WASD 제어권에 반영한다.
+   *
+   * self     -> 내 캐릭터
+   * operator -> 운영 캐릭터
+   */
+  useEffect(() => {
+    if (!isWorldAdminOperator) {
+      return;
+    }
+
+    const wantsOperator =
+      adminControlTarget ===
+      "operator";
+
+    const canControlOperator =
+      adminCharacter?.enabled ===
+        true &&
+      fieldId !== null;
+
+    if (
+      wantsOperator &&
+      canControlOperator &&
+      !isControllingAdminCharacterRef.current
+    ) {
+      void toggleAdminCharacterControl();
+      return;
+    }
+
+    if (
+      !wantsOperator &&
+      isControllingAdminCharacterRef.current
+    ) {
+      void toggleAdminCharacterControl();
+    }
+  }, [
+    adminControlTarget,
+    adminCharacter?.enabled,
+    fieldId,
+    isWorldAdminOperator,
+  ]);
+
+  /*
+   * 캐릭터가 OFF되거나 관리자 권한이 사라지면
+   * 조종 모드를 자동으로 해제한다.
+   */
+  useEffect(() => {
+    if (
+      !isControllingAdminCharacter ||
+      (
+        isWorldAdminOperator &&
+        adminCharacter?.enabled
+      )
+    ) {
+      return;
+    }
+
+    movementInputRef.current.left =
+      false;
+    movementInputRef.current.right =
+      false;
+    movementInputRef.current.up =
+      false;
+    movementInputRef.current.down =
+      false;
+
+    if (
+      movementFrameRef.current !==
+      null
+    ) {
+      cancelAnimationFrame(
+        movementFrameRef.current,
+      );
+
+      movementFrameRef.current =
+        null;
+    }
+
+    previousMovementTimeRef.current =
+      0;
+
+    finishAdminCharacterMovement(
+      true,
+    );
+
+    isControllingAdminCharacterRef.current =
+      false;
+
+    setIsControllingAdminCharacter(
+      false,
+    );
+  }, [
+    adminCharacter?.enabled,
+    isControllingAdminCharacter,
+    isWorldAdminOperator,
+  ]);
+
+  /*
+   * 관리자 운영 캐릭터 상태
+   *
+   * DB:
+   * - ON/OFF / 이미지 / 말풍선 / 크기 / 속도
+   * - 신규 입장자를 위한 마지막 필드 / 좌표 / 방향 / 이동 상태
+   *
+   * Broadcast:
+   * - STEP 4에서 관리자 조종 시 실시간 이동 좌표를 받는다.
+   * - DB를 매 프레임 갱신하지 않으므로 이동이 부드럽고 부하가 적다.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    function applyDatabaseState(
+      value: unknown,
+    ) {
+      const next =
+        normalizeHooWorldAdminCharacterRow(
+          value,
+        );
+
+      if (!next || cancelled) {
+        return;
+      }
+
+      setAdminCharacter(
+        (current) => {
+          const hasRecentMovementBroadcast =
+            current !== null &&
+            Date.now() -
+              adminCharacterMovementBroadcastAtRef.current <
+              700;
+
+          if (
+            !hasRecentMovementBroadcast
+          ) {
+            return next;
+          }
+
+          /*
+           * 이미지/말풍선/크기 같은 설정은 즉시 반영하되
+           * 실시간 이동 좌표는 더 최신인 Broadcast 값을 유지한다.
+           */
+          return {
+            ...next,
+            fieldId:
+              current.fieldId,
+            x: current.x,
+            y: current.y,
+            facing:
+              current.facing,
+            isMoving:
+              current.isMoving,
+          };
+        },
+      );
+    }
+
+    async function loadAdminCharacter() {
+      const {
+        data,
+        error,
+      } =
+        await supabase
+          .from(
+            "hoo_world_admin_character",
+          )
+          .select(
+            `
+              state_id,
+              enabled,
+              image_url,
+              message_text,
+              message_revision,
+              message_sent_at,
+              scale_percent,
+              speed_percent,
+              field_id,
+              x,
+              y,
+              facing,
+              is_moving,
+              updated_at
+            `,
+          )
+          .eq(
+            "state_id",
+            "world",
+          )
+          .maybeSingle();
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        console.error(
+          "HOO WORLD 관리자 캐릭터 상태를 불러오지 못했습니다.",
+          error,
+        );
+
+        return;
+      }
+
+      applyDatabaseState(
+        data,
+      );
+    }
+
+    void loadAdminCharacter();
+
+    const stateChannel =
+      supabase
+        .channel(
+          "hoo-world-admin-character-state",
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table:
+              "hoo_world_admin_character",
+            filter:
+              "state_id=eq.world",
+          },
+          (payload) => {
+            applyDatabaseState(
+              payload.new,
+            );
+          },
+        )
+        .subscribe();
+
+    const movementChannel =
+      supabase
+        .channel(
+          "hoo-world-admin-character-movement",
+        )
+        .on(
+          "broadcast",
+          {
+            event: "movement",
+          },
+          (message) => {
+            if (cancelled) {
+              return;
+            }
+
+            const rawPayload =
+              message &&
+              typeof message ===
+                "object" &&
+              "payload" in message
+                ? (
+                    message as {
+                      payload?: unknown;
+                    }
+                  ).payload
+                : message;
+
+            if (
+              !rawPayload ||
+              typeof rawPayload !==
+                "object" ||
+              Array.isArray(
+                rawPayload,
+              )
+            ) {
+              return;
+            }
+
+            const movement =
+              rawPayload as Record<
+                string,
+                unknown
+              >;
+
+            const nextX =
+              Number(movement.x);
+
+            const nextY =
+              Number(movement.y);
+
+            const nextFieldId =
+              Number(
+                movement.field_id,
+              );
+
+            const rawFacing =
+              movement.facing;
+
+            const nextFacing:
+              HooWorldPlayerFacing | null =
+                rawFacing ===
+                  "left" ||
+                rawFacing ===
+                  "right" ||
+                rawFacing ===
+                  "up" ||
+                rawFacing ===
+                  "down"
+                  ? rawFacing
+                  : null;
+
+            if (
+              !Number.isFinite(
+                nextX,
+              ) ||
+              !Number.isFinite(
+                nextY,
+              ) ||
+              !Number.isFinite(
+                nextFieldId,
+              ) ||
+              nextFieldId < 1 ||
+              !nextFacing
+            ) {
+              return;
+            }
+
+            adminCharacterMovementBroadcastAtRef.current =
+              Date.now();
+
+            setAdminCharacter(
+              (current) => {
+                if (!current) {
+                  return current;
+                }
+
+                return {
+                  ...current,
+                  fieldId:
+                    Math.floor(
+                      nextFieldId,
+                    ),
+                  x:
+                    Math.max(
+                      0,
+                      Math.min(
+                        100,
+                        nextX,
+                      ),
+                    ),
+                  y:
+                    Math.max(
+                      0,
+                      Math.min(
+                        100,
+                        nextY,
+                      ),
+                    ),
+                  facing:
+                    nextFacing,
+                  isMoving:
+                    movement.is_moving ===
+                    true,
+                };
+              },
+            );
+          },
+        )
+        .subscribe();
+
+    adminCharacterMovementChannelRef.current =
+      movementChannel;
+
+    return () => {
+      cancelled = true;
+
+      if (
+        adminCharacterMovementChannelRef.current ===
+        movementChannel
+      ) {
+        adminCharacterMovementChannelRef.current =
+          null;
+      }
+
+      void supabase.removeChannel(
+        stateChannel,
+      );
+
+      void supabase.removeChannel(
+        movementChannel,
+      );
+    };
+  }, [
+    supabase,
+  ]);
+
+  /*
+   * 말풍선은 전송 시각 기준 8초 동안만 표시한다.
+   * message_revision이 증가하므로 같은 문장을 연속 전송해도
+   * 매번 새로운 말풍선으로 다시 표시된다.
+   */
+  useEffect(() => {
+    const messageText =
+      adminCharacter?.messageText
+        .trim() ?? "";
+
+    const sentAt =
+      adminCharacter?.messageSentAt
+        ? Date.parse(
+            adminCharacter.messageSentAt,
+          )
+        : Number.NaN;
+
+    if (
+      !adminCharacter?.enabled ||
+      !messageText ||
+      !Number.isFinite(sentAt)
+    ) {
+      setIsAdminCharacterMessageVisible(
+        false,
+      );
+
+      return;
+    }
+
+    const remaining =
+      8000 -
+      (Date.now() - sentAt);
+
+    if (remaining <= 0) {
+      setIsAdminCharacterMessageVisible(
+        false,
+      );
+
+      return;
+    }
+
+    setIsAdminCharacterMessageVisible(
+      true,
+    );
+
+    const timer =
+      window.setTimeout(
+        () => {
+          setIsAdminCharacterMessageVisible(
+            false,
+          );
+        },
+        remaining,
+      );
+
+    return () => {
+      window.clearTimeout(
+        timer,
+      );
+    };
+  }, [
+    adminCharacter?.enabled,
+    adminCharacter?.messageRevision,
+    adminCharacter?.messageSentAt,
+    adminCharacter?.messageText,
+  ]);
+
   /*
    * HOO WORLD 배경 노래 ON/OFF 설정.
    * 기본값은 ON이며 브라우저에 저장한다.
@@ -1687,6 +2884,12 @@ export default function HooWorldPage() {
     function handleWorldItemMoveMode(
       event: Event,
     ) {
+      if (
+        isControllingAdminCharacterRef.current
+      ) {
+        return;
+      }
+
       const customEvent =
         event as CustomEvent<{
           active?: boolean;
@@ -1763,6 +2966,12 @@ export default function HooWorldPage() {
     function handleWorldItemMoveStep(
       event: Event,
     ) {
+      if (
+        isControllingAdminCharacterRef.current
+      ) {
+        return;
+      }
+
       if (
         !isWorldItemMoveModeActive
       ) {
@@ -2774,6 +3983,180 @@ export default function HooWorldPage() {
         moveX !== 0 ||
         moveY !== 0
       ) {
+        /*
+         * 관리자 운영 캐릭터 조종 모드에서는
+         * 동일한 WASD/방향키 입력과 같은 20 기본 이동속도를 공유하되,
+         * 관리자 페이지의 -50% ~ +50% 속도 배율만 추가 적용한다.
+         */
+        if (
+          isControllingAdminCharacterRef.current
+        ) {
+          const currentAdmin =
+            adminCharacterRef.current;
+
+          const currentFieldId =
+            currentFieldIdRef.current;
+
+          if (
+            !currentAdmin?.enabled ||
+            currentFieldId === null
+          ) {
+            clearMovementInput();
+            previousMovementTimeRef.current =
+              0;
+            stopMovementFrame();
+            return;
+          }
+
+          const magnitude =
+            Math.hypot(
+              moveX,
+              moveY,
+            ) || 1;
+
+          const speedMultiplier =
+            Math.max(
+              0.5,
+              Math.min(
+                1.5,
+                1 +
+                  currentAdmin.speedPercent /
+                    100,
+              ),
+            );
+
+          const speed =
+            20 *
+            speedMultiplier;
+
+          const current =
+            adminCharacterControlPositionRef.current;
+
+          const previousX =
+            current.x;
+
+          const previousY =
+            current.y;
+
+          /*
+           * 운영 캐릭터도 기존 후월드 외곽 숲 이동 한계를 공유한다.
+           * 거대 캐릭터도 중심 좌표 기준으로 같은 필드 안에서 이동한다.
+           */
+          const walkableBounds =
+            getWalkableBounds(
+              current.x,
+              current.y,
+            );
+
+          current.x =
+            clamp(
+              current.x +
+                (
+                  moveX /
+                  magnitude
+                ) *
+                  speed *
+                  deltaSeconds,
+              walkableBounds.minX,
+              walkableBounds.maxX,
+            );
+
+          current.y =
+            clamp(
+              current.y +
+                (
+                  moveY /
+                  magnitude
+                ) *
+                  speed *
+                  deltaSeconds,
+              walkableBounds.minY,
+              walkableBounds.maxY,
+            );
+
+          if (moveX !== 0) {
+            adminCharacterControlFacingRef.current =
+              moveX < 0
+                ? "left"
+                : "right";
+          } else if (
+            adminCharacterControlFacingRef.current !==
+              "left" &&
+            adminCharacterControlFacingRef.current !==
+              "right"
+          ) {
+            adminCharacterControlFacingRef.current =
+              moveY < 0
+                ? "up"
+                : "down";
+          }
+
+          const didMove =
+            Math.abs(
+              current.x -
+                previousX,
+            ) >
+              0.0001 ||
+            Math.abs(
+              current.y -
+                previousY,
+            ) >
+              0.0001;
+
+          applyAdminCharacterControlTransform();
+
+          const currentTimeNow =
+            performance.now();
+
+          if (
+            didMove &&
+            currentTimeNow -
+              lastAdminCharacterControlBroadcastAtRef.current >=
+              50
+          ) {
+            lastAdminCharacterControlBroadcastAtRef.current =
+              currentTimeNow;
+
+            const facing =
+              adminCharacterControlFacingRef.current;
+
+            adminCharacterMovementBroadcastAtRef.current =
+              Date.now();
+
+            setAdminCharacter(
+              (previous) =>
+                previous
+                  ? {
+                      ...previous,
+                      fieldId:
+                        currentFieldId,
+                      x:
+                        current.x,
+                      y:
+                        current.y,
+                      facing,
+                      isMoving:
+                        true,
+                    }
+                  : previous,
+            );
+
+            broadcastAdminCharacterMovement(
+              current.x,
+              current.y,
+              facing,
+              true,
+            );
+          }
+
+          movementFrameRef.current =
+            requestAnimationFrame(
+              movePlayer,
+            );
+
+          return;
+        }
+
         applyPlayerFacingDirection(
           moveX,
           moveY,
@@ -2892,6 +4275,26 @@ export default function HooWorldPage() {
       event: KeyboardEvent,
     ) {
       if (
+        isControllingAdminCharacterRef.current
+      ) {
+        const handled =
+          setMovementInput(
+            event.code,
+            true,
+          );
+
+        if (!handled) {
+          return;
+        }
+
+        event.preventDefault();
+
+        startMovementFrame();
+
+        return;
+      }
+
+      if (
         isWorldItemMoveModeActive
       ) {
         const handled =
@@ -2925,6 +4328,37 @@ export default function HooWorldPage() {
     function handleKeyUp(
       event: KeyboardEvent,
     ) {
+      if (
+        isControllingAdminCharacterRef.current
+      ) {
+        const handled =
+          setMovementInput(
+            event.code,
+            false,
+          );
+
+        if (!handled) {
+          return;
+        }
+
+        event.preventDefault();
+
+        if (
+          !hasMovementInput()
+        ) {
+          previousMovementTimeRef.current =
+            0;
+
+          stopMovementFrame();
+
+          finishAdminCharacterMovement(
+            true,
+          );
+        }
+
+        return;
+      }
+
       if (
         isWorldItemMoveModeActive
       ) {
@@ -2996,6 +4430,18 @@ export default function HooWorldPage() {
       previousMovementTimeRef.current =
         0;
 
+      if (
+        isControllingAdminCharacterRef.current
+      ) {
+        stopMovementFrame();
+
+        finishAdminCharacterMovement(
+          true,
+        );
+
+        return;
+      }
+
       resetPlayerWalkMotion();
 
       stopMovementFrame();
@@ -3018,6 +4464,37 @@ export default function HooWorldPage() {
     }
 
     function handleResize() {
+      if (
+        isControllingAdminCharacterRef.current
+      ) {
+        const current =
+          adminCharacterControlPositionRef.current;
+
+        const bounds =
+          getWalkableBounds(
+            current.x,
+            current.y,
+          );
+
+        current.x =
+          clamp(
+            current.x,
+            bounds.minX,
+            bounds.maxX,
+          );
+
+        current.y =
+          clamp(
+            current.y,
+            bounds.minY,
+            bounds.maxY,
+          );
+
+        applyAdminCharacterControlTransform();
+
+        return;
+      }
+
       const current =
         playerPositionRef.current;
 
@@ -4710,6 +6187,179 @@ export default function HooWorldPage() {
 
       {/* 전체 종이결 / 회화풍 톤 */}
       <div className="pointer-events-none absolute inset-0 z-[70] opacity-[0.045] mix-blend-multiply [background-image:radial-gradient(circle_at_20%_30%,#5b674d_0_0.7px,transparent_0.9px),radial-gradient(circle_at_70%_40%,#ffffff_0_0.8px,transparent_1px),radial-gradient(circle_at_45%_78%,#6f634c_0_0.6px,transparent_0.9px)] [background-size:11px_13px,17px_15px,23px_19px]" />
+
+      {/* ─────────────────────────
+          관리자 운영 캐릭터
+
+          - 일반 Presence/온라인 인원에는 포함하지 않는다.
+          - DB 스냅샷으로 중간 입장자도 현재 위치에서 즉시 확인한다.
+          - 관리자 캐릭터는 방송용 개체이므로 현재 이용자의 Presence field shard와
+            관계없이 ON이면 모든 후월드 화면에 표시한다.
+          - 관리자 페이지의 ON/OFF / 이미지 / 크기 / 말풍선을 Realtime 반영한다.
+          - 이동 Broadcast를 수신해 모든 후월드 화면에서 동일 좌표로 움직인다.
+          - 기본 좌표가 내 캐릭터와 겹쳐도 운영 캐릭터가 가려지지 않도록
+            로컬 캐릭터(z-30)보다 높은 레이어(z-35)에 표시한다.
+      ───────────────────────── */}
+
+      {
+        adminCharacter?.enabled &&
+        fieldId !== null
+          ? (() => {
+              const characterScale =
+                0.65 *
+                (
+                  adminCharacter.scalePercent /
+                  100
+                );
+
+              const speedMultiplier =
+                Math.max(
+                  0.5,
+                  Math.min(
+                    1.5,
+                    1 +
+                      adminCharacter.speedPercent /
+                        100,
+                  ),
+                );
+
+              const walkDuration =
+                Math.round(
+                  360 /
+                    speedMultiplier,
+                );
+
+              const bubbleBottom =
+                Math.max(
+                  66,
+                  86 *
+                    characterScale +
+                    12,
+                );
+
+              return (
+                <div
+                  ref={
+                    adminCharacterElementRef
+                  }
+                  className="pointer-events-none absolute left-0 top-0 z-[35] will-change-transform"
+                  style={{
+                    transform: `translate3d(${adminCharacter.x}vw, ${adminCharacter.y}vh, 0) translate(-50%, -50%)`,
+                    transition:
+                      adminCharacter.isMoving
+                        ? "transform 80ms linear"
+                        : "transform 120ms ease-out",
+                  }}
+                  aria-label="후월드 관리자 운영 캐릭터"
+                >
+                  {
+                    isAdminCharacterMessageVisible &&
+                    adminCharacter.messageText.trim()
+                      ? (
+                          <div
+                            className="absolute left-1/2 z-[2] w-max max-w-[min(460px,88vw)] -translate-x-1/2"
+                            style={{
+                              bottom: `min(${bubbleBottom}px, 42vh)`,
+                              marginLeft:
+                                adminCharacter.facing ===
+                                "left"
+                                  ? "-36px"
+                                  : adminCharacter.facing ===
+                                      "right"
+                                    ? "36px"
+                                    : "0px",
+                            }}
+                          >
+                            <div className="relative rounded-[22px] border border-white/70 bg-white/95 px-6 py-4 text-center text-[16px] font-black leading-[1.55] text-[#242424] shadow-[0_12px_30px_rgba(0,0,0,0.25)] backdrop-blur-sm">
+                              <span className="whitespace-pre-wrap break-words">
+                                {
+                                  adminCharacter.messageText
+                                }
+                              </span>
+
+                              <span className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[11px] border-t-[12px] border-x-transparent border-t-white/95" />
+                            </div>
+                          </div>
+                        )
+                      : null
+                  }
+
+                  <div
+                    className="origin-center"
+                    style={{
+                      transform: `scale(${characterScale})`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        animation:
+                          adminCharacter.isMoving
+                            ? `hooWorldAdminCharacterWalk ${walkDuration}ms ease-in-out infinite`
+                            : "none",
+                        transformOrigin:
+                          "50% 100%",
+                      }}
+                    >
+                      {
+                        adminCharacter.imageUrl
+                          ? (
+                              <div
+                                className="flex h-[160px] w-[160px] items-center justify-center"
+                                style={{
+                                  transform:
+                                    adminCharacter.facing ===
+                                    "right"
+                                      ? "scaleX(-1)"
+                                      : "scaleX(1)",
+                                }}
+                              >
+                                <img
+                                  src={
+                                    adminCharacter.imageUrl
+                                  }
+                                  alt="관리자 운영 캐릭터"
+                                  draggable={false}
+                                  className="max-h-full max-w-full select-none object-contain drop-shadow-[0_8px_9px_rgba(0,0,0,0.22)]"
+                                />
+                              </div>
+                            )
+                          : (
+                              <HooWorldPlayer
+                                nickname="HOO"
+                                status="idle"
+                                facing={
+                                  adminCharacter.facing
+                                }
+                                characterSlot={4}
+                                isAdmin
+                                accessoryIds={[]}
+                              />
+                            )
+                      }
+                    </div>
+                  </div>
+
+                  <style>{`
+                    @keyframes hooWorldAdminCharacterWalk {
+                      0%, 100% {
+                        transform: translate3d(0, 0, 0) rotate(0deg);
+                      }
+                      25% {
+                        transform: translate3d(0, -2.2px, 0) rotate(1.4deg);
+                      }
+                      50% {
+                        transform: translate3d(0, 0, 0) rotate(0deg);
+                      }
+                      75% {
+                        transform: translate3d(0, -2.2px, 0) rotate(-1.4deg);
+                      }
+                    }
+                  `}</style>
+                </div>
+              );
+            })()
+          : null
+      }
 
       {/* ─────────────────────────
           다른 이용자 캐릭터
