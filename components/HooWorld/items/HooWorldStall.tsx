@@ -1218,6 +1218,94 @@ export default function HooWorldStall({
               </div>
             </div>
 
+            <section className="rounded-[18px] border border-[#c9b084]/60 bg-[#fff7e6]/72 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-black tracking-[0.12em] text-[#71835b]">
+                    COMMUNITY FUND
+                  </p>
+
+                  <h3 className="mt-0.5 text-sm font-black text-[#5c4937]">
+                    공동 모금에 HOO COIN 넣기
+                  </h3>
+                </div>
+
+                <span className="shrink-0 text-[10px] font-bold tabular-nums text-[#9a856d]">
+                  보유 {hooCoinBalance.toLocaleString()}
+                </span>
+              </div>
+
+              <div className="mt-2 flex gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-[#cdb38a] bg-white/90 px-3">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={
+                      hooWorldStallDonationAmount
+                    }
+                    onChange={(event) => {
+                      const digitsOnly =
+                        event.target.value.replace(
+                          /[^0-9]/g,
+                          "",
+                        );
+
+                      setHooWorldStallDonationAmount(
+                        digitsOnly,
+                      );
+
+                      setHooWorldStallDonationMessage(
+                        null,
+                      );
+                    }}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key ===
+                        "Enter"
+                      ) {
+                        event.preventDefault();
+
+                        void submitDonation();
+                      }
+                    }}
+                    placeholder="넣을 코인"
+                    className="h-10 min-w-0 flex-1 bg-transparent text-sm font-black outline-none placeholder:text-[#b2a28e]"
+                  />
+
+                  <span className="shrink-0 text-[10px] font-black text-[#7b6a57]">
+                    HOO
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    void submitDonation();
+                  }}
+                  disabled={
+                    isSubmittingHooWorldStallDonation ||
+                    hooWorldStallDonationAmount.trim()
+                      .length === 0
+                  }
+                  className="flex h-10 shrink-0 items-center justify-center rounded-xl border border-[#667650] bg-gradient-to-b from-[#84956c] to-[#667950] px-4 text-xs font-black text-[#fff9e9] shadow-[0_4px_10px_rgba(82,100,71,0.18)] transition hover:from-[#788b61] hover:to-[#5d7148] active:translate-y-[1px] disabled:cursor-not-allowed disabled:border-[#a6ad9b] disabled:bg-gradient-to-b disabled:from-[#d9dfd1] disabled:to-[#c4ccb9] disabled:text-[#6e7864] disabled:shadow-none"
+                >
+                  {isSubmittingHooWorldStallDonation
+                    ? "넣는 중..."
+                    : "공동 모금"}
+                </button>
+              </div>
+
+              {hooWorldStallDonationMessage ? (
+                <p className="mt-2 text-center text-[10px] font-black leading-4 text-[#71835b]">
+                  {hooWorldStallDonationMessage}
+                </p>
+              ) : (
+                <p className="mt-2 text-center text-[9px] font-bold leading-4 text-[#9c8870]">
+                  넣은 HOO COIN은 공동 제작비로 사용돼요.
+                </p>
+              )}
+            </section>
+
             <section className="rounded-[22px] border border-[#ceb489]/55 bg-[#fffaf0]/80 p-4">
               <p className="text-[10px] font-black tracking-[0.15em] text-[#71835b]">
                 ITEM REQUEST
