@@ -32,6 +32,7 @@ import {
 import HooWorldCampfire from "@/components/HooWorld/items/HooWorldCampfire";
 import HooWorldDeliveryGate from "@/components/HooWorld/items/HooWorldDeliveryGate";
 import HooWorldFirewood from "@/components/HooWorld/items/HooWorldFirewood";
+import HooWorldMenuBoard from "@/components/HooWorld/items/HooWorldMenuBoard";
 import HooWorldStall from "@/components/HooWorld/items/HooWorldStall";
 
 import {
@@ -5334,6 +5335,26 @@ export default function HooWorldPage() {
   }
   onBalanceChange={
     setHooCoinBalance
+  }
+/>
+
+{/* ─────────────────────────
+    독립 월드 아이템: 메뉴판
+
+    - 가판대 약 50% 크기
+    - X키로 위치 이동 가능
+    - 좌표 저장 / Realtime 동기화
+    - 가까이 접근하면 F 메뉴 보기
+    - F 입력 시 왼쪽 하단 안내판 표시
+───────────────────────── */}
+<HooWorldMenuBoard
+  x={67}
+  y={60}
+  playerPositionRef={
+    playerPositionRef
+  }
+  onBeforeOpen={
+    stopPlayerMovementForWorldItemInteraction
   }
 />
 
