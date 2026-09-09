@@ -15,6 +15,8 @@ import {
   HOO_WORLD_FOOD_CATALOG,
 } from "@/components/HooWorld/items/hooWorldFoodCatalog";
 
+import HooWorldRegionUnlockPanel from "@/components/HooWorld/admin/HooWorldRegionUnlockPanel";
+
 const HOO_WORLD_ADMIN_FOOD_OPTIONS =
   Object.values(
     HOO_WORLD_FOOD_CATALOG,
@@ -4562,6 +4564,16 @@ export default function AdminPage() {
             </>
           ) : null}
         </section>
+
+        {/* HOO WORLD 지역 잠금 / 해금 */}
+        <HooWorldRegionUnlockPanel
+          isAdmin={
+            status.isAdmin
+          }
+          canManage={
+            status.canManage
+          }
+        />
 
         {/* 후월드 운영자 음식 실시간 배송 */}
         <section

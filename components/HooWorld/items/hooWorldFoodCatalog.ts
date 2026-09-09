@@ -26,7 +26,7 @@ export type HooWorldFoodDefinition = {
 export const HOO_WORLD_FOOD_CATALOG = {
   camp_stew: {
     id: "camp_stew",
-    name: "캠프 스튜",
+    name: "후셰프 스튜",
     imagePath: null,
     fallbackEmoji: "🍲",
     emptyContainerImagePath: null,

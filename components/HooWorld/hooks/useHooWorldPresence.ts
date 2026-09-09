@@ -15,6 +15,12 @@ import {
   createClient,
 } from "@/lib/supabase/client";
 
+import {
+  HOO_WORLD_DEFAULT_REGION_ID,
+  isHooWorldRegionId,
+  type HooWorldRegionId,
+} from "../world/hooWorldMap";
+
 export type HooWorldPlayerStatus =
   | "idle"
   | "focusing"
@@ -61,6 +67,14 @@ export type HooWorldPresencePlayer = {
   nickname: string;
   status: HooWorldPlayerStatus;
   fieldId: number;
+
+  /*
+   * 실제 월드 지역.
+   * fieldId(25명 단위 Presence 샤드)와 절대 혼용하지 않는다.
+   * 기존 세션에는 값이 없을 수 있어 optional로 유지한다.
+   */
+  worldRegionId?: HooWorldRegionId;
+
   joinedAt: string;
   onlineAt: string;
 
@@ -139,6 +153,7 @@ export type HooWorldPresencePlayer = {
 type UseHooWorldPresenceOptions = {
   enabled: boolean;
   nickname: string | null;
+  worldRegionId?: HooWorldRegionId;
 };
 
 type HooWorldPresenceState = Record<
@@ -158,6 +173,9 @@ const HOO_WORLD_FOCUS_OPEN_KEY =
 
 const HOO_WORLD_FOCUS_FIELD_KEY =
   "hoo-world-focus-field-id";
+
+const HOO_WORLD_FOCUS_REGION_KEY =
+  "hoo-world-focus-world-region-id";
 
 const HOO_WORLD_FOCUS_FACING_KEY =
   "hoo-world-focus-facing";
@@ -181,6 +199,7 @@ type HooWorldFocusHandoff = {
   x: number;
   y: number;
   fieldId?: number;
+  worldRegionId?: HooWorldRegionId;
   facing?:
     | "left"
     | "right"
@@ -194,6 +213,7 @@ type HooWorldMovementSnapshot = {
   joinedAt: string;
   x: number;
   y: number;
+  worldRegionId: HooWorldRegionId;
   facing:
     | "left"
     | "right"
@@ -266,6 +286,18 @@ function readHooWorldFocusHandoff():
         ),
       );
 
+    const storedWorldRegionId =
+      window.sessionStorage.getItem(
+        HOO_WORLD_FOCUS_REGION_KEY,
+      );
+
+    const worldRegionId =
+      isHooWorldRegionId(
+        storedWorldRegionId,
+      )
+        ? storedWorldRegionId
+        : undefined;
+
     const storedFacing =
       window.sessionStorage.getItem(
         HOO_WORLD_FOCUS_FACING_KEY,
@@ -331,6 +363,7 @@ function readHooWorldFocusHandoff():
         rawFieldId >= 1
           ? rawFieldId
           : undefined,
+      worldRegionId,
       facing,
       characterSlot,
       operatorSkin,
@@ -393,6 +426,14 @@ function getPresenceCompletenessScore(
   }
 
   if (
+    isHooWorldRegionId(
+      player.worldRegionId,
+    )
+  ) {
+    score += 1;
+  }
+
+  if (
     Number.isFinite(
       Number(player.x),
     ) &&
@@ -427,13 +468,25 @@ function normalizePresencePlayers(
     >();
 
   for (
-    const player of Object.values(
+    const rawPlayer of Object.values(
       presenceState,
     ).flat()
   ) {
-    if (!player?.userId) {
+    if (!rawPlayer?.userId) {
       continue;
     }
+
+    const player:
+      HooWorldPresencePlayer =
+      {
+        ...rawPlayer,
+        worldRegionId:
+          isHooWorldRegionId(
+            rawPlayer.worldRegionId,
+          )
+            ? rawPlayer.worldRegionId
+            : HOO_WORLD_DEFAULT_REGION_ID,
+      };
 
     const previous =
       playerMap.get(
@@ -596,6 +649,7 @@ function sortFieldPlayers(
 export function useHooWorldPresence({
   enabled,
   nickname,
+  worldRegionId,
 }: UseHooWorldPresenceOptions) {
   const supabase = useMemo(
     () => createClient(),
@@ -665,6 +719,15 @@ const fieldIdRef =
   useRef<number | null>(
     null,
   );
+
+  const worldRegionIdRef =
+    useRef<HooWorldRegionId>(
+      isHooWorldRegionId(
+        worldRegionId,
+      )
+        ? worldRegionId
+        : HOO_WORLD_DEFAULT_REGION_ID,
+    );
 
 
   const joinedAtRef =
@@ -775,6 +838,17 @@ const fieldIdRef =
   }, [nickname]);
 
   useEffect(() => {
+    if (
+      isHooWorldRegionId(
+        worldRegionId,
+      )
+    ) {
+      worldRegionIdRef.current =
+        worldRegionId;
+    }
+  }, [worldRegionId]);
+
+  useEffect(() => {
     if (!enabled) {
       setPlayers([]);
       setFieldId(null);
@@ -837,6 +911,13 @@ const fieldIdRef =
       preferredFieldIdRef.current =
         focusHandoff.fieldId ??
         null;
+
+      if (
+        focusHandoff.worldRegionId
+      ) {
+        worldRegionIdRef.current =
+          focusHandoff.worldRegionId;
+      }
 
       if (
         focusHandoff.characterSlot
@@ -1018,6 +1099,13 @@ function scheduleReconnect() {
           ) {
             preferredFieldIdRef.current =
               focusHandoff.fieldId;
+          }
+
+          if (
+            focusHandoff.worldRegionId
+          ) {
+            worldRegionIdRef.current =
+              focusHandoff.worldRegionId;
           }
 
           if (
@@ -1297,6 +1385,8 @@ function scheduleReconnect() {
           statusRef.current,
         fieldId:
           nextFieldId,
+        worldRegionId:
+          worldRegionIdRef.current,
         joinedAt:
           joinedAtRef.current ??
           now,
@@ -1559,6 +1649,8 @@ function scheduleReconnect() {
                     snapshot.x,
                   y:
                     snapshot.y,
+                  worldRegionId:
+                    snapshot.worldRegionId,
                   facing:
                     snapshot.facing,
                   moving:
@@ -1869,6 +1961,8 @@ function scheduleReconnect() {
                       ...player,
                       x: snapshot.x,
                       y: snapshot.y,
+                      worldRegionId:
+                        snapshot.worldRegionId,
                       facing:
                         snapshot.facing,
                       moving:
@@ -2176,6 +2270,7 @@ movementChannel.on(
       userId?: string;
       x?: number;
       y?: number;
+      worldRegionId?: HooWorldRegionId;
       facing?:
         | "left"
         | "right"
@@ -2196,6 +2291,13 @@ movementChannel.on(
       Number(
         payload?.y,
       );
+
+    const worldRegionId =
+      isHooWorldRegionId(
+        payload?.worldRegionId,
+      )
+        ? payload.worldRegionId
+        : HOO_WORLD_DEFAULT_REGION_ID;
 
     const facing =
       payload?.facing;
@@ -2243,6 +2345,7 @@ movementChannel.on(
               currentPlayer.joinedAt,
             x,
             y,
+            worldRegionId,
             facing:
               resolvedFacing,
             moving,
@@ -2257,6 +2360,7 @@ movementChannel.on(
                   ...player,
                   x,
                   y,
+                  worldRegionId,
                   facing:
                     resolvedFacing,
                   moving,
@@ -2686,6 +2790,9 @@ movementChannel.on(
         fieldId:
           nextFieldId,
 
+        worldRegionId:
+          worldRegionIdRef.current,
+
         joinedAt:
           joinedAtRef.current ??
           now,
@@ -2833,6 +2940,13 @@ movementChannel.on(
           preferredFieldIdRef.current =
             focusHandoff.fieldId;
         }
+
+        if (
+          focusHandoff.worldRegionId
+        ) {
+          worldRegionIdRef.current =
+            focusHandoff.worldRegionId;
+        }
       }
     }
 
@@ -2880,6 +2994,11 @@ movementChannel.on(
         );
 
         window.sessionStorage.setItem(
+          HOO_WORLD_FOCUS_REGION_KEY,
+          worldRegionIdRef.current,
+        );
+
+        window.sessionStorage.setItem(
           HOO_WORLD_FOCUS_FACING_KEY,
           facingRef.current,
         );
@@ -2889,6 +3008,10 @@ movementChannel.on(
 
         window.sessionStorage.removeItem(
           HOO_WORLD_FOCUS_FIELD_KEY,
+        );
+
+        window.sessionStorage.removeItem(
+          HOO_WORLD_FOCUS_REGION_KEY,
         );
 
         window.sessionStorage.removeItem(
@@ -3000,6 +3123,9 @@ movementChannel.on(
         fieldId:
           nextFieldId,
 
+        worldRegionId:
+          worldRegionIdRef.current,
+
         joinedAt:
           joinedAtRef.current ??
           now,
@@ -3066,6 +3192,8 @@ movementChannel.on(
                 positionRef.current.x,
               y:
                 positionRef.current.y,
+              worldRegionId:
+                worldRegionIdRef.current,
               facing:
                 facingRef.current,
               moving:
@@ -3080,6 +3208,106 @@ movementChannel.on(
 
     return true;
   }
+
+async function updateWorldRegion(
+  nextWorldRegionId: HooWorldRegionId,
+  position?: {
+    x: number;
+    y: number;
+    facing?:
+      | "left"
+      | "right"
+      | "up"
+      | "down";
+    moving?: boolean;
+  },
+) {
+  if (
+    !isHooWorldRegionId(
+      nextWorldRegionId,
+    )
+  ) {
+    return false;
+  }
+
+  worldRegionIdRef.current =
+    nextWorldRegionId;
+
+  if (position) {
+    positionRef.current = {
+      x:
+        Math.max(
+          0,
+          Math.min(
+            100,
+            position.x,
+          ),
+        ),
+      y:
+        Math.max(
+          0,
+          Math.min(
+            100,
+            position.y,
+          ),
+        ),
+    };
+
+    if (position.facing) {
+      facingRef.current =
+        position.facing;
+    }
+
+    movingRef.current =
+      position.moving === true;
+  }
+
+  if (
+    !enabled ||
+    !isConnected
+  ) {
+    return true;
+  }
+
+  const tracked =
+    await refreshPresence();
+
+  const movementChannel =
+    movementChannelRef.current;
+
+  const currentUserId =
+    userIdRef.current;
+
+  if (
+    movementChannel &&
+    currentUserId
+  ) {
+    try {
+      await movementChannel.send({
+        type: "broadcast",
+        event: "player-move",
+        payload: {
+          userId:
+            currentUserId,
+          x:
+            positionRef.current.x,
+          y:
+            positionRef.current.y,
+          worldRegionId:
+            worldRegionIdRef.current,
+          facing:
+            facingRef.current,
+          moving:
+            movingRef.current,
+        },
+      });
+    } catch {
+      // 다음 Presence/Broadcast에서 다시 동기화한다.
+    }
+  }
+
+  return tracked;
+}
 
 async function updatePosition(
   x: number,
@@ -3193,6 +3421,8 @@ async function updatePosition(
           nextX,
         y:
           nextY,
+        worldRegionId:
+          worldRegionIdRef.current,
         facing,
         moving,
       },
@@ -3230,9 +3460,12 @@ async function updatePosition(
 
     updateFoodEffect,
 
+    updateWorldRegion,
+
     updatePosition,
 
     refreshPresence,
   };
 }
 
+  

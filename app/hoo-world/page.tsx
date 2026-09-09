@@ -30,6 +30,19 @@ import {
   HOO_WORLD_MUSIC_TRACKS,
 } from "@/components/HooWorld/audio/hooWorldMusicPlaylist";
 
+import HooWorldMiniMap from "@/components/HooWorld/world/HooWorldMiniMap";
+import {
+  useHooWorldRegionUnlocks,
+} from "@/components/HooWorld/world/useHooWorldRegionUnlocks";
+import {
+  getConnectedHooWorldRegion,
+  getHooWorldRegion,
+  HOO_WORLD_DEFAULT_REGION_ID,
+  isHooWorldRegionId,
+  type HooWorldRegionDirection,
+  type HooWorldRegionId,
+} from "@/components/HooWorld/world/hooWorldMap";
+
 import HooWorldCampfire from "@/components/HooWorld/items/HooWorldCampfire";
 import HooWorldDeliveryGate from "@/components/HooWorld/items/HooWorldDeliveryGate";
 import HooWorldFirewood from "@/components/HooWorld/items/HooWorldFirewood";
@@ -64,6 +77,12 @@ const HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY =
 
 const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
   "hoo-world-focus-operator-skin";
+
+const HOO_WORLD_FOCUS_REGION_KEY =
+  "hoo-world-focus-world-region-id";
+
+const HOO_WORLD_REGION_STORAGE_KEY =
+  "hoo-world-current-region-v1";
 
 const HOO_WORLD_ADMIN_CONTROL_TARGET_KEY =
   "hoo-world-admin-control-target";
@@ -1431,6 +1450,149 @@ export default function HooWorldPage() {
       y: 78,
     });
 
+  /*
+   * 실제 월드 지역 ID.
+   *
+   * 기존 Presence의 fieldId는 25명 단위 인원 분산용 샤드이며,
+   * 실제 지역은 worldRegionId로 완전히 분리한다.
+   */
+  const [
+    worldRegionId,
+    setWorldRegionId,
+  ] = useState<HooWorldRegionId>(
+    HOO_WORLD_DEFAULT_REGION_ID,
+  );
+
+  const worldRegionIdRef =
+    useRef<HooWorldRegionId>(
+      HOO_WORLD_DEFAULT_REGION_ID,
+    );
+
+  worldRegionIdRef.current =
+    worldRegionId;
+
+  /*
+   * 3단계: 운영자 DB 해금 상태를 실시간으로 구독한다.
+   *
+   * DB가 아직 준비되지 않았거나 일시적으로 읽기에 실패하면
+   * hook 내부에서 기본 캠핑필드 해금 상태로 안전하게 fallback한다.
+   */
+  const {
+    unlockedRegionIds:
+      unlockedWorldRegionIds,
+  } = useHooWorldRegionUnlocks({
+    enabled:
+      !isUserLoading,
+  });
+
+  const unlockedWorldRegionIdSetRef =
+    useRef(
+      new Set<HooWorldRegionId>(
+        unlockedWorldRegionIds,
+      ),
+    );
+
+  unlockedWorldRegionIdSetRef.current =
+    new Set<HooWorldRegionId>(
+      unlockedWorldRegionIds,
+    );
+
+  const [
+    worldRegionNotice,
+    setWorldRegionNotice,
+  ] = useState<string | null>(
+    null,
+  );
+
+  const worldRegionNoticeTimerRef =
+    useRef<number | null>(
+      null,
+    );
+
+  const regionBoundaryAttemptRef =
+    useRef({
+      key: "",
+      at: 0,
+    });
+
+  function showWorldRegionNotice(
+    message: string,
+  ) {
+    setWorldRegionNotice(
+      message,
+    );
+
+    if (
+      worldRegionNoticeTimerRef.current !==
+      null
+    ) {
+      window.clearTimeout(
+        worldRegionNoticeTimerRef.current,
+      );
+    }
+
+    worldRegionNoticeTimerRef.current =
+      window.setTimeout(
+        () => {
+          setWorldRegionNotice(
+            null,
+          );
+
+          worldRegionNoticeTimerRef.current =
+            null;
+        },
+        1800,
+      );
+  }
+
+  useEffect(() => {
+    if (
+      typeof window ===
+      "undefined"
+    ) {
+      return;
+    }
+
+    const storedRegionId =
+      window.localStorage.getItem(
+        HOO_WORLD_REGION_STORAGE_KEY,
+      );
+
+    const focusRegionId =
+      window.sessionStorage.getItem(
+        HOO_WORLD_FOCUS_REGION_KEY,
+      );
+
+    const restoredRegionId =
+      isHooWorldRegionId(
+        focusRegionId,
+      )
+        ? focusRegionId
+        : isHooWorldRegionId(
+              storedRegionId,
+            )
+          ? storedRegionId
+          : HOO_WORLD_DEFAULT_REGION_ID;
+
+    worldRegionIdRef.current =
+      restoredRegionId;
+
+    setWorldRegionId(
+      restoredRegionId,
+    );
+
+    return () => {
+      if (
+        worldRegionNoticeTimerRef.current !==
+        null
+      ) {
+        window.clearTimeout(
+          worldRegionNoticeTimerRef.current,
+        );
+      }
+    };
+  }, []);
+
   const playerElementRef =
     useRef<HTMLDivElement | null>(
       null,
@@ -1479,11 +1641,13 @@ export default function HooWorldPage() {
     status,
     updateStatus,
     updateFoodEffect,
+    updateWorldRegion,
     updatePosition,
     refreshPresence,
   } = useHooWorldPresence({
     enabled: true,
     nickname,
+    worldRegionId,
   });
 
   /*
@@ -1498,6 +1662,14 @@ export default function HooWorldPage() {
 
   updatePositionRef.current =
     updatePosition;
+
+  const updateWorldRegionRef =
+    useRef(
+      updateWorldRegion,
+    );
+
+  updateWorldRegionRef.current =
+    updateWorldRegion;
 
   /*
    * 음식 / 포커스처럼 자유 이동이 잠기는 상태를
@@ -3235,11 +3407,17 @@ export default function HooWorldPage() {
       players.filter(
         (player) =>
           player.userId !==
-          currentUserId,
+            currentUserId &&
+          (
+            player.worldRegionId ??
+            HOO_WORLD_DEFAULT_REGION_ID
+          ) ===
+            worldRegionId,
       ),
     [
       players,
       currentUserId,
+      worldRegionId,
     ],
   );
 
@@ -3821,6 +3999,255 @@ export default function HooWorldPage() {
         minY,
         maxY,
       };
+    }
+
+    function getBoundaryTransitionDirection(
+      currentX: number,
+      currentY: number,
+      rawNextX: number,
+      rawNextY: number,
+    ): HooWorldRegionDirection | null {
+      const bounds =
+        getWalkableBounds(
+          currentX,
+          currentY,
+        );
+
+      const westOverflow =
+        bounds.minX -
+        rawNextX;
+
+      const eastOverflow =
+        rawNextX -
+        bounds.maxX;
+
+      const northOverflow =
+        bounds.minY -
+        rawNextY;
+
+      const southOverflow =
+        rawNextY -
+        bounds.maxY;
+
+      const candidates: Array<{
+        direction: HooWorldRegionDirection;
+        overflow: number;
+      }> = [
+        {
+          direction: "west",
+          overflow: westOverflow,
+        },
+        {
+          direction: "east",
+          overflow: eastOverflow,
+        },
+        {
+          direction: "north",
+          overflow: northOverflow,
+        },
+        {
+          direction: "south",
+          overflow: southOverflow,
+        },
+      ];
+
+      const crossed =
+        candidates
+          .filter(
+            (candidate) =>
+              candidate.overflow >
+              0,
+          )
+          .sort(
+            (first, second) =>
+              second.overflow -
+              first.overflow,
+          )[0];
+
+      return crossed?.direction ??
+        null;
+    }
+
+    function getRegionEntryPosition(
+      direction: HooWorldRegionDirection,
+      currentX: number,
+      currentY: number,
+    ) {
+      const edgePadding = 3;
+
+      if (direction === "east") {
+        return {
+          x: 5 + edgePadding,
+          y: currentY,
+        };
+      }
+
+      if (direction === "west") {
+        return {
+          x: 95 - edgePadding,
+          y: currentY,
+        };
+      }
+
+      if (direction === "north") {
+        return {
+          x: currentX,
+          y: 93 - edgePadding,
+        };
+      }
+
+      return {
+        x: currentX,
+        y: 9 + edgePadding,
+      };
+    }
+
+    function tryWorldRegionTransition(
+      direction: HooWorldRegionDirection,
+    ) {
+      const currentRegionId =
+        worldRegionIdRef.current;
+
+      const connection =
+        getConnectedHooWorldRegion(
+          currentRegionId,
+          direction,
+        );
+
+      if (!connection) {
+        return false;
+      }
+
+      const targetRegion =
+        getHooWorldRegion(
+          connection.regionId,
+        );
+
+      const now =
+        performance.now();
+
+      const attemptKey =
+        `${currentRegionId}:${direction}:${targetRegion.id}`;
+
+      const canShowNotice =
+        regionBoundaryAttemptRef.current.key !==
+          attemptKey ||
+        now -
+          regionBoundaryAttemptRef.current.at >=
+          900;
+
+      regionBoundaryAttemptRef.current = {
+        key: attemptKey,
+        at: now,
+      };
+
+      if (
+        !unlockedWorldRegionIdSetRef.current.has(
+          targetRegion.id,
+        )
+      ) {
+        if (canShowNotice) {
+          showWorldRegionNotice(
+            `🔒 ${targetRegion.name} 지역은 아직 잠겨 있습니다.`,
+          );
+        }
+
+        return false;
+      }
+
+      if (
+        connection.requirement ===
+        "boat"
+      ) {
+        if (canShowNotice) {
+          showWorldRegionNotice(
+            "⛵ 배를 이용해야 이동할 수 있습니다.",
+          );
+        }
+
+        return false;
+      }
+
+      if (
+        connection.requirement ===
+        "season2"
+      ) {
+        if (canShowNotice) {
+          showWorldRegionNotice(
+            "🔒 SEASON 2에서 열리는 지역입니다.",
+          );
+        }
+
+        return false;
+      }
+
+      if (
+        connection.requirement ===
+        "special_unlock"
+      ) {
+        if (canShowNotice) {
+          showWorldRegionNotice(
+            "🔒 특별 해금 조건이 필요한 길입니다.",
+          );
+        }
+
+        return false;
+      }
+
+      const current =
+        playerPositionRef.current;
+
+      const entryPosition =
+        getRegionEntryPosition(
+          direction,
+          current.x,
+          current.y,
+        );
+
+      current.x =
+        entryPosition.x;
+
+      current.y =
+        entryPosition.y;
+
+      worldRegionIdRef.current =
+        targetRegion.id;
+
+      setWorldRegionId(
+        targetRegion.id,
+      );
+
+      if (
+        typeof window !==
+        "undefined"
+      ) {
+        window.localStorage.setItem(
+          HOO_WORLD_REGION_STORAGE_KEY,
+          targetRegion.id,
+        );
+      }
+
+      applyPlayerTransform();
+
+      lastMovementBroadcastAtRef.current =
+        0;
+
+      void updateWorldRegionRef.current(
+        targetRegion.id,
+        {
+          x: current.x,
+          y: current.y,
+          facing:
+            playerFacingRef.current,
+          moving: false,
+        },
+      );
+
+      showWorldRegionNotice(
+        `${targetRegion.name}에 도착했습니다.`,
+      );
+
+      return true;
     }
 
     const staticCollisionZones = [
@@ -4838,22 +5265,55 @@ export default function HooWorldPage() {
         const previousY =
           current.y;
 
+        const rawNextX =
+          current.x +
+          (
+            moveX /
+            magnitude
+          ) *
+            speed *
+            deltaSeconds;
+
+        const rawNextY =
+          current.y +
+          (
+            moveY /
+            magnitude
+          ) *
+            speed *
+            deltaSeconds;
+
+        const transitionDirection =
+          getBoundaryTransitionDirection(
+            current.x,
+            current.y,
+            rawNextX,
+            rawNextY,
+          );
+
+        if (
+          transitionDirection &&
+          tryWorldRegionTransition(
+            transitionDirection,
+          )
+        ) {
+          applyPlayerWalkMotion(
+            currentTime,
+            true,
+          );
+
+          movementFrameRef.current =
+            requestAnimationFrame(
+              movePlayer,
+            );
+
+          return;
+        }
+
         const nextPosition =
           constrainToWalkableField(
-            current.x +
-              (
-                moveX /
-                magnitude
-              ) *
-                speed *
-                deltaSeconds,
-            current.y +
-              (
-                moveY /
-                magnitude
-              ) *
-                speed *
-                deltaSeconds,
+            rawNextX,
+            rawNextY,
           );
 
         current.x =
@@ -6541,6 +7001,11 @@ export default function HooWorldPage() {
               userId &&
             player.fieldId ===
               activeFieldId &&
+            (
+              player.worldRegionId ??
+              HOO_WORLD_DEFAULT_REGION_ID
+            ) ===
+              worldRegionIdRef.current &&
             !isHooWorldMovementLockedStatus(
               player.status,
             ),
@@ -7631,6 +8096,11 @@ export default function HooWorldPage() {
       }
 
       window.sessionStorage.setItem(
+        HOO_WORLD_FOCUS_REGION_KEY,
+        worldRegionIdRef.current,
+      );
+
+      window.sessionStorage.setItem(
         "hoo-world-focus-facing",
         playerFacingRef.current,
       );
@@ -7809,6 +8279,27 @@ export default function HooWorldPage() {
           HOO_WORLD_MUSIC_TRACKS
         }
       />
+
+      <HooWorldMiniMap
+        regionId={
+          worldRegionId
+        }
+        playerPositionRef={
+          playerPositionRef
+        }
+        playerFacingRef={
+          playerFacingRef
+        }
+        unlockedRegionIds={
+          unlockedWorldRegionIds
+        }
+      />
+
+      {worldRegionNotice && (
+        <div className="pointer-events-none fixed left-1/2 top-[198px] z-[97] -translate-x-1/2 rounded-full border border-white/45 bg-[#203528]/88 px-4 py-2 text-xs font-black text-white shadow-[0_8px_24px_rgba(20,35,23,0.28)] backdrop-blur-md">
+          {worldRegionNotice}
+        </div>
+      )}
     
     
       {/* ─────────────────────────
