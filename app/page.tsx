@@ -39,9 +39,12 @@ import {
 } from "./utils/scheduleRepeat";
 
 import {
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Lock,
+  Search,
   Settings,
   X,
 } from "lucide-react";
@@ -1922,6 +1925,26 @@ const [
 const [isMemoSecret, setIsMemoSecret] =
   useState(false);
 
+const [
+  isMemoSearchOpen,
+  setIsMemoSearchOpen,
+] = useState(false);
+
+const [
+  memoSearchQuery,
+  setMemoSearchQuery,
+] = useState("");
+
+const memoSearchInputRef =
+  useRef<HTMLInputElement | null>(
+    null,
+  );
+
+const [
+  isMemoExpanded,
+  setIsMemoExpanded,
+] = useState(false);
+
  /* 전달사항 */
 
 const [notices, setNotices] = useState<Notice[]>([]);
@@ -2416,141 +2439,15 @@ useEffect(() => {
 }, []);
 
   /* ─────────────────────────────
-     캘린더 고정 및 가로 화면 전환
+     콘텐츠 페이지 입력 분리
+
+     - 메인 → 콘텐츠 진입: 버튼
+     - 콘텐츠 좌우 이동: 좌/우 화살표
+     - 콘텐츠 상하 이동: 마우스 휠
+
+     마우스 휠을 가로 페이지 전환에 연결하지 않아
+     세로 스크롤과 화면 전환이 중첩되지 않는다.
   ───────────────────────────── */
-
-useEffect(() => {
-  function handleWheel(event: WheelEvent) {
-    const eventTarget =
-      event.target instanceof Element
-        ? event.target
-        : null;
-
-    const verticalScrollArea =
-      eventTarget?.closest<HTMLElement>(
-        '[data-hoo-vertical-scroll="true"]',
-      );
-
-    if (verticalScrollArea) {
-      const canScrollUp =
-        verticalScrollArea.scrollTop > 1;
-      const canScrollDown =
-        verticalScrollArea.scrollTop +
-          verticalScrollArea.clientHeight <
-        verticalScrollArea.scrollHeight - 1;
-
-      if (
-        (event.deltaY < 0 && canScrollUp) ||
-        (event.deltaY > 0 && canScrollDown)
-      ) {
-        return;
-      }
-    }
-
-    const section = horizontalSectionRef.current;
-
-    if (!section) {
-      return;
-    }
-
-    const sectionTop = section.offsetTop;
-    const currentScroll = window.scrollY;
-    const pinTolerance = 12;
-
-    const enteringHorizontalSection =
-      event.deltaY > 0 &&
-      currentScroll >=
-        sectionTop - window.innerHeight * 0.25 &&
-      currentScroll < sectionTop - pinTolerance;
-
-    if (enteringHorizontalSection) {
-      event.preventDefault();
-
-      setHorizontalPage(0);
-      setHorizontalProgress(0);
-
-      window.scrollTo({
-        top: sectionTop,
-        behavior: "auto",
-      });
-
-      return;
-    }
-
-    const isPinned =
-      Math.abs(currentScroll - sectionTop) <=
-      pinTolerance;
-
-    if (!isPinned) {
-      return;
-    }
-
-    event.preventDefault();
-
-    window.scrollTo({
-      top: sectionTop,
-      behavior: "auto",
-    });
-
-    if (isHorizontalAnimatingRef.current) {
-      return;
-    }
-
-    if (event.deltaY > 0 && horizontalPage < 2) {
-      const nextPage = (horizontalPage + 1) as
-        | -1
-        | 0
-        | 1
-        | 2;
-
-      isHorizontalAnimatingRef.current = true;
-      setHorizontalPage(nextPage);
-      setHorizontalProgress(nextPage);
-
-      window.setTimeout(() => {
-        isHorizontalAnimatingRef.current = false;
-      }, 750);
-
-      return;
-    }
-
-    if (event.deltaY < 0 && horizontalPage > -1) {
-      const previousPage = (horizontalPage - 1) as
-        | -1
-        | 0
-        | 1
-        | 2;
-
-      isHorizontalAnimatingRef.current = true;
-      setHorizontalPage(previousPage);
-      setHorizontalProgress(previousPage);
-
-      window.setTimeout(() => {
-        isHorizontalAnimatingRef.current = false;
-      }, 750);
-
-      return;
-    }
-
-    if (event.deltaY < 0 && horizontalPage === -1) {
-      window.scrollTo({
-        top: Math.max(
-          0,
-          sectionTop - window.innerHeight,
-        ),
-        behavior: "smooth",
-      });
-    }
-  }
-
-  window.addEventListener("wheel", handleWheel, {
-    passive: false,
-  });
-
-  return () => {
-    window.removeEventListener("wheel", handleWheel);
-  };
-}, [horizontalPage]);
 
 
 
@@ -8687,11 +8584,34 @@ void submitSudokuCompletion({
         schedule.id === selectedScheduleId,
     ) ?? null;
 
-    const visibleMemos = memos.filter(
-  (memo) =>
-    !isSecretLayerOn ||
-    !memo.isSecret,
-);
+    const memoLayerVisibleMemos =
+  memos.filter(
+    (memo) =>
+      !isSecretLayerOn ||
+      !memo.isSecret,
+  );
+
+const normalizedMemoSearchQuery =
+  memoSearchQuery
+    .trim()
+    .toLocaleLowerCase("ko-KR");
+
+const visibleMemos =
+  normalizedMemoSearchQuery
+    ? memoLayerVisibleMemos.filter(
+        (memo) => {
+          const searchableText =
+            `${memo.title} ${memo.content}`
+              .toLocaleLowerCase(
+                "ko-KR",
+              );
+
+          return searchableText.includes(
+            normalizedMemoSearchQuery,
+          );
+        },
+      )
+    : memoLayerVisibleMemos;
 
   useEffect(() => {
     if (selectedSchedules.length === 0) {
@@ -8708,6 +8628,98 @@ void submitSudokuCompletion({
       setSelectedScheduleId(selectedSchedules[0].id);
     }
   }, [selectedSchedules, selectedScheduleId]);
+
+
+useEffect(() => {
+  if (horizontalPage === 1) {
+    return;
+  }
+
+  setIsMemoSearchOpen(false);
+  setMemoSearchQuery("");
+}, [horizontalPage]);
+
+
+useEffect(() => {
+  function openMemoSearch() {
+    setIsMemoSearchOpen(true);
+
+    window.requestAnimationFrame(
+      () => {
+        memoSearchInputRef.current
+          ?.focus();
+
+        memoSearchInputRef.current
+          ?.select();
+      },
+    );
+  }
+
+  function closeMemoSearch() {
+    setIsMemoSearchOpen(false);
+    setMemoSearchQuery("");
+  }
+
+  function handleMemoSearchShortcut(
+    event: KeyboardEvent,
+  ) {
+    const isFindShortcut =
+      (event.ctrlKey ||
+        event.metaKey) &&
+      event.key.toLowerCase() ===
+        "f";
+
+    if (isFindShortcut) {
+      const section =
+        horizontalSectionRef.current;
+
+      const isContentSectionActive =
+        section &&
+        Math.abs(
+          window.scrollY -
+            section.offsetTop,
+        ) <= 24;
+
+      /*
+       * 메모 페이지가 실제 화면에 떠 있을 때만
+       * 브라우저 기본 찾기 대신 HOO 메모 검색을 연다.
+       * 다른 화면에서는 Ctrl/Cmd + F 기본 동작을 그대로 둔다.
+       */
+      if (
+        horizontalPage === 1 &&
+        isContentSectionActive
+      ) {
+        event.preventDefault();
+        openMemoSearch();
+      }
+
+      return;
+    }
+
+    if (
+      event.key === "Escape" &&
+      isMemoSearchOpen
+    ) {
+      event.preventDefault();
+      closeMemoSearch();
+    }
+  }
+
+  window.addEventListener(
+    "keydown",
+    handleMemoSearchShortcut,
+  );
+
+  return () => {
+    window.removeEventListener(
+      "keydown",
+      handleMemoSearchShortcut,
+    );
+  };
+}, [
+  horizontalPage,
+  isMemoSearchOpen,
+]);
 
 
 function moveSelectedSchedule(
@@ -10351,6 +10363,29 @@ function handleTodoDragEnd() {
 }
 
 
+function openContentPages() {
+  const section =
+    horizontalSectionRef.current;
+
+  if (!section) {
+    return;
+  }
+
+  /*
+   * 메인페이지에서 콘텐츠페이지로 진입할 때는
+   * 기존 첫 진입 화면인 캘린더(0번 페이지)부터 보여준다.
+   */
+  isHorizontalAnimatingRef.current = false;
+  setHorizontalPage(0);
+  setHorizontalProgress(0);
+
+  window.scrollTo({
+    top: section.offsetTop,
+    behavior: "smooth",
+  });
+}
+
+
 function moveHorizontalPage(
   direction: "prev" | "next",
 ) {
@@ -11533,19 +11568,23 @@ setSecretPinInput("");
             HOO
           </button>
 
-          <div className="min-w-[120px] text-center">
-            <p className="text-xl font-bold text-white">
+          <div
+            className={`text-center transition-all duration-300 ${
+              isSearchBarCollapsed
+                ? "w-[86px] min-w-0"
+                : "min-w-[120px]"
+            }`}
+          >
+            <p className="whitespace-nowrap text-xl font-bold text-white">
               {currentTime
-                ? currentTime.toLocaleTimeString("ko-KR", {
-                    hour12: false,
-                  })
-                : "00:00:00"}
+                ? `${currentTime.getHours()}시 ${currentTime.getMinutes()}분`
+                : "0시 0분"}
             </p>
           </div>
 <div
   className={`flex items-center transition-all duration-300 ${
     isSearchBarCollapsed
-      ? "w-9 flex-none"
+      ? "w-[80px] flex-none gap-2"
       : "min-w-0 flex-1 gap-2"
   }`}
 >
@@ -12136,10 +12175,17 @@ setSecretPinInput("");
   </button>
 )}
 
-<div className="mt-5 flex flex-col items-center gap-1 text-[10px] font-black tracking-[0.14em] text-white/75 sm:mt-6 sm:gap-2 sm:text-xs sm:tracking-[0.18em]">
-  <span>SCROLL TO EXPLORE</span>
-  <span className="animate-bounce text-xl">↓</span>
-</div>
+<button
+  type="button"
+  onClick={openContentPages}
+  className="group mt-5 inline-flex min-h-12 items-center gap-3 rounded-full border border-white/30 bg-black/20 px-5 py-3 text-[10px] font-black tracking-[0.14em] text-white/85 shadow-[0_12px_35px_rgba(0,0,0,0.18)] backdrop-blur-md transition hover:-translate-y-0.5 hover:border-white/55 hover:bg-black/30 hover:text-white sm:mt-6 sm:px-6 sm:text-xs sm:tracking-[0.18em]"
+  aria-label="콘텐츠 페이지 열기"
+>
+  <span>CONTENTS</span>
+  <span className="text-lg transition group-hover:translate-y-0.5">
+    ↓
+  </span>
+</button>
         </div>
       </section>
 
@@ -12169,7 +12215,7 @@ setSecretPinInput("");
 
           {/* 왼쪽 패널: 투두리스트 */}
 
-<section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
+<section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:py-16">
   <div className="mx-auto w-full max-w-[1380px]">
    <section className="grid w-full overflow-hidden rounded-[24px] border border-white/55 bg-white/90 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl sm:rounded-[34px] md:min-h-[630px] xl:grid-cols-[1.3fr_0.7fr]">
      <article className="min-w-0 border-b border-[#dedaf0] p-4 sm:p-6 md:p-8 xl:border-b-0 xl:border-r">
@@ -12530,7 +12576,7 @@ setSecretPinInput("");
 
 
             {/* 첫 번째 패널: 캘린더 */}
-        <section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
+        <section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:py-16">
               <div className="mx-auto w-full max-w-[1380px]">
                <section className="grid overflow-hidden rounded-[34px] border border-white/55 bg-white/88 shadow-[0_30px_100px_rgba(5,35,26,0.4)] backdrop-blur-xl xl:max-h-[calc(100dvh-128px)] xl:grid-cols-[1.15fr_0.85fr]">
                   <article className="border-b border-[#dedaf0] xl:border-b-0 xl:border-r">
@@ -13293,11 +13339,29 @@ setSecretPinInput("");
 
             {/* 두 번째 패널: 메모 + 후터디노트 정리본 */}
 
-        <section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:overflow-hidden xl:py-16">
-             <div className="mx-auto grid w-full max-w-[1380px] items-stretch gap-7 xl:grid-cols-[1.35fr_0.65fr]">
-                <article className="overflow-hidden rounded-[30px] border border-white/55 bg-white/88 shadow-[0_25px_80px_rgba(5,35,26,0.3)] backdrop-blur-xl">
+        <section
+          className={`flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:py-16 ${
+            isMemoExpanded
+              ? "xl:items-start"
+              : "xl:items-center"
+          }`}
+        >
+             <div
+               className={`mx-auto grid w-full max-w-[1380px] gap-7 xl:grid-cols-[1.35fr_0.65fr] ${
+                 isMemoExpanded
+                   ? "items-start"
+                   : "items-stretch"
+               }`}
+             >
+                <article
+                  className={`overflow-hidden rounded-[30px] border border-white/55 bg-white/88 shadow-[0_25px_80px_rgba(5,35,26,0.3)] backdrop-blur-xl transition-[min-height] duration-300 ${
+                    isMemoExpanded
+                      ? "md:min-h-[840px]"
+                      : ""
+                  }`}
+                >
                  
-                 <header className="flex items-center justify-between gap-4 border-b border-[#e5e1ef] px-6 py-5">
+                 <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[#e5e1ef] px-6 py-5">
   <div>
     <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
       HOO MEMO
@@ -13308,31 +13372,148 @@ setSecretPinInput("");
     </h2>
   </div>
 
-  <button
-    type="button"
-    onClick={() => {
-      if (!isSecretLayerOn) {
-        setIsSecretLayerOn(true);
-        return;
-      }
+  <div className="flex flex-wrap items-center justify-end gap-2">
+    <button
+      type="button"
+      onClick={() => {
+        setIsMemoSearchOpen(true);
 
-      setSecretPinInput("");
-      setIsSecretPinModalOpen(true);
-    }}
-    className={`rounded-full border px-4 py-2.5 text-xs font-black transition hover:scale-105 ${
-      isSecretLayerOn
-        ? "border-[#5145b5] bg-[#5145b5] text-white"
-        : "border-[#d8d2ec] bg-[#f3f0ff] text-[#6255b5]"
-    }`}
-    aria-pressed={isSecretLayerOn}
-  >
-    {isSecretLayerOn
-      ? "시크릿 ON"
-      : "시크릿 OFF"}
-  </button>
+        window.requestAnimationFrame(
+          () => {
+            memoSearchInputRef.current
+              ?.focus();
+          },
+        );
+      }}
+      className="flex items-center gap-1.5 rounded-full border border-[#ded8ef] bg-white px-3.5 py-2.5 text-xs font-black text-[#625a68] transition hover:scale-105 hover:bg-[#faf9ff]"
+      aria-expanded={
+        isMemoSearchOpen
+      }
+      aria-controls="hoo-memo-search"
+    >
+      <Search
+        size={14}
+        aria-hidden="true"
+      />
+      <span>검색</span>
+      <span className="hidden text-[10px] text-[#aaa3b7] sm:inline">
+        Ctrl + F
+      </span>
+    </button>
+
+    <button
+      type="button"
+      onClick={() =>
+        setIsMemoExpanded(
+          (previous) =>
+            !previous,
+        )
+      }
+      className="flex items-center gap-1.5 rounded-full border border-[#ded8ef] bg-white px-3.5 py-2.5 text-xs font-black text-[#625a68] transition hover:scale-105 hover:bg-[#faf9ff]"
+      aria-pressed={
+        isMemoExpanded
+      }
+    >
+      {isMemoExpanded ? (
+        <ChevronUp
+          size={14}
+          aria-hidden="true"
+        />
+      ) : (
+        <ChevronDown
+          size={14}
+          aria-hidden="true"
+        />
+      )}
+      {isMemoExpanded
+        ? "기본 크기"
+        : "아래로 확장"}
+    </button>
+
+    <button
+      type="button"
+      onClick={() => {
+        if (!isSecretLayerOn) {
+          setIsSecretLayerOn(true);
+          return;
+        }
+
+        setSecretPinInput("");
+        setIsSecretPinModalOpen(true);
+      }}
+      className={`rounded-full border px-4 py-2.5 text-xs font-black transition hover:scale-105 ${
+        isSecretLayerOn
+          ? "border-[#5145b5] bg-[#5145b5] text-white"
+          : "border-[#d8d2ec] bg-[#f3f0ff] text-[#6255b5]"
+      }`}
+      aria-pressed={
+        isSecretLayerOn
+      }
+    >
+      {isSecretLayerOn
+        ? "시크릿 ON"
+        : "시크릿 OFF"}
+    </button>
+  </div>
 </header>
 
-                  <div className="grid min-h-[560px] md:grid-cols-[0.9fr_1.1fr]">
+{isMemoSearchOpen && (
+  <div
+    id="hoo-memo-search"
+    className="border-b border-[#e5e1ef] bg-[#faf9ff] px-6 py-3"
+  >
+    <div className="flex items-center gap-3 rounded-2xl border border-[#dcd6e8] bg-white px-4 py-2.5 shadow-sm">
+      <Search
+        size={17}
+        className="shrink-0 text-[#8f879e]"
+        aria-hidden="true"
+      />
+
+      <input
+        ref={memoSearchInputRef}
+        type="search"
+        value={memoSearchQuery}
+        onChange={(event) =>
+          setMemoSearchQuery(
+            event.target.value,
+          )
+        }
+        placeholder="메모 제목 또는 내용 검색"
+        className="min-w-0 flex-1 bg-transparent text-sm font-bold text-[#453e4d] outline-none placeholder:text-[#aaa3b7]"
+        aria-label="메모 검색"
+      />
+
+      <span className="shrink-0 rounded-full bg-[#f1eef7] px-2.5 py-1 text-[10px] font-black text-[#746d83]">
+        {normalizedMemoSearchQuery
+          ? `${visibleMemos.length}/${memoLayerVisibleMemos.length}`
+          : `${memoLayerVisibleMemos.length}개`}
+      </span>
+
+      <button
+        type="button"
+        onClick={() => {
+          setIsMemoSearchOpen(false);
+          setMemoSearchQuery("");
+        }}
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#8f879e] transition hover:bg-[#f1eef7] hover:text-[#4f4858]"
+        aria-label="메모 검색 닫기"
+      >
+        <X
+          size={16}
+          aria-hidden="true"
+        />
+      </button>
+    </div>
+  </div>
+)}
+
+                  <div
+                    className={`grid md:grid-cols-[0.9fr_1.1fr] ${
+                      isMemoExpanded
+                        ? "min-h-[560px] md:min-h-[760px]"
+                        : "min-h-[560px]"
+                    }`}
+                  >
                     <form
                       onSubmit={saveMemo}
                       className="border-b border-[#e5e1ef] bg-[#fff8d9] p-6 md:border-b-0 md:border-r"
@@ -13361,7 +13542,11 @@ setSecretPinInput("");
                           setMemoContent(event.target.value)
                         }
                         placeholder="기억하고 싶은 내용을 적어보세요."
-                        className="mt-3 h-72 w-full resize-none rounded-2xl border border-[#eadb9c] bg-white/80 px-4 py-4 text-sm font-bold leading-7 outline-none focus:border-[#d1ac37]"
+                        className={`mt-3 w-full resize-none rounded-2xl border border-[#eadb9c] bg-white/80 px-4 py-4 text-sm font-bold leading-7 outline-none transition-[height] duration-300 focus:border-[#d1ac37] ${
+                          isMemoExpanded
+                            ? "h-72 md:h-[500px]"
+                            : "h-72"
+                        }`}
                       />
                       
                       <button
@@ -13427,18 +13612,29 @@ setSecretPinInput("");
                         </h3>
 
                         <span className="rounded-full bg-[#fff0a9] px-3 py-1 text-xs font-black text-[#93751d]">
-                          {visibleMemos.length}개
+                          {normalizedMemoSearchQuery
+                            ? `검색 ${visibleMemos.length}개`
+                            : `${visibleMemos.length}개`}
                         </span>
                       </div>
 
                      {visibleMemos.length === 0 ? (
                         <div className="mt-4 flex min-h-80 items-center justify-center rounded-3xl border-2 border-dashed border-[#e5dfc6] text-sm font-bold text-[#aaa18a]">
-                          {isSecretLayerOn
-  ? "표시할 메모가 없어요."
-  : "저장된 메모가 없어요."}
+                          {normalizedMemoSearchQuery
+                            ? "검색 결과가 없어요."
+                            : isSecretLayerOn
+                              ? "표시할 메모가 없어요."
+                              : "저장된 메모가 없어요."}
                         </div>
                       ) : (
-                        <div className="mt-4 max-h-[440px] space-y-3 overflow-y-auto pr-2">
+                        <div
+                          data-hoo-vertical-scroll="true"
+                          className={`mt-4 space-y-3 overflow-y-auto overscroll-contain pr-2 transition-[max-height] duration-300 ${
+                            isMemoExpanded
+                              ? "max-h-[440px] md:max-h-[650px]"
+                              : "max-h-[440px]"
+                          }`}
+                        >
                          {visibleMemos.map((memo, index) => (
                             <article
                               key={memo.id}
@@ -13508,7 +13704,7 @@ setSecretPinInput("");
 
                    {/* 세 번째 패널: 미니게임 */}
 <section
-  className={`flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto xl:items-center xl:overflow-hidden xl:py-16 ${
+  className={`flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto overscroll-y-contain xl:items-center xl:py-16 ${
     minigameScreen === "2048"
       ? "px-0 pb-0 pt-0 sm:px-4 sm:pb-[calc(24px+var(--hoo-safe-bottom))] sm:pt-[calc(92px+var(--hoo-safe-top))] md:px-7"
       : "px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7"

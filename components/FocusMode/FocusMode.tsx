@@ -1053,10 +1053,63 @@ function refreshProfileData() {
 }
 
 async function syncProfileDataWithCloud() {
-  const history =
+  /*
+   * 동기화 직전에 존재하던 로컬 기록을 먼저 보존한다.
+   * 서버 응답이 한 박자 늦더라도 방금 끝낸 집중 기록이
+   * 프로필 화면에서 사라지지 않게 한다.
+   */
+  const localHistoryBeforeSync =
+    loadFocusHistory();
+
+  const cloudHistory =
     await syncFocusHistoryWithCloud();
 
-  applyProfileHistory(history);
+  const localHistoryAfterSync =
+    loadFocusHistory();
+
+  const mergedHistoryMap =
+    new Map<string, FocusHistory>();
+
+  for (const history of [
+    ...cloudHistory,
+    ...localHistoryAfterSync,
+    ...localHistoryBeforeSync,
+  ]) {
+    mergedHistoryMap.set(
+      history.id,
+      history,
+    );
+  }
+
+  const mergedHistory =
+    Array.from(
+      mergedHistoryMap.values(),
+    ).sort(
+      (a, b) =>
+        new Date(b.completedAt).getTime() -
+        new Date(a.completedAt).getTime(),
+    );
+
+  applyProfileHistory(
+    mergedHistory,
+  );
+}
+
+async function syncProfileDataWithCloudSafely() {
+  try {
+    await syncProfileDataWithCloud();
+  } catch (error) {
+    console.error(
+      "집중 기록 클라우드 동기화 실패:",
+      error,
+    );
+
+    /*
+     * 서버 동기화 실패가 프로필 기록 표시 실패로
+     * 이어지지 않도록 로컬 기록을 즉시 복구한다.
+     */
+    refreshProfileData();
+  }
 }
 
  function openProfile() {
@@ -1073,7 +1126,7 @@ async function syncProfileDataWithCloud() {
    * 이후 서버 기록을 불러와
    * 프로필 통계와 그래프를 갱신한다.
    */
-  void syncProfileDataWithCloud();
+  void syncProfileDataWithCloudSafely();
 }
 
 function handleProfileLauncherClick() {
@@ -1646,6 +1699,19 @@ function openFocusStudyNote() {
     });
 
     /*
+     * 기록 저장 성공 직후 프로필을 로컬 기록으로 즉시 갱신한다.
+     * 이후 로그인 사용자는 클라우드와 다시 동기화한다.
+     *
+     * 이 순서를 고정해 서버 응답이 늦거나 일시적으로 실패해도
+     * 방금 끝낸 집중 기록이 프로필에서 누락되지 않게 한다.
+     */
+    refreshProfileData();
+
+    if (isLoggedIn) {
+      void syncProfileDataWithCloudSafely();
+    }
+
+    /*
      * 로그인한 이용자의 집중시간을
      * 후코인 서버 보상 시스템으로 전달한다.
      *
@@ -1951,26 +2017,17 @@ useEffect(() => {
         restoredInitialSeconds -
         currentRemainingSeconds;
 
-      const didSave =
-        saveFocusHistory(
-          actualSeconds,
-          {
-            goal:
-              parsedSession.goal,
-            plannedSeconds:
-              restoredInitialSeconds,
-            startedAt:
-              restoredStartedAt,
-          },
-        );
-
-      if (didSave) {
-        refreshProfileData();
-
-        if (isLoggedIn) {
-          void syncProfileDataWithCloud();
-        }
-      }
+      saveFocusHistory(
+        actualSeconds,
+        {
+          goal:
+            parsedSession.goal,
+          plannedSeconds:
+            restoredInitialSeconds,
+          startedAt:
+            restoredStartedAt,
+        },
+      );
 
       setFocusEndsAt(null);
       setIsRunning(false);
@@ -2109,14 +2166,9 @@ function confirmFinishFocusMode() {
     initialSeconds -
     currentRemainingSeconds;
 
-  const didSave =
-    saveFocusHistory(
-      actualSeconds,
-    );
-
-  if (didSave) {
-    refreshProfileData();
-  }
+  saveFocusHistory(
+    actualSeconds,
+  );
 
   setRemainingSeconds(
     currentRemainingSeconds,
@@ -2398,7 +2450,6 @@ useEffect(() => {
       initialSeconds,
     );
 
-    refreshProfileData();
     setView("completed");
   }
 

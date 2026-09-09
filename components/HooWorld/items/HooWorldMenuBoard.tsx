@@ -44,7 +44,7 @@ const HOO_WORLD_MENU_ITEMS = [
   {
     icon: "🎆",
     name: "불꽃놀이 세트",
-    price: "15 HC",
+    price: "20 HC",
   },
 ] as const;
 
