@@ -11,6 +11,15 @@ import {
   createClient,
 } from "@/lib/supabase/client";
 
+import {
+  HOO_WORLD_FOOD_CATALOG,
+} from "@/components/HooWorld/items/hooWorldFoodCatalog";
+
+const HOO_WORLD_ADMIN_FOOD_OPTIONS =
+  Object.values(
+    HOO_WORLD_FOOD_CATALOG,
+  );
+
 type AdminStatus = {
   isLoggedIn: boolean;
   isAdmin: boolean;
@@ -536,6 +545,36 @@ export default function AdminPage() {
     useState<HooWorldDistributionDraft | null>(
       null,
     );
+
+  const [
+    hooWorldFoodDeliveryId,
+    setHooWorldFoodDeliveryId,
+  ] =
+    useState(
+      HOO_WORLD_ADMIN_FOOD_OPTIONS[
+        0
+      ]?.id ?? "",
+    );
+
+  const [
+    hooWorldFoodDeliverySending,
+    setHooWorldFoodDeliverySending,
+  ] = useState(false);
+
+  const [
+    hooWorldFoodDeliveryMessage,
+    setHooWorldFoodDeliveryMessage,
+  ] = useState("");
+
+  const [
+    hooWorldFireworksDeliverySending,
+    setHooWorldFireworksDeliverySending,
+  ] = useState(false);
+
+  const [
+    hooWorldFireworksDeliveryMessage,
+    setHooWorldFireworksDeliveryMessage,
+  ] = useState("");
 
 
   const [
@@ -2545,6 +2584,380 @@ export default function AdminPage() {
     }
   }
 
+  async function sendHooWorldFoodDelivery(
+    mode:
+      | "single"
+      | "group" =
+      "single",
+  ) {
+    if (
+      !status?.canManage ||
+      hooWorldFoodDeliverySending
+    ) {
+      return;
+    }
+
+    const food =
+      HOO_WORLD_ADMIN_FOOD_OPTIONS.find(
+        (item) =>
+          item.id ===
+          hooWorldFoodDeliveryId,
+      );
+
+    if (!food) {
+      setHooWorldFoodDeliveryMessage(
+        "배송할 음식을 선택해 주세요.",
+      );
+      return;
+    }
+
+    const isGroupFood =
+      mode ===
+      "group";
+
+    setHooWorldFoodDeliverySending(
+      true,
+    );
+
+    setHooWorldFoodDeliveryMessage(
+      "",
+    );
+
+    try {
+      const rpcName =
+        isGroupFood
+          ? "admin_send_hoo_world_group_food_delivery"
+          : "admin_send_hoo_world_food_delivery";
+
+      const {
+        data,
+        error,
+      } =
+        await supabase.rpc(
+          rpcName,
+          {
+            p_food_id:
+              food.id,
+
+            p_food_name:
+              food.name,
+
+            p_food_image_url:
+              food.imagePath ||
+              null,
+
+            p_food_metadata: {
+              interaction_type:
+                isGroupFood
+                  ? "group_food"
+                  : "food",
+
+              fallback_emoji:
+                food.fallbackEmoji,
+
+              empty_container_image_path:
+                food.emptyContainerImagePath,
+
+              empty_container_fallback_emoji:
+                food.emptyContainerFallbackEmoji,
+
+              max_participants:
+                isGroupFood
+                  ? 4
+                  : 1,
+            },
+          },
+        );
+
+      if (error) {
+        const errorCode =
+          typeof error.code ===
+            "string"
+            ? error.code
+            : "UNKNOWN";
+
+        const errorMessage =
+          typeof error.message ===
+            "string" &&
+          error.message.trim()
+            ? error.message.trim()
+            : "알 수 없는 오류";
+
+        const errorDetails =
+          typeof error.details ===
+            "string"
+            ? error.details
+            : "";
+
+        const errorHint =
+          typeof error.hint ===
+            "string"
+            ? error.hint
+            : "";
+
+        console.warn(
+          [
+            isGroupFood
+              ? "HOO WORLD 단체 음식 배송 RPC 실패"
+              : "HOO WORLD 음식 배송 RPC 실패",
+            `code=${errorCode}`,
+            `message=${errorMessage}`,
+            errorDetails
+              ? `details=${errorDetails}`
+              : "",
+            errorHint
+              ? `hint=${errorHint}`
+              : "",
+          ]
+            .filter(Boolean)
+            .join(" | "),
+        );
+
+        if (
+          errorCode ===
+            "PGRST202" ||
+          errorMessage.includes(
+            "Could not find the function",
+          )
+        ) {
+          setHooWorldFoodDeliveryMessage(
+            isGroupFood
+              ? "단체 음식 배송 RPC를 찾지 못했습니다. 단체 음식 SQL을 적용한 뒤 다시 시도해 주세요."
+              : "음식 배송 RPC를 찾지 못했습니다. Supabase SQL을 다시 적용한 뒤 스키마 캐시를 새로고침해 주세요.",
+          );
+          return;
+        }
+
+        setHooWorldFoodDeliveryMessage(
+          `${
+            isGroupFood
+              ? "단체 음식"
+              : "음식"
+          } 배송 실패 · ${errorCode} · ${errorMessage}`,
+        );
+
+        return;
+      }
+
+      const result =
+        data &&
+        typeof data ===
+          "object" &&
+        !Array.isArray(data)
+          ? data as Record<
+              string,
+              unknown
+            >
+          : null;
+
+      if (
+        result?.ok ===
+        false
+      ) {
+        const backendCode =
+          typeof result.error_code ===
+            "string"
+            ? result.error_code
+            : "DB_ERROR";
+
+        const backendMessage =
+          typeof result.error_message ===
+            "string" &&
+          result.error_message.trim()
+            ? result.error_message.trim()
+            : "음식 배송 처리 실패";
+
+        console.warn(
+          `${
+            isGroupFood
+              ? "HOO WORLD 단체 음식"
+              : "HOO WORLD 음식"
+          } 배송 DB 실패 | code=${backendCode} | message=${backendMessage}`,
+        );
+
+        setHooWorldFoodDeliveryMessage(
+          `${
+            isGroupFood
+              ? "단체 음식"
+              : "음식"
+          } 배송 실패 · ${backendCode} · ${backendMessage}`,
+        );
+
+        return;
+      }
+
+      const deliveryId =
+        typeof result?.delivery_id ===
+          "string"
+          ? result.delivery_id
+          : "";
+
+      setHooWorldFoodDeliveryMessage(
+        deliveryId
+          ? isGroupFood
+            ? `${food.name} 단체 음식 배송 완료 · 누군가 F를 누르면 본인과 가까운 이용자 최대 3명이 함께 식사합니다.`
+            : `${food.name} 배송 완료 · 후월드 입구에 상자가 실시간 도착합니다.`
+          : isGroupFood
+            ? `${food.name} 단체 음식 배송을 보냈습니다.`
+            : `${food.name} 배송을 보냈습니다.`,
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      console.warn(
+        `${
+          isGroupFood
+            ? "HOO WORLD 단체 음식"
+            : "HOO WORLD 음식"
+        } 배송 처리 중 예외 | ${errorMessage}`,
+      );
+
+      setHooWorldFoodDeliveryMessage(
+        `${
+          isGroupFood
+            ? "단체 음식"
+            : "음식"
+        } 배송 처리 중 오류 · ${errorMessage}`,
+      );
+    } finally {
+      setHooWorldFoodDeliverySending(
+        false,
+      );
+    }
+  }
+
+  async function sendHooWorldFireworksDelivery() {
+    if (
+      !status?.canManage ||
+      hooWorldFireworksDeliverySending
+    ) {
+      return;
+    }
+
+    setHooWorldFireworksDeliverySending(
+      true,
+    );
+
+    setHooWorldFireworksDeliveryMessage(
+      "",
+    );
+
+    try {
+      const {
+        data,
+        error,
+      } =
+        await supabase.rpc(
+          "admin_send_hoo_world_fireworks_delivery",
+        );
+
+      if (error) {
+        const errorCode =
+          typeof error.code ===
+            "string"
+            ? error.code
+            : "UNKNOWN";
+
+        const errorMessage =
+          typeof error.message ===
+            "string" &&
+          error.message.trim()
+            ? error.message.trim()
+            : "알 수 없는 오류";
+
+        console.warn(
+          `HOO WORLD 불꽃놀이 배송 RPC 실패 | code=${errorCode} | message=${errorMessage}`,
+        );
+
+        if (
+          errorCode ===
+            "PGRST202" ||
+          errorMessage.includes(
+            "Could not find the function",
+          )
+        ) {
+          setHooWorldFireworksDeliveryMessage(
+            "불꽃놀이 배송 RPC를 찾지 못했습니다. 불꽃놀이 SQL을 먼저 적용해 주세요.",
+          );
+          return;
+        }
+
+        setHooWorldFireworksDeliveryMessage(
+          `불꽃놀이 배송 실패 · ${errorCode} · ${errorMessage}`,
+        );
+
+        return;
+      }
+
+      const result =
+        data &&
+        typeof data ===
+          "object" &&
+        !Array.isArray(data)
+          ? data as Record<
+              string,
+              unknown
+            >
+          : null;
+
+      if (
+        result?.ok ===
+        false
+      ) {
+        const backendCode =
+          typeof result.error_code ===
+            "string"
+            ? result.error_code
+            : "DB_ERROR";
+
+        const backendMessage =
+          typeof result.error_message ===
+            "string" &&
+          result.error_message.trim()
+            ? result.error_message.trim()
+            : "불꽃놀이 배송 처리 실패";
+
+        setHooWorldFireworksDeliveryMessage(
+          `불꽃놀이 배송 실패 · ${backendCode} · ${backendMessage}`,
+        );
+
+        return;
+      }
+
+      const deliveryId =
+        typeof result?.delivery_id ===
+          "string"
+          ? result.delivery_id
+          : "";
+
+      setHooWorldFireworksDeliveryMessage(
+        deliveryId
+          ? "🎆 불꽃놀이 배송 완료 · 통합 배송상자에서 꺼낸 뒤 X로 옮기고 F로 점화할 수 있습니다."
+          : "🎆 불꽃놀이 배송을 보냈습니다.",
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      console.warn(
+        `HOO WORLD 불꽃놀이 배송 처리 중 예외 | ${errorMessage}`,
+      );
+
+      setHooWorldFireworksDeliveryMessage(
+        `불꽃놀이 배송 처리 중 오류 · ${errorMessage}`,
+      );
+    } finally {
+      setHooWorldFireworksDeliverySending(
+        false,
+      );
+    }
+  }
+
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>,
   ) {
@@ -4147,6 +4560,516 @@ export default function AdminPage() {
                 </div>
               ) : null}
             </>
+          ) : null}
+        </section>
+
+        {/* 후월드 운영자 음식 실시간 배송 */}
+        <section
+          style={{
+            marginBottom: 32,
+            padding: 24,
+            border:
+              "1px solid #3a3226",
+            borderRadius: 18,
+            background:
+              "#15120d",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems:
+                "flex-start",
+              justifyContent:
+                "space-between",
+              gap: 16,
+              marginBottom: 20,
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  color: "#f0bd62",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  letterSpacing:
+                    "0.12em",
+                  marginBottom: 6,
+                }}
+              >
+                HOO WORLD FOOD DELIVERY
+              </div>
+
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: 22,
+                }}
+              >
+                🍲 운영자 음식 배송
+              </h2>
+
+              <p
+                style={{
+                  margin:
+                    "8px 0 0",
+                  color: "#968b79",
+                  fontSize: 12,
+                  lineHeight: 1.6,
+                }}
+              >
+                음식을 선택해 보내면 후월드 입구의 기존 HOO DELIVERY 상자에 실시간으로 도착합니다.
+                일반 음식은 혼자 먹고, 단체 음식은 F를 누른 이용자와 가장 가까운 최대 3명이 함께 식사합니다.
+              </p>
+            </div>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "repeat(auto-fit, minmax(150px, 1fr))",
+              gap: 10,
+            }}
+          >
+            {HOO_WORLD_ADMIN_FOOD_OPTIONS.map(
+              (food) => {
+                const selected =
+                  hooWorldFoodDeliveryId ===
+                  food.id;
+
+                return (
+                  <button
+                    key={
+                      food.id
+                    }
+                    type="button"
+                    onClick={() => {
+                      setHooWorldFoodDeliveryId(
+                        food.id,
+                      );
+                      setHooWorldFoodDeliveryMessage(
+                        "",
+                      );
+                    }}
+                    disabled={
+                      hooWorldFoodDeliverySending ||
+                      !status.canManage
+                    }
+                    style={{
+                      display:
+                        "flex",
+                      alignItems:
+                        "center",
+                      gap: 10,
+                      minHeight: 64,
+                      padding:
+                        "10px 12px",
+                      border:
+                        selected
+                          ? "1px solid #d7a653"
+                          : "1px solid #40382c",
+                      borderRadius: 12,
+                      background:
+                        selected
+                          ? "#302313"
+                          : "#0e0d0a",
+                      color:
+                        selected
+                          ? "#ffe0a6"
+                          : "#d8d0c3",
+                      cursor:
+                        hooWorldFoodDeliverySending ||
+                        !status.canManage
+                          ? "not-allowed"
+                          : "pointer",
+                      textAlign:
+                        "left",
+                    }}
+                  >
+                    <span
+                      style={{
+                        display:
+                          "inline-flex",
+                        width: 42,
+                        height: 42,
+                        alignItems:
+                          "center",
+                        justifyContent:
+                          "center",
+                        flexShrink: 0,
+                        overflow:
+                          "hidden",
+                        borderRadius: 10,
+                        background:
+                          "#211b12",
+                        fontSize: 27,
+                      }}
+                    >
+                      {food.imagePath ? (
+                        <img
+                          src={
+                            food.imagePath
+                          }
+                          alt=""
+                          style={{
+                            width:
+                              "100%",
+                            height:
+                              "100%",
+                            objectFit:
+                              "contain",
+                          }}
+                        />
+                      ) : (
+                        food.fallbackEmoji
+                      )}
+                    </span>
+
+                    <span
+                      style={{
+                        minWidth: 0,
+                      }}
+                    >
+                      <strong
+                        style={{
+                          display:
+                            "block",
+                          fontSize: 12,
+                        }}
+                      >
+                        {food.name}
+                      </strong>
+
+                      <span
+                        style={{
+                          display:
+                            "block",
+                          marginTop: 3,
+                          color:
+                            "#8d806d",
+                          fontSize: 10,
+                          fontFamily:
+                            "monospace",
+                        }}
+                      >
+                        {food.id}
+                      </span>
+                    </span>
+                  </button>
+                );
+              },
+            )}
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              alignItems:
+                "center",
+              justifyContent:
+                "space-between",
+              gap: 12,
+              marginTop: 14,
+              flexWrap:
+                "wrap",
+            }}
+          >
+            <div
+              style={{
+                color: "#837867",
+                fontSize: 11,
+                lineHeight: 1.5,
+              }}
+            >
+              새 음식은{" "}
+              <code>
+                hooWorldFoodCatalog.ts
+              </code>
+              에 데이터만 추가하면 이 목록에 자동으로 나타납니다.
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems:
+                  "center",
+                gap: 8,
+                flexWrap:
+                  "wrap",
+                justifyContent:
+                  "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  void sendHooWorldFoodDelivery(
+                    "single",
+                  );
+                }}
+                disabled={
+                  hooWorldFoodDeliverySending ||
+                  !status.canManage ||
+                  !hooWorldFoodDeliveryId
+                }
+                style={{
+                  minWidth: 158,
+                  minHeight: 42,
+                  border:
+                    "1px solid #a77b36",
+                  borderRadius: 11,
+                  background:
+                    hooWorldFoodDeliverySending
+                      ? "#3b3020"
+                      : "#684515",
+                  color: "#ffe4ad",
+                  fontSize: 12,
+                  fontWeight: 900,
+                  cursor:
+                    hooWorldFoodDeliverySending ||
+                    !status.canManage ||
+                    !hooWorldFoodDeliveryId
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    !status.canManage
+                      ? 0.55
+                      : 1,
+                }}
+              >
+                {hooWorldFoodDeliverySending
+                  ? "배송 보내는 중..."
+                  : "1인 음식 보내기"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void sendHooWorldFoodDelivery(
+                    "group",
+                  );
+                }}
+                disabled={
+                  hooWorldFoodDeliverySending ||
+                  !status.canManage ||
+                  !hooWorldFoodDeliveryId
+                }
+                style={{
+                  minWidth: 174,
+                  minHeight: 42,
+                  border:
+                    "1px solid #7f6eb8",
+                  borderRadius: 11,
+                  background:
+                    hooWorldFoodDeliverySending
+                      ? "#302b3e"
+                      : "#4b3f78",
+                  color: "#eee8ff",
+                  fontSize: 12,
+                  fontWeight: 900,
+                  cursor:
+                    hooWorldFoodDeliverySending ||
+                    !status.canManage ||
+                    !hooWorldFoodDeliveryId
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    !status.canManage
+                      ? 0.55
+                      : 1,
+                }}
+              >
+                {hooWorldFoodDeliverySending
+                  ? "배송 보내는 중..."
+                  : "👥 단체 음식 보내기"}
+              </button>
+            </div>
+          </div>
+
+          {hooWorldFoodDeliveryMessage ? (
+            <div
+              style={{
+                marginTop: 14,
+                padding:
+                  "11px 13px",
+                border:
+                  "1px solid #5d4728",
+                borderRadius: 11,
+                background:
+                  "#1d160d",
+                color: "#f0c882",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              {hooWorldFoodDeliveryMessage}
+            </div>
+          ) : null}
+        </section>
+
+        {/* 후월드 운영자 불꽃놀이 배송 */}
+        <section
+          style={{
+            marginBottom: 32,
+            padding: 24,
+            border:
+              "1px solid #3a3147",
+            borderRadius: 18,
+            background:
+              "#12101a",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems:
+                "center",
+              justifyContent:
+                "space-between",
+              gap: 18,
+              flexWrap:
+                "wrap",
+            }}
+          >
+            <div
+              style={{
+                minWidth: 0,
+                flex:
+                  "1 1 360px",
+              }}
+            >
+              <div
+                style={{
+                  color: "#bca6ff",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  letterSpacing:
+                    "0.12em",
+                  marginBottom: 6,
+                }}
+              >
+                HOO WORLD FIREWORKS DELIVERY
+              </div>
+
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: 22,
+                }}
+              >
+                🎆 후월드 불꽃놀이
+              </h2>
+
+              <p
+                style={{
+                  margin:
+                    "8px 0 0",
+                  color: "#968fa6",
+                  fontSize: 12,
+                  lineHeight: 1.7,
+                }}
+              >
+                통합 HOO DELIVERY 상자로 불꽃놀이 발사대를 보냅니다.
+                필드에 꺼낸 뒤 X로 원하는 곳까지 옮기고 F로 점화합니다.
+                90% 확률로 정상 작동하며 15초 불꽃놀이와 초대형 피날레,
+                30초 하얀 반짝이 잔광이 이어집니다.
+                10% 확률에서는 심지만 타고 푸슉 연기만 남습니다.
+              </p>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                alignItems:
+                  "center",
+                gap: 12,
+              }}
+            >
+              <div
+                aria-hidden="true"
+                style={{
+                  display:
+                    "flex",
+                  width: 64,
+                  height: 64,
+                  alignItems:
+                    "center",
+                  justifyContent:
+                    "center",
+                  border:
+                    "1px solid #504463",
+                  borderRadius: 16,
+                  background:
+                    "#1b1625",
+                  fontSize: 36,
+                  boxShadow:
+                    "0 8px 22px rgba(0,0,0,0.22)",
+                }}
+              >
+                🎆
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  void sendHooWorldFireworksDelivery();
+                }}
+                disabled={
+                  hooWorldFireworksDeliverySending ||
+                  !status.canManage
+                }
+                style={{
+                  minWidth: 192,
+                  minHeight: 46,
+                  border:
+                    "1px solid #8e70d1",
+                  borderRadius: 12,
+                  background:
+                    hooWorldFireworksDeliverySending
+                      ? "#322b40"
+                      : "#5b3f91",
+                  color: "#f4edff",
+                  fontSize: 12,
+                  fontWeight: 900,
+                  cursor:
+                    hooWorldFireworksDeliverySending ||
+                    !status.canManage
+                      ? "not-allowed"
+                      : "pointer",
+                  opacity:
+                    !status.canManage
+                      ? 0.55
+                      : 1,
+                  boxShadow:
+                    "0 7px 18px rgba(56,35,91,0.24)",
+                }}
+              >
+                {hooWorldFireworksDeliverySending
+                  ? "배송 보내는 중..."
+                  : "🎆 불꽃놀이 보내기"}
+              </button>
+            </div>
+          </div>
+
+          {hooWorldFireworksDeliveryMessage ? (
+            <div
+              style={{
+                marginTop: 14,
+                padding:
+                  "11px 13px",
+                border:
+                  "1px solid #55466c",
+                borderRadius: 11,
+                background:
+                  "#1b1525",
+                color: "#d9c8ff",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              {hooWorldFireworksDeliveryMessage}
+            </div>
           ) : null}
         </section>
 

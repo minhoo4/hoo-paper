@@ -12,6 +12,21 @@ import {
 } from "react-dom";
 
 import HooWorldItem from "@/components/HooWorld/items/HooWorldItem";
+import HooWorldFoodItem from "@/components/HooWorld/items/HooWorldFoodItem";
+import HooWorldFireworksItem, {
+  HOO_WORLD_FIREWORKS_INTERACTION_DISTANCE_PX,
+} from "@/components/HooWorld/items/HooWorldFireworksItem";
+
+import {
+  getHooWorldFoodDefinition,
+  HOO_WORLD_FOOD_CATALOG,
+  HOO_WORLD_FOOD_INTERACTION_DISTANCE_PX,
+  type HooWorldFoodId,
+} from "@/components/HooWorld/items/hooWorldFoodCatalog";
+
+import type {
+  MutableRefObject,
+} from "react";
 
 import {
   createClient,
@@ -50,6 +65,61 @@ type DeliveredFieldItem = {
   height: number;
   collisionBottomRatio: number;
   zIndex: number;
+
+  /*
+   * itemType === "food"일 때만 사용한다.
+   * 실제 상호작용 정의는 공통 음식 카탈로그에서 가져온다.
+   */
+  foodId: string | null;
+
+  foodInteractionType:
+    | "single"
+    | "group";
+
+  /*
+   * 불꽃놀이 배송 아이템.
+   * item_type 또는 delivery metadata의 interaction_type으로 복구한다.
+   */
+  isFireworks: boolean;
+};
+
+export type HooWorldDeliveredFoodConsumedPayload = {
+  itemId: string;
+  foodId: string;
+};
+
+export type HooWorldDeliveredGroupFoodRequestedPayload = {
+  itemId: string;
+  foodId: string;
+  x: number;
+  y: number;
+};
+
+export type HooWorldDeliveredFireworksRequestedPayload = {
+  itemId: string;
+  x: number;
+  y: number;
+};
+
+type HooWorldDeliveryGateProps = {
+  playerPositionRef: MutableRefObject<{
+    x: number;
+    y: number;
+  }>;
+  interactionLocked?: boolean;
+  onFoodConsumed?: (
+    payload: HooWorldDeliveredFoodConsumedPayload,
+  ) => void;
+  onGroupFoodRequested?: (
+    payload: HooWorldDeliveredGroupFoodRequestedPayload,
+  ) =>
+    | boolean
+    | Promise<boolean>;
+  onFireworksRequested?: (
+    payload: HooWorldDeliveredFireworksRequestedPayload,
+  ) =>
+    | boolean
+    | Promise<boolean>;
 };
 
 function getRecord(
@@ -184,9 +254,95 @@ function parseDeliveredFieldItem(
       ? metadata.item_image_url.trim()
       : null;
 
+  const metadataFoodId =
+    typeof deliveryItemMetadata.food_id ===
+      "string" &&
+    deliveryItemMetadata.food_id.trim()
+      ? deliveryItemMetadata.food_id.trim()
+      : null;
+
+  const metadataInteractionType =
+    typeof deliveryItemMetadata.interaction_type ===
+      "string"
+      ? deliveryItemMetadata.interaction_type.trim()
+      : "";
+
+  /*
+   * 음식 판정은 DB item_type 하나에만 의존하지 않는다.
+   *
+   * 운영자 음식 배송은 정상적으로 item_type=food가 저장되어도
+   * 기존 클라이언트 상태 / Realtime 타이밍 때문에 잠깐 generic으로
+   * 남아 있을 수 있다.
+   *
+   * 따라서 다음 순서로 food를 복구한다.
+   * 1) delivery_item_metadata.food_id
+   * 2) 카탈로그에 등록된 음식 이름
+   *
+   * 최종적으로 유효한 카탈로그 food가 확인되면
+   * 클라이언트에서는 무조건 itemType을 food로 정규화한다.
+   */
+  const foodByMetadata =
+    metadataFoodId
+      ? getHooWorldFoodDefinition(
+          metadataFoodId,
+        )
+      : null;
+
+  const foodByName =
+    Object.values(
+      HOO_WORLD_FOOD_CATALOG,
+    ).find(
+      (food) =>
+        food.name ===
+        itemName,
+    ) ?? null;
+
+  const resolvedFood =
+    foodByMetadata ??
+    (
+      itemType ===
+        "food" ||
+      metadataInteractionType ===
+        "food"
+        ? foodByName
+        : null
+    ) ??
+    /*
+     * 마지막 복구 경로.
+     * 현재처럼 DB에는 food인데 기존 화면에 일반 📦 아이템으로
+     * 남은 상태도 등록된 음식 이름으로 즉시 복구한다.
+     */
+    foodByName;
+
+  const foodId =
+    resolvedFood?.id ??
+    null;
+
+  const normalizedItemType =
+    foodId
+      ? "food"
+      : itemType;
+
+  const foodInteractionType:
+    | "single"
+    | "group" =
+      metadataInteractionType ===
+        "group_food" ||
+      metadataInteractionType ===
+        "group_eating"
+        ? "group"
+        : "single";
+
+  const isFireworks =
+    normalizedItemType ===
+      "fireworks" ||
+    metadataInteractionType ===
+      "fireworks";
+
   return {
     itemId,
-    itemType,
+    itemType:
+      normalizedItemType,
     x,
     y,
     revision:
@@ -230,6 +386,9 @@ function parseDeliveredFieldItem(
           30,
         ),
       ),
+    foodId,
+    foodInteractionType,
+    isFireworks,
     isInstalled:
       row.is_installed !==
       false,
@@ -480,7 +639,13 @@ function countUnclaimedItems(
   );
 }
 
-export default function HooWorldDeliveryGate() {
+export default function HooWorldDeliveryGate({
+  playerPositionRef,
+  interactionLocked = false,
+  onFoodConsumed,
+  onGroupFoodRequested,
+  onFireworksRequested,
+}: HooWorldDeliveryGateProps) {
   const supabase =
     useMemo(
       () => createClient(),
@@ -548,6 +713,20 @@ export default function HooWorldDeliveryGate() {
   const [
     claimMessage,
     setClaimMessage,
+  ] = useState<string | null>(
+    null,
+  );
+
+  const [
+    consumingFoodItemId,
+    setConsumingFoodItemId,
+  ] = useState<string | null>(
+    null,
+  );
+
+  const [
+    activatingFireworksItemId,
+    setActivatingFireworksItemId,
   ] = useState<string | null>(
     null,
   );
@@ -635,6 +814,12 @@ export default function HooWorldDeliveryGate() {
                   item.collisionBottomRatio,
                 zIndex:
                   item.zIndex,
+                foodId:
+                  item.foodId,
+                foodInteractionType:
+                  item.foodInteractionType,
+                isFireworks:
+                  item.isFireworks,
               }),
             )
             .sort(
@@ -872,6 +1057,12 @@ export default function HooWorldDeliveryGate() {
                     parsed.collisionBottomRatio,
                   zIndex:
                     parsed.zIndex,
+                  foodId:
+                    parsed.foodId,
+                  foodInteractionType:
+                    parsed.foodInteractionType,
+                  isFireworks:
+                    parsed.isFireworks,
                 };
 
                 const existingIndex =
@@ -1189,21 +1380,436 @@ export default function HooWorldDeliveryGate() {
     hasDelivery,
   ]);
 
+  /*
+   * HOO DELIVERY 공용 통합 상자.
+   *
+   * 서버에서는 배송 건(delivery)이 여러 개로 나뉘어 있어도
+   * 후월드 화면에서는 항상 "상자 1개"로 합쳐 보여준다.
+   *
+   * - 배송 1건 = 상자 1개가 아님
+   * - 도착한 모든 미수령 아이템을 한 리스트로 합친다.
+   * - 통합 리스트의 순번을 slotIndex로 다시 부여해서
+   *   여러 배송의 SLOT 1 아이템들이 필드에서 같은 좌표에 겹치지 않게 한다.
+   * - 실제 수령 RPC는 deliveryItemId를 사용하므로 DB 구조는 그대로 유지된다.
+   */
   const activeDelivery =
     useMemo(
-      () =>
-        activeDeliveryId
-          ? deliveryBoxes.find(
+      () => {
+        if (
+          !activeDeliveryId ||
+          deliveryBoxes.length ===
+            0
+        ) {
+          return null;
+        }
+
+        const mergedItems =
+          deliveryBoxes
+            .flatMap(
               (delivery) =>
-                delivery.deliveryId ===
-                activeDeliveryId,
-            ) ?? null
-          : null,
+                delivery.items,
+            )
+            .map(
+              (
+                item,
+                index,
+              ) => ({
+                ...item,
+                slotIndex:
+                  index + 1,
+              }),
+            );
+
+        return {
+          deliveryId:
+            "hoo-world-unified-delivery-box",
+          status:
+            "arrived",
+          arrivedAt:
+            deliveryBoxes[0]
+              ?.arrivedAt ??
+            null,
+          items:
+            mergedItems,
+        } satisfies DeliveryBox;
+      },
       [
         activeDeliveryId,
         deliveryBoxes,
       ],
     );
+
+  async function consumeDeliveredFood(
+    item: DeliveredFieldItem,
+  ) {
+    if (
+      consumingFoodItemId ||
+      interactionLocked ||
+      !item.foodId
+    ) {
+      return;
+    }
+
+    const food =
+      getHooWorldFoodDefinition(
+        item.foodId,
+      );
+
+    if (!food) {
+      return;
+    }
+
+    setConsumingFoodItemId(
+      item.itemId,
+    );
+
+    try {
+      /*
+       * 단체 음식은 DeliveryGate에서 바로 소비하지 않는다.
+       *
+       * 현재 필드 Presence를 알고 있는 HooWorldPage가
+       * 참여자(본인 + 가장 가까운 최대 3명)를 먼저 선정하고,
+       * 전용 RPC가 음식 소비 + 단체 세션 생성을 하나의 트랜잭션으로 처리한다.
+       */
+      if (
+        item.foodInteractionType ===
+          "group"
+      ) {
+        if (
+          !onGroupFoodRequested
+        ) {
+          return;
+        }
+
+        const started =
+          await onGroupFoodRequested({
+            itemId:
+              item.itemId,
+            foodId:
+              food.id,
+            x:
+              item.x,
+            y:
+              item.y,
+          });
+
+        if (started) {
+          setDeliveredFieldItems(
+            (current) =>
+              current.filter(
+                (currentItem) =>
+                  currentItem.itemId !==
+                  item.itemId,
+              ),
+          );
+        }
+
+        return;
+      }
+
+      const {
+        data,
+        error,
+      } =
+        await supabase.rpc(
+          "consume_hoo_world_delivered_food",
+          {
+            p_item_id:
+              item.itemId,
+          },
+        );
+
+      if (error) {
+        const errorMessage =
+          error.message ?? "";
+
+        if (
+          errorMessage.includes(
+            "FOOD_ALREADY_CONSUMED",
+          ) ||
+          errorMessage.includes(
+            "FOOD_NOT_FOUND",
+          )
+        ) {
+          await refreshDeliveredFieldItems();
+          return;
+        }
+
+        console.warn(
+          `HOO WORLD 배송 음식 소비 RPC 실패 | ${errorMessage}`,
+        );
+
+        return;
+      }
+
+      const result =
+        data &&
+        typeof data ===
+          "object" &&
+        !Array.isArray(data)
+          ? data as Record<
+              string,
+              unknown
+            >
+          : null;
+
+      if (
+        result?.ok ===
+        false
+      ) {
+        const errorCode =
+          typeof result.error_code ===
+            "string"
+            ? result.error_code
+            : "FOOD_CONSUME_FAILED";
+
+        const errorMessage =
+          typeof result.error_message ===
+            "string"
+            ? result.error_message
+            : "배송 음식을 먹지 못했습니다.";
+
+        console.warn(
+          `HOO WORLD 배송 음식 소비 실패 | code=${errorCode} | message=${errorMessage}`,
+        );
+
+        if (
+          errorCode ===
+            "FOOD_ALREADY_CONSUMED" ||
+          errorCode ===
+            "FOOD_NOT_FOUND"
+        ) {
+          await refreshDeliveredFieldItems();
+        }
+
+        return;
+      }
+
+      const resolvedFoodId =
+        typeof result?.food_id ===
+          "string" &&
+        result.food_id.trim()
+          ? result.food_id.trim()
+          : food.id;
+
+      setDeliveredFieldItems(
+        (current) =>
+          current.filter(
+            (currentItem) =>
+              currentItem.itemId !==
+              item.itemId,
+          ),
+      );
+
+      onFoodConsumed?.({
+        itemId:
+          item.itemId,
+        foodId:
+          resolvedFoodId,
+      });
+    } finally {
+      setConsumingFoodItemId(
+        null,
+      );
+    }
+  }
+
+  async function startDeliveredFireworks(
+    item: DeliveredFieldItem,
+  ) {
+    if (
+      activatingFireworksItemId ||
+      interactionLocked ||
+      !item.isFireworks ||
+      !onFireworksRequested
+    ) {
+      return;
+    }
+
+    setActivatingFireworksItemId(
+      item.itemId,
+    );
+
+    try {
+      const started =
+        await onFireworksRequested({
+          itemId:
+            item.itemId,
+          x:
+            item.x,
+          y:
+            item.y,
+        });
+
+      if (!started) {
+        return;
+      }
+
+      /*
+       * 서버 RPC가 hoo_world_item_states.is_installed=false로
+       * 바꾸기 때문에 Realtime에서도 사라진다.
+       * 성공 직후 로컬에서도 먼저 제거해 점화 지연을 없앤다.
+       */
+      setDeliveredFieldItems(
+        (current) =>
+          current.filter(
+            (currentItem) =>
+              currentItem.itemId !==
+              item.itemId,
+          ),
+      );
+    } finally {
+      setActivatingFireworksItemId(
+        null,
+      );
+    }
+  }
+
+  /*
+   * 배송 상자에서 꺼낸 음식 / 불꽃놀이 F 상호작용.
+   *
+   * - 가장 가까운 상호작용 아이템 1개만 선택
+   * - 음식: 기존 먹기 / 단체 식사
+   * - 불꽃놀이: 서버에서 1회 점화 세션 시작
+   */
+  useEffect(() => {
+    function handleDeliveredItemKeyDown(
+      event: KeyboardEvent,
+    ) {
+      if (
+        event.code !== "KeyF" ||
+        event.repeat ||
+        activeDeliveryId ||
+        interactionLocked ||
+        consumingFoodItemId ||
+        activatingFireworksItemId ||
+        isEditableTarget(
+          event.target,
+        ) ||
+        typeof window ===
+          "undefined"
+      ) {
+        return;
+      }
+
+      const player =
+        playerPositionRef.current;
+
+      let nearest:
+        | (
+            DeliveredFieldItem & {
+              distance: number;
+            }
+          )
+        | null =
+        null;
+
+      for (
+        const item of
+        deliveredFieldItems
+      ) {
+        const isFood =
+          Boolean(
+            item.foodId &&
+            getHooWorldFoodDefinition(
+              item.foodId,
+            ),
+          );
+
+        if (
+          !isFood &&
+          !item.isFireworks
+        ) {
+          continue;
+        }
+
+        const deltaX =
+          (
+            player.x -
+            item.x
+          ) /
+          100 *
+          window.innerWidth;
+
+        const deltaY =
+          (
+            player.y -
+            item.y
+          ) /
+          100 *
+          window.innerHeight;
+
+        const distance =
+          Math.hypot(
+            deltaX,
+            deltaY,
+          );
+
+        const interactionDistance =
+          item.isFireworks
+            ? HOO_WORLD_FIREWORKS_INTERACTION_DISTANCE_PX
+            : HOO_WORLD_FOOD_INTERACTION_DISTANCE_PX;
+
+        if (
+          distance >
+            interactionDistance ||
+          (
+            nearest &&
+            nearest.distance <=
+              distance
+          )
+        ) {
+          continue;
+        }
+
+        nearest = {
+          ...item,
+          distance,
+        };
+      }
+
+      if (!nearest) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      if (
+        nearest.isFireworks
+      ) {
+        void startDeliveredFireworks(
+          nearest,
+        );
+        return;
+      }
+
+      void consumeDeliveredFood(
+        nearest,
+      );
+    }
+
+    window.addEventListener(
+      "keydown",
+      handleDeliveredItemKeyDown,
+      true,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "keydown",
+        handleDeliveredItemKeyDown,
+        true,
+      );
+    };
+  }, [
+    activeDeliveryId,
+    activatingFireworksItemId,
+    consumingFoodItemId,
+    deliveredFieldItems,
+    interactionLocked,
+    playerPositionRef,
+  ]);
 
   async function claimDeliveryItem(
     item: DeliveryItem,
@@ -1338,8 +1944,19 @@ export default function HooWorldDeliveryGate() {
           ? result.item_name.trim()
           : item.itemName;
 
+      const isFireworksDeliveryItem =
+        item.itemType ===
+          "fireworks" ||
+        item.itemMetadata.interaction_type ===
+          "fireworks";
+
       setClaimMessage(
-        `${claimedItemName}을(를) 필드에 꺼냈어요. 상자를 닫고 X로 이동할 수 있어요.`,
+        item.itemType ===
+          "food"
+          ? `${claimedItemName}을(를) 입구에 꺼냈어요. X로 옮긴 뒤 가까이에서 F로 먹을 수 있어요.`
+          : isFireworksDeliveryItem
+            ? `${claimedItemName}을(를) 필드에 꺼냈어요. X로 원하는 위치까지 옮긴 뒤 F로 점화할 수 있어요.`
+            : `${claimedItemName}을(를) 필드에 꺼냈어요. 상자를 닫고 X로 이동할 수 있어요.`,
       );
 
       /*
@@ -1429,10 +2046,10 @@ export default function HooWorldDeliveryGate() {
         return;
       }
 
-      const firstDelivery =
-        deliveryBoxes[0];
-
-      if (!firstDelivery) {
+      if (
+        deliveryBoxes.length ===
+          0
+      ) {
         return;
       }
 
@@ -1443,8 +2060,12 @@ export default function HooWorldDeliveryGate() {
         null,
       );
 
+      /*
+       * 실제 delivery_id 하나를 여는 것이 아니라
+       * 현재 도착한 모든 배송을 합친 공용 상자를 연다.
+       */
       setActiveDeliveryId(
-        firstDelivery.deliveryId,
+        "hoo-world-unified-delivery-box",
       );
     }
 
@@ -1486,110 +2107,343 @@ export default function HooWorldDeliveryGate() {
       {/* ─────────────────────────
           상자에서 꺼내진 실제 월드 아이템
 
-          - 모든 로그인 이용자에게 동일하게 보임
-          - HooWorldItem 공용 이동/충돌/Reatime 시스템 사용
-          - X + WASD / 방향키 이동
-          - 다시 배송 상자에 넣는 UI/경로 없음
+          일반 아이템:
+          - 기존 HooWorldItem 이동/충돌/Reatime 시스템 유지
+
+          음식:
+          - HooWorldItem 이동 시스템 + HooWorldFoodItem 시각/F 상호작용
+
+          불꽃놀이:
+          - HooWorldItem으로 X + WASD 이동
+          - 가까이에서 F → 서버 1회 점화 세션
       ───────────────────────── */}
       {deliveredFieldItems.map(
         (
           item,
-        ) => (
-          <HooWorldItem
-            key={
-              item.itemId
-            }
-            itemId={
-              item.itemId
-            }
-            itemType={
-              item.itemType
-            }
-            x={
-              item.x
-            }
-            y={
-              item.y
-            }
-            width={
-              item.width
-            }
-            height={
-              item.height
-            }
-            movable
-            collision
-            collisionBottomRatio={
-              item.collisionBottomRatio
-            }
-            zIndex={
-              item.zIndex
-            }
-            onPositionChange={(
-              position,
-            ) => {
-              setDeliveredFieldItems(
-                (current) =>
-                  current.map(
-                    (
-                      currentItem,
-                    ) =>
-                      currentItem.itemId ===
-                      item.itemId
-                        ? {
-                            ...currentItem,
-                            x:
-                              position.x,
-                            y:
-                              position.y,
-                          }
-                        : currentItem,
-                  ),
+        ) => {
+          if (
+            item.foodId
+          ) {
+            const food =
+              getHooWorldFoodDefinition(
+                item.foodId,
               );
-            }}
-          >
-            <div
-              data-hoo-world-delivered-item="true"
-              className="relative h-full w-full"
-            >
-              {/* 실제 접지 충돌 영역 */}
-              <div
-                data-hoo-world-collision-anchor="true"
-                className="pointer-events-none absolute bottom-[6%] left-1/2 h-[9%] w-[72%] -translate-x-1/2"
-              />
 
-              {/* 바닥 그림자 */}
-              <div className="pointer-events-none absolute bottom-[1%] left-1/2 h-[18%] w-[72%] -translate-x-1/2 rounded-[50%] bg-[#28392a]/18 blur-[4px]" />
+            if (!food) {
+              return null;
+            }
 
-              {/* 운영진 등록 아이템 이미지 */}
-              <div className="pointer-events-none absolute inset-x-[5%] bottom-[12%] top-[4%] flex items-center justify-center">
-                {item.itemImageUrl ? (
-                  <img
-                    src={
-                      item.itemImageUrl
+            const isGroupFood =
+              item.foodInteractionType ===
+                "group";
+
+            /*
+             * 음식도 일반 월드 아이템과 동일한 이동 시스템을 사용한다.
+             *
+             * - X: 이동 모드 ON/OFF
+             * - WASD / 방향키: 음식 이동
+             * - 이동 좌표는 HooWorldItem의 기존 RPC + Realtime으로 공유
+             * - F: 기존 음식 먹기 / 단체 음식 시작 그대로 유지
+             *
+             * HooWorldFoodItem은 embedded 모드로 시각과 F 안내만 담당하고,
+             * 실제 좌표/충돌/이동은 바깥 HooWorldItem이 담당한다.
+             */
+            return (
+              <HooWorldItem
+                key={
+                  item.itemId
+                }
+                itemId={
+                  item.itemId
+                }
+                itemType={
+                  item.itemType
+                }
+                x={
+                  item.x
+                }
+                y={
+                  item.y
+                }
+                width={
+                  62
+                }
+                height={
+                  54
+                }
+                movable
+                collision
+                collisionBottomRatio={
+                  item.collisionBottomRatio
+                }
+                zIndex={
+                  item.zIndex
+                }
+                onPositionChange={(
+                  position,
+                ) => {
+                  setDeliveredFieldItems(
+                    (current) =>
+                      current.map(
+                        (
+                          currentItem,
+                        ) =>
+                          currentItem.itemId ===
+                          item.itemId
+                            ? {
+                                ...currentItem,
+                                x:
+                                  position.x,
+                                y:
+                                  position.y,
+                              }
+                            : currentItem,
+                      ),
+                  );
+                }}
+              >
+                <div
+                  className="relative h-full w-full"
+                  data-hoo-world-group-food-size={
+                    isGroupFood
+                      ? "4x"
+                      : "1x"
+                  }
+                >
+                  <HooWorldFoodItem
+                    item={{
+                      itemId:
+                        item.itemId,
+                      foodId:
+                        food.id as HooWorldFoodId,
+                      x:
+                        item.x,
+                      y:
+                        item.y,
+                    }}
+                    food={
+                      food
                     }
-                    alt={
-                      item.itemName
+                    playerPositionRef={
+                      playerPositionRef
                     }
-                    draggable={
-                      false
+                    interactionLocked={
+                      interactionLocked ||
+                      consumingFoodItemId !==
+                        null
                     }
-                    className="max-h-full max-w-full select-none object-contain drop-shadow-[0_4px_5px_rgba(39,32,26,0.18)]"
+                    embedded
                   />
-                ) : (
-                  <div className="flex h-[72%] w-[72%] items-center justify-center rounded-[22%] border border-[#805d43]/35 bg-gradient-to-br from-[#d7aa70] to-[#8f6544] text-[clamp(18px,3vw,34px)] shadow-[0_5px_10px_rgba(49,39,29,0.18)]">
-                    📦
-                  </div>
-                )}
-              </div>
 
-              {/* 아이템 이름 */}
-              <div className="pointer-events-none absolute left-1/2 top-full mt-[-2px] max-w-[150%] -translate-x-1/2 whitespace-nowrap rounded-full border border-white/35 bg-[#33462f]/72 px-2 py-0.5 text-[7px] font-black text-white/90 shadow-sm backdrop-blur-[2px]">
-                {item.itemName}
+                  {isGroupFood ? (
+                    <style>{`
+                      [data-hoo-world-group-food-size="4x"]
+                      > [data-hoo-world-food-item="true"]
+                      > [data-hoo-world-collision-anchor="true"] {
+                        background: transparent;
+                        border-color: transparent;
+                        box-shadow: none;
+                        border-radius: 0;
+                      }
+
+                      [data-hoo-world-group-food-size="4x"]
+                      > [data-hoo-world-food-item="true"]
+                      > [data-hoo-world-collision-anchor="true"]
+                      > div:first-child {
+                        display: none;
+                      }
+
+                      [data-hoo-world-group-food-size="4x"]
+                      > [data-hoo-world-food-item="true"]
+                      > [data-hoo-world-collision-anchor="true"]
+                      > img,
+                      [data-hoo-world-group-food-size="4x"]
+                      > [data-hoo-world-food-item="true"]
+                      > [data-hoo-world-collision-anchor="true"]
+                      > span {
+                        transform: scale(4);
+                        transform-origin: 50% 50%;
+                      }
+                    `}</style>
+                  ) : null}
+                </div>
+              </HooWorldItem>
+            );
+          }
+
+          if (
+            item.isFireworks
+          ) {
+            return (
+              <HooWorldItem
+                key={
+                  item.itemId
+                }
+                itemId={
+                  item.itemId
+                }
+                itemType={
+                  "fireworks"
+                }
+                x={
+                  item.x
+                }
+                y={
+                  item.y
+                }
+                width={
+                  item.width
+                }
+                height={
+                  item.height
+                }
+                movable
+                collision
+                collisionBottomRatio={
+                  item.collisionBottomRatio
+                }
+                zIndex={
+                  item.zIndex
+                }
+                onPositionChange={(
+                  position,
+                ) => {
+                  setDeliveredFieldItems(
+                    (current) =>
+                      current.map(
+                        (
+                          currentItem,
+                        ) =>
+                          currentItem.itemId ===
+                          item.itemId
+                            ? {
+                                ...currentItem,
+                                x:
+                                  position.x,
+                                y:
+                                  position.y,
+                              }
+                            : currentItem,
+                      ),
+                  );
+                }}
+              >
+                <HooWorldFireworksItem
+                  itemId={
+                    item.itemId
+                  }
+                  x={
+                    item.x
+                  }
+                  y={
+                    item.y
+                  }
+                  playerPositionRef={
+                    playerPositionRef
+                  }
+                  interactionLocked={
+                    interactionLocked ||
+                    activatingFireworksItemId !==
+                      null
+                  }
+                />
+              </HooWorldItem>
+            );
+          }
+
+          return (
+            <HooWorldItem
+              key={
+                item.itemId
+              }
+              itemId={
+                item.itemId
+              }
+              itemType={
+                item.itemType
+              }
+              x={
+                item.x
+              }
+              y={
+                item.y
+              }
+              width={
+                item.width
+              }
+              height={
+                item.height
+              }
+              movable
+              collision
+              collisionBottomRatio={
+                item.collisionBottomRatio
+              }
+              zIndex={
+                item.zIndex
+              }
+              onPositionChange={(
+                position,
+              ) => {
+                setDeliveredFieldItems(
+                  (current) =>
+                    current.map(
+                      (
+                        currentItem,
+                      ) =>
+                        currentItem.itemId ===
+                        item.itemId
+                          ? {
+                              ...currentItem,
+                              x:
+                                position.x,
+                              y:
+                                position.y,
+                            }
+                          : currentItem,
+                    ),
+                );
+              }}
+            >
+              <div
+                data-hoo-world-delivered-item="true"
+                className="relative h-full w-full"
+              >
+                <div
+                  data-hoo-world-collision-anchor="true"
+                  className="pointer-events-none absolute bottom-[6%] left-1/2 h-[9%] w-[72%] -translate-x-1/2"
+                />
+
+                <div className="pointer-events-none absolute bottom-[1%] left-1/2 h-[18%] w-[72%] -translate-x-1/2 rounded-[50%] bg-[#28392a]/18 blur-[4px]" />
+
+                <div className="pointer-events-none absolute inset-x-[5%] bottom-[12%] top-[4%] flex items-center justify-center">
+                  {item.itemImageUrl ? (
+                    <img
+                      src={
+                        item.itemImageUrl
+                      }
+                      alt={
+                        item.itemName
+                      }
+                      draggable={
+                        false
+                      }
+                      className="max-h-full max-w-full select-none object-contain drop-shadow-[0_4px_5px_rgba(39,32,26,0.18)]"
+                    />
+                  ) : (
+                    <div className="flex h-[72%] w-[72%] items-center justify-center rounded-[22%] border border-[#805d43]/35 bg-gradient-to-br from-[#d7aa70] to-[#8f6544] text-[clamp(18px,3vw,34px)] shadow-[0_5px_10px_rgba(49,39,29,0.18)]">
+                      📦
+                    </div>
+                  )}
+                </div>
+
+                <div className="pointer-events-none absolute left-1/2 top-full mt-[-2px] max-w-[150%] -translate-x-1/2 whitespace-nowrap rounded-full border border-white/35 bg-[#33462f]/72 px-2 py-0.5 text-[7px] font-black text-white/90 shadow-sm backdrop-blur-[2px]">
+                  {item.itemName}
+                </div>
               </div>
-            </div>
-          </HooWorldItem>
-        ),
+            </HooWorldItem>
+          );
+        },
       )}
 
       {/* ─────────────────────────
@@ -1753,10 +2607,7 @@ export default function HooWorldDeliveryGate() {
 
         {/* 최대 5개 아이템을 상징하는 작은 표시 */}
         <div className="absolute -right-[10px] -top-[8px] flex h-[24px] min-w-[24px] items-center justify-center rounded-full border border-[#e8cf9d]/55 bg-[#574333]/92 px-[6px] text-[7px] font-black text-[#ffe6b3] shadow-[0_3px_7px_rgba(31,26,22,0.26)]">
-          {Math.min(
-            5,
-            itemCount,
-          )}
+          {itemCount}
         </div>
       </div>
 
@@ -1821,7 +2672,7 @@ export default function HooWorldDeliveryGate() {
                   </h2>
 
                   <p className="mt-1 text-xs font-bold text-[#f0d9b5]/72">
-                    월드에 도착한 공용 배송이에요. 누구나 열어보고 꺼낼 수 있어요.
+                    도착한 모든 배송이 이 상자 하나에 모여 있어요. 누구나 열어보고 꺼낼 수 있어요.
                   </p>
 
                   <button
@@ -1838,15 +2689,11 @@ export default function HooWorldDeliveryGate() {
                   </button>
                 </div>
 
-                <div className="px-5 py-5">
+                <div className="max-h-[min(68vh,620px)] overflow-y-auto px-5 py-5">
                   <div className="grid gap-3 sm:grid-cols-2">
                     {activeDelivery.items.length >
                     0 ? (
                       activeDelivery.items
-                        .slice(
-                          0,
-                          5,
-                        )
                         .map(
                           (
                             item,
@@ -1873,14 +2720,25 @@ export default function HooWorldDeliveryGate() {
                                     className="text-2xl"
                                     aria-hidden="true"
                                   >
-                                    📦
+                                    {item.itemType ===
+                                      "food" &&
+                                    typeof item.itemMetadata.fallback_emoji ===
+                                      "string" &&
+                                    item.itemMetadata.fallback_emoji.trim()
+                                      ? item.itemMetadata.fallback_emoji
+                                      : item.itemType ===
+                                            "fireworks" ||
+                                          item.itemMetadata.interaction_type ===
+                                            "fireworks"
+                                        ? "🎆"
+                                        : "📦"}
                                   </span>
                                 )}
                               </div>
 
                               <div className="min-w-0 flex-1">
                                 <p className="text-[10px] font-black tracking-[0.13em] text-[#a18265]">
-                                  SLOT{" "}
+                                  ITEM{" "}
                                   {item.slotIndex}
                                 </p>
 
@@ -1925,7 +2783,7 @@ export default function HooWorldDeliveryGate() {
                     </div>
                   ) : (
                     <div className="mt-4 rounded-[16px] border border-[#a98564]/20 bg-[#dfc59d]/22 px-4 py-3 text-[11px] font-bold leading-5 text-[#765c45]">
-                      상자에는 최대 5개의 아이템이 들어갑니다.
+                      여러 번 도착한 배송도 이 상자 하나에 모두 합쳐서 표시됩니다.
                       누구나 먼저 꺼낼 수 있고, 필드에 나온 순간 모든 이용자에게 보입니다.
                       한 번 꺼낸 아이템은 다시 상자에 넣을 수 없습니다.
                     </div>

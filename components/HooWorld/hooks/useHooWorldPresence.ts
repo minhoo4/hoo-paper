@@ -21,7 +21,40 @@ export type HooWorldPlayerStatus =
   | "fishing"
   | "cooking"
   | "playing_music"
-  | "resting";
+  | "resting"
+  | "interacting"
+  | "eating"
+  | "group_eating"
+  | "dancing";
+
+/*
+ * 캐릭터의 자유 이동을 막아야 하는 상태.
+ *
+ * 음식 종류가 늘어나더라도 개별 음식이 이동 잠금 로직을
+ * 따로 갖지 않도록 상태 기준으로 한 곳에서만 관리한다.
+ *
+ * dancing은 이동 잠금 대상이 아니다.
+ * 음식 섭취 후에는 1분 30초 동안 덩실덩실 춤 모션을 유지한 채
+ * 평소처럼 자유롭게 필드를 이동할 수 있다.
+ *
+ * 향후 스크립트 연출이 캐릭터를 강제로 이동시켜야 할 때는
+ * updatePosition(..., { force: true })를 사용한다.
+ */
+const HOO_WORLD_MOVEMENT_LOCKED_STATUS_SET =
+  new Set<HooWorldPlayerStatus>([
+    "focusing",
+    "interacting",
+    "eating",
+    "group_eating",
+  ]);
+
+export function isHooWorldMovementLockedStatus(
+  status: HooWorldPlayerStatus,
+) {
+  return HOO_WORLD_MOVEMENT_LOCKED_STATUS_SET.has(
+    status,
+  );
+}
 
 export type HooWorldPresencePlayer = {
   userId: string;
@@ -79,6 +112,25 @@ export type HooWorldPresencePlayer = {
    * false = 정지
    */
   moving?: boolean;
+
+  /*
+   * 음식 섭취 누적 효과.
+   *
+   * 0/undefined = 효과 없음
+   * 1 = 덩실덩실
+   * 2 = 덩실덩실 2배
+   * 3 = 360도 회전
+   *
+   * Presence에 함께 싣기 때문에 같은 필드의 다른 이용자와
+   * 중간 입장자도 현재 효과 단계를 그대로 복원할 수 있다.
+   */
+  foodEffectLevel?: number;
+
+  /*
+   * 음식 누적 효과 만료 시각.
+   * ISO 문자열로 보관해 새 입장자도 남은 시간을 판단한다.
+   */
+  foodEffectEndsAt?: string | null;
 };
 
 
@@ -653,6 +705,20 @@ const fieldIdRef =
     useRef(false);
 
   /*
+   * 음식 누적 효과는 status=dancing과 별도로 단계/만료시각을 보관한다.
+   *
+   * status만으로는 1단계/2단계/3단계를 구분할 수 없으므로
+   * Presence payload에 이 두 값을 함께 싣는다.
+   */
+  const foodEffectLevelRef =
+    useRef(0);
+
+  const foodEffectEndsAtRef =
+    useRef<string | null>(
+      null,
+    );
+
+  /*
    * 프로필 조회가 순간적으로 실패해도 상대 화면의 스킨이
    * user-4 기본값으로 튀지 않도록 마지막 정상 값을 보관한다.
    */
@@ -727,6 +793,12 @@ const fieldIdRef =
 
       directoryPlayersRef.current =
         [];
+
+      foodEffectLevelRef.current =
+        0;
+
+      foodEffectEndsAtRef.current =
+        null;
 
       return;
     }
@@ -1237,6 +1309,12 @@ function scheduleReconnect() {
           facingRef.current,
         moving:
           movingRef.current,
+
+        foodEffectLevel:
+          foodEffectLevelRef.current,
+
+        foodEffectEndsAt:
+          foodEffectEndsAtRef.current,
       };
     }
 
@@ -2382,6 +2460,12 @@ movementChannel.on(
 
           moving:
             movingRef.current,
+
+          foodEffectLevel:
+            foodEffectLevelRef.current,
+
+          foodEffectEndsAt:
+            foodEffectEndsAtRef.current,
         };
 
       try {
@@ -2624,11 +2708,72 @@ movementChannel.on(
 
         moving:
           movingRef.current,
+
+        foodEffectLevel:
+          foodEffectLevelRef.current,
+
+        foodEffectEndsAt:
+          foodEffectEndsAtRef.current,
       };
 
     return await trackPresencePayloadWithRetry(
       payload,
     );
+  }
+
+  /*
+   * 음식 섭취 누적 효과 단계를 Presence에 즉시 반영한다.
+   *
+   * status=dancing은 기존 상태값을 그대로 사용하고,
+   * 이 함수는 1/2/3단계와 만료시각만 별도로 갱신한다.
+   */
+  async function updateFoodEffect(
+    nextLevel: number,
+    nextEndsAt: string | null,
+  ) {
+    const normalizedLevel =
+      Math.max(
+        0,
+        Math.min(
+          3,
+          Math.floor(
+            Number(
+              nextLevel,
+            ) || 0,
+          ),
+        ),
+      );
+
+    const normalizedEndsAt =
+      normalizedLevel > 0 &&
+      typeof nextEndsAt ===
+        "string" &&
+      Number.isFinite(
+        Date.parse(
+          nextEndsAt,
+        ),
+      )
+        ? nextEndsAt
+        : null;
+
+    foodEffectLevelRef.current =
+      normalizedLevel;
+
+    foodEffectEndsAtRef.current =
+      normalizedEndsAt;
+
+    /*
+     * 연결 전이라도 ref에는 먼저 저장한다.
+     * 이후 첫 Presence payload / 재연결 payload에서 자동으로 포함된다.
+     */
+    if (
+      !enabled ||
+      !isConnected
+    ) {
+      return false;
+    }
+
+    return await refreshPresence();
   }
 
   async function updateStatus(
@@ -2640,12 +2785,27 @@ movementChannel.on(
     statusRef.current =
       nextStatus;
 
+    const shouldLockMovement =
+      isHooWorldMovementLockedStatus(
+        nextStatus,
+      );
+
+    /*
+     * 포커스 / 음식 상호작용 / 식사 상태는
+     * 음식 종류와 관계없이 공통으로 자유 이동을 막는다.
+     *
+     * dancing은 여기서 잠그지 않는다.
+     * 춤 모션을 유지한 채 일반 이동 Broadcast를 계속 사용할 수 있다.
+     */
+    if (shouldLockMovement) {
+      movingRef.current =
+        false;
+    }
+
     if (
       nextStatus ===
       "focusing"
     ) {
-      movingRef.current =
-        false;
 
       /*
        * Focus Mode 버튼을 누른 바로 그 좌표를
@@ -2862,6 +3022,12 @@ movementChannel.on(
 
         moving:
           movingRef.current,
+
+        foodEffectLevel:
+          foodEffectLevelRef.current,
+
+        foodEffectEndsAt:
+          foodEffectEndsAtRef.current,
       };
 
     const tracked =
@@ -2875,15 +3041,16 @@ movementChannel.on(
 
     /*
      * 이미 월드에 있는 이용자는 Broadcast로 즉시 정지 좌표를 받는다.
-     * Presence sync를 기다리지 않고 포커스 시작 지점에서 바로 멈춘다.
+     * Presence sync를 기다리지 않고 포커스/상호작용/식사/춤 시작
+     * 지점에서 바로 멈추도록 한다.
+     *
+     * 음식별 로직에서 별도 정지 패킷을 만들지 않고
+     * 상태 전환 한 번으로 공통 처리한다.
      *
      * Broadcast 한 번의 실패가 Presence 성공까지 무효화하지 않도록
      * 별도 best-effort 처리한다.
      */
-    if (
-      nextStatus ===
-      "focusing"
-    ) {
+    if (shouldLockMovement) {
       const movementChannel =
         movementChannelRef.current;
 
@@ -2923,11 +3090,33 @@ async function updatePosition(
     | "up"
     | "down" = "down",
   moving = true,
+  options?: {
+    force?: boolean;
+  },
 ) {
   if (
     !Number.isFinite(x) ||
     !Number.isFinite(y)
   ) {
+    return;
+  }
+
+  /*
+   * 이동 잠금 상태에서는 키보드/터치 이동으로 좌표가 바뀌지 않는다.
+   * dancing은 잠금 상태가 아니므로 춤을 추면서 자유롭게 이동한다.
+   *
+   * 단체 식사처럼 연출 자체가 캐릭터를 지정 위치로 옮겨야 할 때만
+   * 명시적으로 { force: true }를 넘겨 공통 잠금을 우회한다.
+   */
+  if (
+    !options?.force &&
+    isHooWorldMovementLockedStatus(
+      statusRef.current,
+    )
+  ) {
+    movingRef.current =
+      false;
+
     return;
   }
 
@@ -3038,6 +3227,8 @@ async function updatePosition(
     status,
 
     updateStatus,
+
+    updateFoodEffect,
 
     updatePosition,
 

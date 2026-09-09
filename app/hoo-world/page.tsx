@@ -17,6 +17,7 @@ import HooWorldPlayer, {
 } from "@/components/HooWorld/HooWorldPlayer";
 
 import {
+  isHooWorldMovementLockedStatus,
   useHooWorldPresence,
 } from "@/components/HooWorld/hooks/useHooWorldPresence";
 
@@ -32,8 +33,21 @@ import {
 import HooWorldCampfire from "@/components/HooWorld/items/HooWorldCampfire";
 import HooWorldDeliveryGate from "@/components/HooWorld/items/HooWorldDeliveryGate";
 import HooWorldFirewood from "@/components/HooWorld/items/HooWorldFirewood";
+import HooWorldFoodInteractionEffect from "@/components/HooWorld/items/HooWorldFoodInteractionEffect";
+import HooWorldFoodItem from "@/components/HooWorld/items/HooWorldFoodItem";
+import HooWorldFireworksShow, {
+  normalizeHooWorldFireworksSession,
+  type HooWorldFireworksSession,
+} from "@/components/HooWorld/items/HooWorldFireworksShow";
 import HooWorldMenuBoard from "@/components/HooWorld/items/HooWorldMenuBoard";
 import HooWorldStall from "@/components/HooWorld/items/HooWorldStall";
+import {
+  getHooWorldFoodDefinition,
+  HOO_WORLD_FIELD_FOOD_ITEMS,
+  HOO_WORLD_FOOD_ACTION_DURATION_MS,
+  HOO_WORLD_FOOD_DANCE_DURATION_MS,
+  HOO_WORLD_FOOD_INTERACTION_DISTANCE_PX,
+} from "@/components/HooWorld/items/hooWorldFoodCatalog";
 
 import {
   createClient,
@@ -57,6 +71,9 @@ const HOO_WORLD_ADMIN_CONTROL_TARGET_KEY =
 const HOO_WORLD_ADMIN_CONTROL_TARGET_EVENT =
   "hoo-world-admin-control-target-change";
 
+const HOO_WORLD_CONSUMED_FOOD_STORAGE_KEY =
+  "hoo-world-consumed-food-item-ids-v1";
+
 type HooWorldAdminControlTarget =
   | "self"
   | "operator";
@@ -76,6 +93,298 @@ type HooWorldAdminCharacterState = {
   isMoving: boolean;
   updatedAt: string | null;
 };
+
+type HooWorldActiveFoodInteraction = {
+  userId: string;
+  itemId: string;
+  foodId: string;
+  startedAt: number;
+};
+
+type HooWorldGroupFoodSession = {
+  sessionId: string;
+  itemId: string;
+  foodId: string;
+  fieldId: number;
+  initiatorUserId: string;
+  participantUserIds: string[];
+  centerX: number;
+  centerY: number;
+  startedAt: number;
+  eatStartedAt: number;
+  actionEndsAt: number;
+  bowlEndsAt: number;
+  danceEndsAt: number;
+};
+
+type HooWorldGroupFoodRequestPayload = {
+  itemId: string;
+  foodId: string;
+  x: number;
+  y: number;
+};
+
+type HooWorldFireworksRequestPayload = {
+  itemId: string;
+  x: number;
+  y: number;
+};
+
+const HOO_WORLD_GROUP_FOOD_MAX_PARTICIPANTS =
+  4;
+
+const HOO_WORLD_GROUP_FOOD_GATHER_DURATION_MS =
+  1200;
+
+/*
+ * 단체 음식 빈 그릇의 "뿅" 소멸.
+ *
+ * groupFoodClock은 100ms 단위로 갱신되므로
+ * 220ms 전에 트리거만 켜고, 실제 애니메이션은 CSS가 120ms 동안
+ * transform + opacity만 처리한다.
+ *
+ * React에서 매 프레임 반짝이 위치를 계산하지 않기 때문에
+ * 기존 소멸 연출보다 훨씬 가볍다.
+ */
+const HOO_WORLD_GROUP_FOOD_BOWL_POP_TRIGGER_MS =
+  220;
+
+const HOO_WORLD_GROUP_FOOD_BOWL_POP_ANIMATION_MS =
+  120;
+
+const HOO_WORLD_GROUP_FOOD_SLOT_OFFSETS = [
+  {
+    x: 0,
+    y: 3.4,
+  },
+  {
+    x: -3.2,
+    y: 0.8,
+  },
+  {
+    x: 3.2,
+    y: 0.8,
+  },
+  {
+    x: 0,
+    y: -2.6,
+  },
+] as const;
+
+function normalizeHooWorldGroupFoodSession(
+  value: unknown,
+): HooWorldGroupFoodSession | null {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const row =
+    value as Record<
+      string,
+      unknown
+    >;
+
+  const sessionId =
+    typeof row.session_id ===
+      "string"
+      ? row.session_id
+      : typeof row.sessionId ===
+          "string"
+        ? row.sessionId
+        : "";
+
+  const itemId =
+    typeof row.item_id ===
+      "string"
+      ? row.item_id
+      : typeof row.itemId ===
+          "string"
+        ? row.itemId
+        : "";
+
+  const foodId =
+    typeof row.food_id ===
+      "string"
+      ? row.food_id
+      : typeof row.foodId ===
+          "string"
+        ? row.foodId
+        : "";
+
+  const initiatorUserId =
+    typeof row.initiator_user_id ===
+      "string"
+      ? row.initiator_user_id
+      : typeof row.initiatorUserId ===
+          "string"
+        ? row.initiatorUserId
+        : "";
+
+  const rawParticipantUserIds =
+    Array.isArray(
+      row.participant_user_ids,
+    )
+      ? row.participant_user_ids
+      : Array.isArray(
+          row.participantUserIds,
+        )
+        ? row.participantUserIds
+        : [];
+
+  const participantUserIds =
+    rawParticipantUserIds
+      .filter(
+        (
+          userId,
+        ): userId is string =>
+          typeof userId ===
+            "string" &&
+          userId.length > 0,
+      )
+      .slice(
+        0,
+        HOO_WORLD_GROUP_FOOD_MAX_PARTICIPANTS,
+      );
+
+  const fieldId =
+    Number(
+      row.field_id ??
+        row.fieldId,
+    );
+
+  const centerX =
+    Number(
+      row.center_x ??
+        row.centerX,
+    );
+
+  const centerY =
+    Number(
+      row.center_y ??
+        row.centerY,
+    );
+
+  function parseTime(
+    snakeKey: string,
+    camelKey: string,
+  ) {
+    const raw =
+      row[
+        snakeKey
+      ] ??
+      row[
+        camelKey
+      ];
+
+    if (
+      typeof raw ===
+        "number" &&
+      Number.isFinite(raw)
+    ) {
+      return raw;
+    }
+
+    if (
+      typeof raw !==
+        "string"
+    ) {
+      return NaN;
+    }
+
+    return Date.parse(
+      raw,
+    );
+  }
+
+  const startedAt =
+    parseTime(
+      "started_at",
+      "startedAt",
+    );
+
+  const eatStartedAt =
+    parseTime(
+      "eat_started_at",
+      "eatStartedAt",
+    );
+
+  const actionEndsAt =
+    parseTime(
+      "action_ends_at",
+      "actionEndsAt",
+    );
+
+  const bowlEndsAt =
+    parseTime(
+      "bowl_ends_at",
+      "bowlEndsAt",
+    );
+
+  const danceEndsAt =
+    parseTime(
+      "dance_ends_at",
+      "danceEndsAt",
+    );
+
+  if (
+    !sessionId ||
+    !itemId ||
+    !foodId ||
+    !initiatorUserId ||
+    participantUserIds.length < 1 ||
+    !Number.isFinite(fieldId) ||
+    fieldId < 1 ||
+    !Number.isFinite(centerX) ||
+    !Number.isFinite(centerY) ||
+    !Number.isFinite(startedAt) ||
+    !Number.isFinite(eatStartedAt) ||
+    !Number.isFinite(actionEndsAt) ||
+    !Number.isFinite(bowlEndsAt) ||
+    !Number.isFinite(danceEndsAt)
+  ) {
+    return null;
+  }
+
+  return {
+    sessionId,
+    itemId,
+    foodId,
+    fieldId:
+      Math.max(
+        1,
+        Math.floor(
+          fieldId,
+        ),
+      ),
+    initiatorUserId,
+    participantUserIds,
+    centerX:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          centerX,
+        ),
+      ),
+    centerY:
+      Math.max(
+        0,
+        Math.min(
+          100,
+          centerY,
+        ),
+      ),
+    startedAt,
+    eatStartedAt,
+    actionEndsAt,
+    bowlEndsAt,
+    danceEndsAt,
+  };
+}
 
 function normalizeHooWorldAdminCharacterRow(
   value: unknown,
@@ -958,6 +1267,76 @@ const HooWorldBoundaryForest =
   );
 
 
+function readConsumedFoodItemIdsFromStorage() {
+  if (
+    typeof window ===
+    "undefined"
+  ) {
+    return new Set<string>();
+  }
+
+  try {
+    const raw =
+      window.localStorage.getItem(
+        HOO_WORLD_CONSUMED_FOOD_STORAGE_KEY,
+      );
+
+    if (!raw) {
+      return new Set<string>();
+    }
+
+    const parsed:
+      unknown =
+      JSON.parse(
+        raw,
+      );
+
+    if (!Array.isArray(parsed)) {
+      return new Set<string>();
+    }
+
+    return new Set(
+      parsed.filter(
+        (
+          value,
+        ): value is string =>
+          typeof value ===
+            "string" &&
+          value.trim().length >
+            0,
+      ),
+    );
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function writeConsumedFoodItemIdsToStorage(
+  ids: Set<string>,
+) {
+  if (
+    typeof window ===
+    "undefined"
+  ) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      HOO_WORLD_CONSUMED_FOOD_STORAGE_KEY,
+      JSON.stringify(
+        Array.from(ids),
+      ),
+    );
+  } catch {
+    /*
+     * localStorage를 사용할 수 없는 환경에서도
+     * Supabase 영구 기록은 계속 동작한다.
+     */
+  }
+}
+
+
 export default function HooWorldPage() {
   const router = useRouter();
 
@@ -1099,6 +1478,7 @@ export default function HooWorldPage() {
     isConnected,
     status,
     updateStatus,
+    updateFoodEffect,
     updatePosition,
     refreshPresence,
   } = useHooWorldPresence({
@@ -1118,6 +1498,284 @@ export default function HooWorldPage() {
 
   updatePositionRef.current =
     updatePosition;
+
+  /*
+   * 음식 / 포커스처럼 자유 이동이 잠기는 상태를
+   * 키보드 RAF에서도 즉시 확인할 수 있도록 최신 status를 ref에 보관한다.
+   *
+   * Presence 쪽 updatePosition 잠금만 믿으면
+   * 로컬 DOM은 계속 움직일 수 있으므로 월드 이동 엔진에서도 한 번 더 막는다.
+   */
+  const hooWorldStatusRef =
+    useRef(status);
+
+  hooWorldStatusRef.current =
+    status;
+
+  const [
+    activeFoodInteractions,
+    setActiveFoodInteractions,
+  ] = useState<
+    Record<
+      string,
+      HooWorldActiveFoodInteraction
+    >
+  >({});
+
+  const activeFoodInteractionsRef =
+    useRef<
+      Record<
+        string,
+        HooWorldActiveFoodInteraction
+      >
+    >({});
+
+  /*
+   * 영구적으로 소비된 음식 아이템.
+   *
+   * 음식 itemId는 월드 전체에서 유일한 값으로 취급한다.
+   * 한 번 먹힌 itemId는 Supabase
+   * hoo_world_consumed_food_items 테이블에 영구 기록되며,
+   * 새로고침 / 재접속 / 다른 필드 진입 후에도 다시 생성되지 않는다.
+   *
+   * 음식 종류가 늘어나도 itemId만 유일하게 만들면
+   * 이 영구 소비 로직은 수정할 필요가 없다.
+   */
+  const [
+    consumedFoodItemIds,
+    setConsumedFoodItemIds,
+  ] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const consumedFoodItemIdsRef =
+    useRef<Set<string>>(
+      new Set(),
+    );
+
+  /*
+   * 최초 DB 스냅샷을 받기 전에는 음식 아이템을 렌더링하지 않는다.
+   * 이미 소비된 음식이 새로고침 직후 잠깐 보였다가 사라지는
+   * 깜빡임도 함께 방지한다.
+   */
+  const [
+    isConsumedFoodStateReady,
+    setIsConsumedFoodStateReady,
+  ] = useState(false);
+
+  const consumedFoodRealtimeChannelRef =
+    useRef<RealtimeChannel | null>(
+      null,
+    );
+
+  const foodInteractionChannelRef =
+    useRef<RealtimeChannel | null>(
+      null,
+    );
+
+  const foodInteractionTimersRef =
+    useRef(
+      new Set<number>(),
+    );
+
+  /*
+   * 음식 섭취 누적 효과.
+   *
+   * 1개: 90초 덩실덩실
+   * 2개: 90초 재시작 + 덩실덩실 2배
+   * 3개 이상: 90초 재시작 + 한 방향 360도 회전 반복
+   *
+   * 단체 음식 / 1인 음식 모두 같은 스택을 공유한다.
+   */
+  const [
+    localFoodEffectLevel,
+    setLocalFoodEffectLevel,
+  ] = useState<0 | 1 | 2 | 3>(
+    0,
+  );
+
+  const localFoodEffectLevelRef =
+    useRef<0 | 1 | 2 | 3>(
+      0,
+    );
+
+  const localFoodEffectEndsAtRef =
+    useRef(0);
+
+  const localFoodEffectTimerRef =
+    useRef<number | null>(
+      null,
+    );
+
+  const [
+    groupFoodSessions,
+    setGroupFoodSessions,
+  ] = useState<
+    Record<
+      string,
+      HooWorldGroupFoodSession
+    >
+  >({});
+
+  /*
+   * 불꽃놀이 세션은 DB + Realtime으로 공유한다.
+   * 아이템이 F로 점화되는 순간 필드 아이템은 사라지고,
+   * 이 세션이 심지 → 15초 불꽃 → 피날레 → 30초 잔광을 이어간다.
+   */
+  const [
+    fireworksSessions,
+    setFireworksSessions,
+  ] = useState<
+    Record<
+      string,
+      HooWorldFireworksSession
+    >
+  >({});
+
+  const [
+    groupFoodClock,
+    setGroupFoodClock,
+  ] = useState(
+    () => Date.now(),
+  );
+
+  const handledLocalGroupFoodSessionIdsRef =
+    useRef(
+      new Set<string>(),
+    );
+
+  const groupFoodMoveFrameRef =
+    useRef<number | null>(
+      null,
+    );
+
+  /*
+   * 현재 이용자가 단체 음식을 실제로 먹고 있는 동안의 자리 번호.
+   *
+   * 0: 음식 아래쪽
+   * 1: 음식 왼쪽
+   * 2: 음식 오른쪽
+   * 3: 음식 위쪽
+   *
+   * 각 자리마다 음식 중심을 향하는 방향이 다르므로
+   * 캐릭터 전체를 들어 올려 머리를 박는 전용 애니메이션을
+   * 서로 다른 방향으로 적용한다.
+   */
+  function getGroupFoodEatingSlotIndex(
+    userId: string,
+  ) {
+    for (
+      const session of
+      Object.values(
+        groupFoodSessions,
+      )
+    ) {
+      if (
+        groupFoodClock <
+          session.eatStartedAt ||
+        groupFoodClock >=
+          session.actionEndsAt
+      ) {
+        continue;
+      }
+
+      const participantIndex =
+        session.participantUserIds.indexOf(
+          userId,
+        );
+
+      if (
+        participantIndex < 0
+      ) {
+        continue;
+      }
+
+      return Math.min(
+        participantIndex,
+        HOO_WORLD_GROUP_FOOD_SLOT_OFFSETS.length -
+          1,
+      );
+    }
+
+    return null;
+  }
+
+  function getGroupFoodGobbleAnimation(
+    userId: string,
+  ) {
+    const slotIndex =
+      getGroupFoodEatingSlotIndex(
+        userId,
+      );
+
+    return slotIndex === null
+      ? undefined
+      : `hooWorldGroupFoodGobble${slotIndex} 420ms ease-in-out infinite`;
+  }
+
+  function getActiveFoodEffectLevel(
+    playerStatus: string,
+    rawLevel: unknown,
+    rawEndsAt: unknown,
+  ): 0 | 1 | 2 | 3 {
+    if (
+      playerStatus !==
+        "dancing"
+    ) {
+      return 0;
+    }
+
+    const level =
+      Math.max(
+        0,
+        Math.min(
+          3,
+          Math.floor(
+            Number(
+              rawLevel,
+            ) || 0,
+          ),
+        ),
+      );
+
+    const endsAt =
+      typeof rawEndsAt ===
+        "string"
+        ? Date.parse(
+            rawEndsAt,
+          )
+        : Number.NaN;
+
+    if (
+      level < 1 ||
+      !Number.isFinite(
+        endsAt,
+      ) ||
+      endsAt <=
+        Date.now()
+    ) {
+      return 0;
+    }
+
+    return level as
+      | 1
+      | 2
+      | 3;
+  }
+
+  function getFoodEffectCharacterAnimation(
+    level: 0 | 1 | 2 | 3,
+  ) {
+    if (level === 2) {
+      return "hooWorldFoodEffectDouble 460ms ease-in-out infinite";
+    }
+
+    if (level === 3) {
+      return "hooWorldFoodEffectSpin 680ms linear infinite";
+    }
+
+    return undefined;
+  }
 
   const [
     adminCharacter,
@@ -4311,6 +4969,32 @@ export default function HooWorldPage() {
         return;
       }
 
+      /*
+       * 음식 상호작용 / 식사 / 포커스 중에는
+       * 로컬 DOM 이동 자체를 시작하지 않는다.
+       * dancing은 이동 가능 상태이므로 이 검사에 걸리지 않는다.
+       *
+       * updatePosition의 Presence 잠금과 별개로
+       * RAF 이동도 여기서 차단해야 화면상 미끄러짐이 생기지 않는다.
+       */
+      if (
+        isHooWorldMovementLockedStatus(
+          hooWorldStatusRef.current,
+        )
+      ) {
+        const handled =
+          setMovementInput(
+            event.code,
+            false,
+          );
+
+        if (handled) {
+          event.preventDefault();
+        }
+
+        return;
+      }
+
       const handled =
         setMovementInput(
           event.code,
@@ -4377,6 +5061,24 @@ export default function HooWorldPage() {
            * 캐릭터의 따라걷기 모션도 즉시 정지한다.
            */
           resetPlayerWalkMotion();
+        }
+
+        return;
+      }
+
+      if (
+        isHooWorldMovementLockedStatus(
+          hooWorldStatusRef.current,
+        )
+      ) {
+        const handled =
+          setMovementInput(
+            event.code,
+            false,
+          );
+
+        if (handled) {
+          event.preventDefault();
         }
 
         return;
@@ -4646,6 +5348,2197 @@ export default function HooWorldPage() {
         0;
     }, []);
 
+  /*
+   * ──────────────────────────────────────────────
+   * HOO WORLD 공통 음식 상호작용 엔진
+   *
+   * 음식 종류가 늘어나도 이 로직은 수정하지 않는다.
+   * 음식별 차이는 hooWorldFoodCatalog.ts의 데이터만 사용한다.
+   *
+   * 공통 순서:
+   * F → interacting → eating → 3.6초 연출 종료
+   * → dancing 90초 → idle
+   *
+   * 같은 필드에는 food-start Broadcast를 보내서
+   * 다른 이용자도 "들기 → 붓기 → 빈 그릇 던지기" 연출을 본다.
+   * 춤 상태는 기존 Presence status=dancing으로 유지되므로
+   * 늦게 들어온 이용자에게도 남은 세션 동안 춤 상태가 표시된다.
+   * ──────────────────────────────────────────────
+   */
+  function isFoodItemConsumed(
+    itemId: string,
+  ) {
+    return consumedFoodItemIdsRef.current.has(
+      itemId,
+    );
+  }
+
+  function markFoodItemConsumed(
+    itemId: string,
+  ) {
+    if (!itemId) {
+      return;
+    }
+
+    if (
+      consumedFoodItemIdsRef.current.has(
+        itemId,
+      )
+    ) {
+      return;
+    }
+
+    const next =
+      new Set(
+        consumedFoodItemIdsRef.current,
+      );
+
+    next.add(
+      itemId,
+    );
+
+    consumedFoodItemIdsRef.current =
+      next;
+
+    setConsumedFoodItemIds(
+      next,
+    );
+
+    /*
+     * DB가 순간적으로 느리거나 네트워크가 끊겨도
+     * 현재 브라우저에서는 새로고침 후 음식이 되살아나지 않게 한다.
+     *
+     * DB가 최종 전역 기준이고 localStorage는 즉시 복원용 보조 장치다.
+     */
+    writeConsumedFoodItemIdsToStorage(
+      next,
+    );
+  }
+
+  /*
+   * 새로고침 후에도 음식이 되살아나지 않도록
+   * localStorage + Supabase 영구 소비 기록을 합쳐서 복원한다.
+   *
+   * - localStorage: 같은 브라우저 새로고침 즉시 복원
+   * - Supabase: 다른 브라우저 / 다른 이용자 / 재접속까지 전역 동기화
+   *
+   * Supabase 조회가 일시적으로 실패해도 localStorage 기록은 유지한다.
+   */
+  useEffect(() => {
+    let cancelled =
+      false;
+
+    const localConsumedIds =
+      readConsumedFoodItemIdsFromStorage();
+
+    consumedFoodItemIdsRef.current =
+      localConsumedIds;
+
+    setConsumedFoodItemIds(
+      localConsumedIds,
+    );
+
+    async function loadConsumedFoodItems() {
+      const {
+        data,
+        error,
+      } =
+        await supabase
+          .from(
+            "hoo_world_consumed_food_items",
+          )
+          .select(
+            "item_id",
+          );
+
+      if (cancelled) {
+        return;
+      }
+
+      if (error) {
+        console.error(
+          "HOO WORLD 소비된 음식 목록을 불러오지 못했습니다.",
+          error,
+        );
+
+        /*
+         * DB가 순간적으로 실패해도 이미 이 브라우저에서 먹은 음식은
+         * localStorage 기준으로 되살아나지 않는다.
+         */
+        setIsConsumedFoodStateReady(
+          true,
+        );
+
+        return;
+      }
+
+      const next =
+        new Set(
+          localConsumedIds,
+        );
+
+      for (
+        const row of
+        data ?? []
+      ) {
+        const itemId =
+          typeof row?.item_id ===
+            "string"
+            ? row.item_id.trim()
+            : "";
+
+        if (itemId) {
+          next.add(
+            itemId,
+          );
+        }
+      }
+
+      consumedFoodItemIdsRef.current =
+        next;
+
+      setConsumedFoodItemIds(
+        next,
+      );
+
+      writeConsumedFoodItemIdsToStorage(
+        next,
+      );
+
+      setIsConsumedFoodStateReady(
+        true,
+      );
+    }
+
+    void loadConsumedFoodItems();
+
+    const channel =
+      supabase
+        .channel(
+          "hoo-world-consumed-food-items",
+        )
+        .on(
+          "postgres_changes",
+          {
+            event:
+              "INSERT",
+            schema:
+              "public",
+            table:
+              "hoo_world_consumed_food_items",
+          },
+          (payload) => {
+            const itemId =
+              typeof payload.new?.item_id ===
+                "string"
+                ? payload.new.item_id.trim()
+                : "";
+
+            if (!itemId) {
+              return;
+            }
+
+            markFoodItemConsumed(
+              itemId,
+            );
+          },
+        )
+        .subscribe();
+
+    consumedFoodRealtimeChannelRef.current =
+      channel;
+
+    return () => {
+      cancelled =
+        true;
+
+      if (
+        consumedFoodRealtimeChannelRef.current ===
+        channel
+      ) {
+        consumedFoodRealtimeChannelRef.current =
+          null;
+      }
+
+      void supabase.removeChannel(
+        channel,
+      );
+    };
+  }, [
+    supabase,
+  ]);
+
+  /*
+   * 음식 하나를 실제로 "소비"할 수 있는 권한을 DB에서 선점한다.
+   *
+   * item_id가 PRIMARY KEY라서 동시에 여러 사람이 같은 음식을 눌러도
+   * 단 한 명의 INSERT만 성공한다.
+   *
+   * 이미 소비된 음식이면 23505(unique_violation)를 받고
+   * 먹기 애니메이션을 시작하지 않는다.
+   */
+  async function claimFoodItemConsumption(
+    itemId: string,
+    foodId: string,
+  ) {
+    const userId =
+      currentUserIdRef.current;
+
+    if (
+      !userId ||
+      !itemId ||
+      !foodId
+    ) {
+      return false;
+    }
+
+    /*
+     * 1순위: DB 함수가 item_id를 원자적으로 선점한다.
+     *
+     * true  = 내가 처음 먹은 이용자
+     * false = 이미 다른 이용자가 먼저 소비함
+     */
+    const rpcResult =
+      await supabase.rpc(
+        "claim_hoo_world_food_item",
+        {
+          p_item_id:
+            itemId,
+          p_food_id:
+            foodId,
+        },
+      );
+
+    if (!rpcResult.error) {
+      const claimed =
+        rpcResult.data ===
+        true;
+
+      /*
+       * false여도 이미 DB에서 소비된 아이템이므로
+       * 현재 화면과 localStorage에서 즉시 제거한다.
+       */
+      markFoodItemConsumed(
+        itemId,
+      );
+
+      return claimed;
+    }
+
+    /*
+     * 이전 SQL만 적용된 환경과도 호환한다.
+     * RPC가 아직 없으면 기존 INSERT 방식으로 한 번 더 시도한다.
+     */
+    const {
+      error,
+    } =
+      await supabase
+        .from(
+          "hoo_world_consumed_food_items",
+        )
+        .insert({
+          item_id:
+            itemId,
+          food_id:
+            foodId,
+          consumed_by:
+            userId,
+        });
+
+    if (!error) {
+      markFoodItemConsumed(
+        itemId,
+      );
+
+      return true;
+    }
+
+    if (
+      error.code ===
+      "23505"
+    ) {
+      markFoodItemConsumed(
+        itemId,
+      );
+
+      return false;
+    }
+
+    console.error(
+      "HOO WORLD 음식 소비 기록 저장 실패:",
+      {
+        rpcError:
+          rpcResult.error,
+        insertError:
+          error,
+      },
+    );
+
+    return false;
+  }
+
+  function setFoodInteraction(
+    interaction:
+      HooWorldActiveFoodInteraction,
+  ) {
+    activeFoodInteractionsRef.current = {
+      ...activeFoodInteractionsRef.current,
+      [interaction.userId]:
+        interaction,
+    };
+
+    setActiveFoodInteractions(
+      activeFoodInteractionsRef.current,
+    );
+  }
+
+  function removeFoodInteraction(
+    userId: string,
+    startedAt: number,
+  ) {
+    const current =
+      activeFoodInteractionsRef.current[
+        userId
+      ];
+
+    if (
+      !current ||
+      current.startedAt !==
+        startedAt
+    ) {
+      return;
+    }
+
+    const next = {
+      ...activeFoodInteractionsRef.current,
+    };
+
+    delete next[
+      userId
+    ];
+
+    activeFoodInteractionsRef.current =
+      next;
+
+    setActiveFoodInteractions(
+      next,
+    );
+  }
+
+  function scheduleFoodTimer(
+    callback: () => void,
+    delay: number,
+  ) {
+    const timer =
+      window.setTimeout(
+        () => {
+          foodInteractionTimersRef.current.delete(
+            timer,
+          );
+
+          callback();
+        },
+        delay,
+      );
+
+    foodInteractionTimersRef.current.add(
+      timer,
+    );
+
+    return timer;
+  }
+
+  useEffect(() => {
+    return () => {
+      for (
+        const timer of
+        foodInteractionTimersRef.current
+      ) {
+        window.clearTimeout(
+          timer,
+        );
+      }
+
+      foodInteractionTimersRef.current.clear();
+    };
+  }, []);
+
+  /*
+   * 음식 한 번을 "다 먹은 순간" 호출하는 공용 누적 효과 엔진.
+   *
+   * 현재 90초 안에 또 먹으면 1 → 2 → 3단계로 올라간다.
+   * 3단계 이후 추가 음식은 3단계를 유지한 채 90초만 다시 시작한다.
+   *
+   * Presence의 foodEffectLevel / foodEffectEndsAt도 함께 갱신하므로
+   * 다른 이용자와 중간 입장자에게도 동일한 단계가 보인다.
+   */
+  function activateHooWorldFoodEffectStack() {
+    const now =
+      Date.now();
+
+    const isCurrentEffectActive =
+      localFoodEffectLevelRef.current >
+        0 &&
+      localFoodEffectEndsAtRef.current >
+        now;
+
+    const currentLevel:
+      0 | 1 | 2 | 3 =
+      isCurrentEffectActive
+        ? localFoodEffectLevelRef.current
+        : 0;
+
+    const nextLevel =
+      Math.min(
+        3,
+        currentLevel +
+          1,
+      ) as
+        | 1
+        | 2
+        | 3;
+
+    const nextEndsAt =
+      now +
+      HOO_WORLD_FOOD_DANCE_DURATION_MS;
+
+    localFoodEffectLevelRef.current =
+      nextLevel;
+
+    localFoodEffectEndsAtRef.current =
+      nextEndsAt;
+
+    setLocalFoodEffectLevel(
+      nextLevel,
+    );
+
+    if (
+      localFoodEffectTimerRef.current !==
+      null
+    ) {
+      window.clearTimeout(
+        localFoodEffectTimerRef.current,
+      );
+    }
+
+    /*
+     * status=dancing은 모든 단계에서 공통.
+     * 단계 차이는 Presence의 foodEffectLevel로 표현한다.
+     */
+    hooWorldStatusRef.current =
+      "dancing";
+
+    void updateStatus(
+      "dancing",
+    );
+
+    void updateFoodEffect(
+      nextLevel,
+      new Date(
+        nextEndsAt,
+      ).toISOString(),
+    );
+
+    localFoodEffectTimerRef.current =
+      window.setTimeout(
+        () => {
+          /*
+           * 그 사이 다른 음식을 먹어서 만료시각이 갱신됐다면
+           * 과거 타이머는 아무것도 하지 않는다.
+           */
+          if (
+            localFoodEffectEndsAtRef.current !==
+              nextEndsAt
+          ) {
+            return;
+          }
+
+          localFoodEffectLevelRef.current =
+            0;
+
+          localFoodEffectEndsAtRef.current =
+            0;
+
+          setLocalFoodEffectLevel(
+            0,
+          );
+
+          localFoodEffectTimerRef.current =
+            null;
+
+          void updateFoodEffect(
+            0,
+            null,
+          );
+
+          if (
+            hooWorldStatusRef.current ===
+              "dancing"
+          ) {
+            hooWorldStatusRef.current =
+              "idle";
+
+            void updateStatus(
+              "idle",
+            );
+          }
+        },
+        HOO_WORLD_FOOD_DANCE_DURATION_MS,
+      );
+  }
+
+  useEffect(() => {
+    return () => {
+      if (
+        localFoodEffectTimerRef.current !==
+        null
+      ) {
+        window.clearTimeout(
+          localFoodEffectTimerRef.current,
+        );
+
+        localFoodEffectTimerRef.current =
+          null;
+      }
+    };
+  }, []);
+
+  function mergeGroupFoodSession(
+    session: HooWorldGroupFoodSession,
+  ) {
+    /*
+     * 단체 음식은 1인 음식의
+     * HooWorldFoodInteractionEffect를 재사용하지 않는다.
+     *
+     * 단체 음식 전용 연출:
+     * - 캐릭터 전체가 음식 쪽으로 머리를 박고 와구와구 먹기
+     * - 약 5초 동안 반복
+     * - 음식 본체는 중앙에서 점점 줄어듦
+     * - 종료 즉시 빈 그릇 + dancing 상태로 전환
+     *
+     * 따라서 여기서는 DB 세션 스냅샷만 병합하고,
+     * activeFoodInteractions에는 추가하지 않는다.
+     */
+    setGroupFoodSessions(
+      (current) => ({
+        ...current,
+        [session.sessionId]:
+          session,
+      }),
+    );
+  }
+
+  function applyLocalGroupFoodPosition(
+    x: number,
+    y: number,
+  ) {
+    const safeX =
+      Math.max(
+        2,
+        Math.min(
+          98,
+          x,
+        ),
+      );
+
+    const safeY =
+      Math.max(
+        6,
+        Math.min(
+          94,
+          y,
+        ),
+      );
+
+    playerPositionRef.current.x =
+      safeX;
+
+    playerPositionRef.current.y =
+      safeY;
+
+    const element =
+      playerElementRef.current;
+
+    if (element) {
+      const pixelX =
+        (
+          safeX /
+          100
+        ) *
+        window.innerWidth;
+
+      const pixelY =
+        (
+          safeY /
+          100
+        ) *
+        window.innerHeight;
+
+      element.style.transform =
+        `translate3d(${pixelX}px, ${pixelY}px, 0) translate(-50%, -50%)`;
+    }
+
+    return {
+      x:
+        safeX,
+      y:
+        safeY,
+    };
+  }
+
+  function runLocalGroupFoodSession(
+    session: HooWorldGroupFoodSession,
+  ) {
+    const userId =
+      currentUserIdRef.current;
+
+    if (
+      !userId ||
+      !session.participantUserIds.includes(
+        userId,
+      ) ||
+      handledLocalGroupFoodSessionIdsRef.current.has(
+        session.sessionId,
+      )
+    ) {
+      return;
+    }
+
+    handledLocalGroupFoodSessionIdsRef.current.add(
+      session.sessionId,
+    );
+
+    stopPlayerMovementForWorldItemInteraction();
+
+    if (
+      groupFoodMoveFrameRef.current !==
+      null
+    ) {
+      window.cancelAnimationFrame(
+        groupFoodMoveFrameRef.current,
+      );
+
+      groupFoodMoveFrameRef.current =
+        null;
+    }
+
+    const participantIndex =
+      Math.max(
+        0,
+        session.participantUserIds.indexOf(
+          userId,
+        ),
+      );
+
+    const slot =
+      HOO_WORLD_GROUP_FOOD_SLOT_OFFSETS[
+        Math.min(
+          participantIndex,
+          HOO_WORLD_GROUP_FOOD_SLOT_OFFSETS.length -
+            1,
+        )
+      ];
+
+    const targetX =
+      Math.max(
+        2,
+        Math.min(
+          98,
+          session.centerX +
+            slot.x,
+        ),
+      );
+
+    const targetY =
+      Math.max(
+        6,
+        Math.min(
+          94,
+          session.centerY +
+            slot.y,
+        ),
+      );
+
+    const startX =
+      playerPositionRef.current.x;
+
+    const startY =
+      playerPositionRef.current.y;
+
+    const now =
+      Date.now();
+
+    const moveDuration =
+      Math.max(
+        0,
+        Math.min(
+          HOO_WORLD_GROUP_FOOD_GATHER_DURATION_MS,
+          session.eatStartedAt -
+            now,
+        ),
+      );
+
+    const facing:
+      HooWorldPlayerFacing =
+      session.centerX <
+      targetX
+        ? "left"
+        : "right";
+
+    playerFacingRef.current =
+      facing;
+
+    setPlayerFacing(
+      facing,
+    );
+
+    hooWorldStatusRef.current =
+      "group_eating";
+
+    void updateStatus(
+      "group_eating",
+    );
+
+    const finishMove =
+      () => {
+        const finalPosition =
+          applyLocalGroupFoodPosition(
+            targetX,
+            targetY,
+          );
+
+        lastMovementBroadcastAtRef.current =
+          0;
+
+        void updatePositionRef.current(
+          finalPosition.x,
+          finalPosition.y,
+          facing,
+          false,
+          {
+            force:
+              true,
+          },
+        );
+
+        groupFoodMoveFrameRef.current =
+          null;
+      };
+
+    if (
+      moveDuration <=
+      24
+    ) {
+      finishMove();
+    } else {
+      const moveStartedAt =
+        performance.now();
+
+      const moveFrame =
+        (
+          frameNow: number,
+        ) => {
+          const progress =
+            Math.max(
+              0,
+              Math.min(
+                1,
+                (
+                  frameNow -
+                  moveStartedAt
+                ) /
+                  moveDuration,
+              ),
+            );
+
+          const eased =
+            1 -
+            Math.pow(
+              1 -
+                progress,
+              3,
+            );
+
+          const nextPosition =
+            applyLocalGroupFoodPosition(
+              startX +
+                (
+                  targetX -
+                  startX
+                ) *
+                  eased,
+              startY +
+                (
+                  targetY -
+                  startY
+                ) *
+                  eased,
+            );
+
+          if (
+            frameNow -
+              lastMovementBroadcastAtRef.current >=
+            50 ||
+            progress >= 1
+          ) {
+            lastMovementBroadcastAtRef.current =
+              frameNow;
+
+            void updatePositionRef.current(
+              nextPosition.x,
+              nextPosition.y,
+              facing,
+              progress <
+                1,
+              {
+                force:
+                  true,
+              },
+            );
+          }
+
+          if (
+            progress >=
+            1
+          ) {
+            finishMove();
+            return;
+          }
+
+          groupFoodMoveFrameRef.current =
+            window.requestAnimationFrame(
+              moveFrame,
+            );
+        };
+
+      groupFoodMoveFrameRef.current =
+        window.requestAnimationFrame(
+          moveFrame,
+        );
+    }
+
+    scheduleFoodTimer(
+      () => {
+        if (
+          hooWorldStatusRef.current ===
+            "group_eating"
+        ) {
+          activateHooWorldFoodEffectStack();
+        }
+      },
+      Math.max(
+        0,
+        session.actionEndsAt -
+          Date.now(),
+      ),
+    );
+  }
+
+  useEffect(() => {
+    return () => {
+      if (
+        groupFoodMoveFrameRef.current !==
+        null
+      ) {
+        window.cancelAnimationFrame(
+          groupFoodMoveFrameRef.current,
+        );
+
+        groupFoodMoveFrameRef.current =
+          null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      !isConnected ||
+      fieldId === null
+    ) {
+      setGroupFoodSessions(
+        {},
+      );
+
+      return;
+    }
+
+    const activeFieldId =
+      fieldId;
+
+    let cancelled =
+      false;
+
+    async function loadActiveGroupFoodSessions() {
+      const {
+        data,
+        error,
+      } =
+        await supabase
+          .from(
+            "hoo_world_group_food_sessions",
+          )
+          .select(
+            `
+              session_id,
+              item_id,
+              food_id,
+              field_id,
+              initiator_user_id,
+              participant_user_ids,
+              center_x,
+              center_y,
+              started_at,
+              eat_started_at,
+              action_ends_at,
+              bowl_ends_at,
+              dance_ends_at
+            `,
+          )
+          .eq(
+            "field_id",
+            activeFieldId,
+          )
+          .gt(
+            "dance_ends_at",
+            new Date().toISOString(),
+          )
+          .order(
+            "started_at",
+            {
+              ascending:
+                true,
+            },
+          );
+
+      if (
+        cancelled
+      ) {
+        return;
+      }
+
+      if (error) {
+        console.warn(
+          "HOO WORLD 단체 음식 세션을 불러오지 못했습니다.",
+          error,
+        );
+
+        return;
+      }
+
+      const nextSessions:
+        Record<
+          string,
+          HooWorldGroupFoodSession
+        > = {};
+
+      for (
+        const row of
+        data ?? []
+      ) {
+        const session =
+          normalizeHooWorldGroupFoodSession(
+            row,
+          );
+
+        if (
+          !session ||
+          session.fieldId !==
+            activeFieldId
+        ) {
+          continue;
+        }
+
+        nextSessions[
+          session.sessionId
+        ] =
+          session;
+
+        mergeGroupFoodSession(
+          session,
+        );
+      }
+
+      setGroupFoodSessions(
+        nextSessions,
+      );
+    }
+
+    void loadActiveGroupFoodSessions();
+
+    const channel =
+      supabase
+        .channel(
+          `hoo-world-group-food-${activeFieldId}`,
+        )
+        .on(
+          "postgres_changes",
+          {
+            event:
+              "INSERT",
+            schema:
+              "public",
+            table:
+              "hoo_world_group_food_sessions",
+            filter:
+              `field_id=eq.${activeFieldId}`,
+          },
+          (
+            payload,
+          ) => {
+            const session =
+              normalizeHooWorldGroupFoodSession(
+                payload.new,
+              );
+
+            if (
+              !session ||
+              session.fieldId !==
+                activeFieldId
+            ) {
+              return;
+            }
+
+            mergeGroupFoodSession(
+              session,
+            );
+          },
+        )
+        .subscribe();
+
+    return () => {
+      cancelled =
+        true;
+
+      void supabase.removeChannel(
+        channel,
+      );
+    };
+  }, [
+    fieldId,
+    isConnected,
+    supabase,
+  ]);
+
+  useEffect(() => {
+    const sessions =
+      Object.values(
+        groupFoodSessions,
+      );
+
+    if (
+      sessions.length < 1
+    ) {
+      return;
+    }
+
+    for (
+      const session of
+      sessions
+    ) {
+      runLocalGroupFoodSession(
+        session,
+      );
+    }
+
+    const timer =
+      window.setInterval(
+        () => {
+          const now =
+            Date.now();
+
+          setGroupFoodClock(
+            now,
+          );
+
+          setGroupFoodSessions(
+            (current) => {
+              let changed =
+                false;
+
+              const next:
+                Record<
+                  string,
+                  HooWorldGroupFoodSession
+                > = {};
+
+              for (
+                const [
+                  sessionId,
+                  session,
+                ] of
+                Object.entries(
+                  current,
+                )
+              ) {
+                if (
+                  session.danceEndsAt >
+                  now
+                ) {
+                  next[
+                    sessionId
+                  ] =
+                    session;
+                } else {
+                  changed =
+                    true;
+                }
+              }
+
+              return changed
+                ? next
+                : current;
+            },
+          );
+        },
+        100,
+      );
+
+    return () => {
+      window.clearInterval(
+        timer,
+      );
+    };
+  }, [
+    currentUserId,
+    groupFoodSessions,
+  ]);
+
+  async function startHooWorldGroupFoodSession(
+    request:
+      HooWorldGroupFoodRequestPayload,
+  ) {
+    const userId =
+      currentUserIdRef.current;
+
+    const activeFieldId =
+      currentFieldIdRef.current;
+
+    const food =
+      getHooWorldFoodDefinition(
+        request.foodId,
+      );
+
+    if (
+      !userId ||
+      activeFieldId ===
+        null ||
+      !isConnected ||
+      !food ||
+      isHooWorldMovementLockedStatus(
+        hooWorldStatusRef.current,
+      ) ||
+      typeof window ===
+        "undefined"
+    ) {
+      return false;
+    }
+
+    const candidates =
+      players
+        .filter(
+          (player) =>
+            player.userId !==
+              userId &&
+            player.fieldId ===
+              activeFieldId &&
+            !isHooWorldMovementLockedStatus(
+              player.status,
+            ),
+        )
+        .map(
+          (player) => {
+            const x =
+              Number(
+                player.x,
+              );
+
+            const y =
+              Number(
+                player.y,
+              );
+
+            if (
+              !Number.isFinite(
+                x,
+              ) ||
+              !Number.isFinite(
+                y,
+              )
+            ) {
+              return null;
+            }
+
+            const deltaX =
+              (
+                x -
+                request.x
+              ) /
+              100 *
+              window.innerWidth;
+
+            const deltaY =
+              (
+                y -
+                request.y
+              ) /
+              100 *
+              window.innerHeight;
+
+            return {
+              userId:
+                player.userId,
+              distance:
+                Math.hypot(
+                  deltaX,
+                  deltaY,
+                ),
+            };
+          },
+        )
+        .filter(
+          (
+            candidate,
+          ): candidate is {
+            userId: string;
+            distance: number;
+          } =>
+            candidate !==
+            null,
+        )
+        .sort(
+          (
+            first,
+            second,
+          ) =>
+            first.distance -
+            second.distance ||
+            first.userId.localeCompare(
+              second.userId,
+            ),
+        )
+        .slice(
+          0,
+          HOO_WORLD_GROUP_FOOD_MAX_PARTICIPANTS -
+            1,
+        );
+
+    const participantUserIds = [
+      userId,
+      ...candidates.map(
+        (candidate) =>
+          candidate.userId,
+      ),
+    ];
+
+    const {
+      data,
+      error,
+    } =
+      await supabase.rpc(
+        "start_hoo_world_group_food_session",
+        {
+          p_item_id:
+            request.itemId,
+          p_field_id:
+            activeFieldId,
+          p_participant_user_ids:
+            participantUserIds,
+        },
+      );
+
+    if (error) {
+      const message =
+        error.message ??
+        "";
+
+      if (
+        message.includes(
+          "FOOD_ALREADY_CONSUMED",
+        ) ||
+        message.includes(
+          "GROUP_FOOD_ALREADY_STARTED",
+        )
+      ) {
+        return false;
+      }
+
+      console.warn(
+        `HOO WORLD 단체 음식 시작 RPC 실패 | ${message}`,
+      );
+
+      return false;
+    }
+
+    const result =
+      data &&
+      typeof data ===
+        "object" &&
+      !Array.isArray(data)
+        ? data as Record<
+            string,
+            unknown
+          >
+        : null;
+
+    if (
+      result?.ok ===
+      false
+    ) {
+      const errorCode =
+        typeof result.error_code ===
+          "string"
+          ? result.error_code
+          : "GROUP_FOOD_FAILED";
+
+      const errorMessage =
+        typeof result.error_message ===
+          "string"
+          ? result.error_message
+          : "단체 음식 상호작용을 시작하지 못했습니다.";
+
+      console.warn(
+        `HOO WORLD 단체 음식 시작 실패 | code=${errorCode} | message=${errorMessage}`,
+      );
+
+      return false;
+    }
+
+    const session =
+      normalizeHooWorldGroupFoodSession(
+        result?.session,
+      );
+
+    if (session) {
+      mergeGroupFoodSession(
+        session,
+      );
+    }
+
+    return true;
+  }
+
+  function mergeFireworksSession(
+    session:
+      HooWorldFireworksSession,
+  ) {
+    setFireworksSessions(
+      (current) => ({
+        ...current,
+        [
+          session.sessionId
+        ]:
+          session,
+      }),
+    );
+  }
+
+  /*
+   * 불꽃놀이 세션 최초 스냅샷 + Realtime.
+   *
+   * 세션 자체가 DB에 남아 있기 때문에
+   * 불꽃놀이 도중 들어온 이용자도 현재 진행 시점부터 연출을 이어서 본다.
+   */
+  useEffect(() => {
+    if (
+      !isConnected ||
+      fieldId === null
+    ) {
+      setFireworksSessions(
+        {},
+      );
+      return;
+    }
+
+    const activeFieldId =
+      fieldId;
+
+    let cancelled =
+      false;
+
+    async function loadActiveFireworksSessions() {
+      const {
+        data,
+        error,
+      } =
+        await supabase
+          .from(
+            "hoo_world_fireworks_sessions",
+          )
+          .select(
+            `
+              session_id,
+              item_id,
+              field_id,
+              triggered_by_user_id,
+              x,
+              y,
+              outcome,
+              started_at,
+              fuse_ends_at,
+              fireworks_ends_at,
+              finale_ends_at,
+              glitter_ends_at,
+              ends_at
+            `,
+          )
+          .eq(
+            "field_id",
+            activeFieldId,
+          )
+          .gt(
+            "ends_at",
+            new Date().toISOString(),
+          );
+
+      if (
+        cancelled
+      ) {
+        return;
+      }
+
+      if (error) {
+        console.warn(
+          "HOO WORLD 불꽃놀이 세션을 불러오지 못했습니다.",
+          error,
+        );
+        return;
+      }
+
+      const next:
+        Record<
+          string,
+          HooWorldFireworksSession
+        > = {};
+
+      for (
+        const row of
+        data ?? []
+      ) {
+        const session =
+          normalizeHooWorldFireworksSession(
+            row,
+          );
+
+        if (
+          !session ||
+          session.fieldId !==
+            activeFieldId ||
+          session.endsAt <=
+            Date.now()
+        ) {
+          continue;
+        }
+
+        next[
+          session.sessionId
+        ] =
+          session;
+      }
+
+      setFireworksSessions(
+        next,
+      );
+    }
+
+    void loadActiveFireworksSessions();
+
+    const channel =
+      supabase
+        .channel(
+          `hoo-world-fireworks-${activeFieldId}`,
+        )
+        .on(
+          "postgres_changes",
+          {
+            event:
+              "INSERT",
+            schema:
+              "public",
+            table:
+              "hoo_world_fireworks_sessions",
+            filter:
+              `field_id=eq.${activeFieldId}`,
+          },
+          (
+            payload,
+          ) => {
+            const session =
+              normalizeHooWorldFireworksSession(
+                payload.new,
+              );
+
+            if (
+              !session ||
+              session.fieldId !==
+                activeFieldId ||
+              session.endsAt <=
+                Date.now()
+            ) {
+              return;
+            }
+
+            mergeFireworksSession(
+              session,
+            );
+          },
+        )
+        .subscribe();
+
+    /*
+     * 애니메이션 자체는 CSS가 담당한다.
+     * 여기서는 끝난 세션 DOM만 1초 단위로 가볍게 정리한다.
+     */
+    const cleanupTimer =
+      window.setInterval(
+        () => {
+          const now =
+            Date.now();
+
+          setFireworksSessions(
+            (current) => {
+              let changed =
+                false;
+
+              const next:
+                Record<
+                  string,
+                  HooWorldFireworksSession
+                > = {};
+
+              for (
+                const [
+                  sessionId,
+                  session,
+                ] of
+                Object.entries(
+                  current,
+                )
+              ) {
+                if (
+                  session.endsAt >
+                  now
+                ) {
+                  next[
+                    sessionId
+                  ] =
+                    session;
+                } else {
+                  changed =
+                    true;
+                }
+              }
+
+              return changed
+                ? next
+                : current;
+            },
+          );
+        },
+        1000,
+      );
+
+    return () => {
+      cancelled =
+        true;
+
+      window.clearInterval(
+        cleanupTimer,
+      );
+
+      void supabase.removeChannel(
+        channel,
+      );
+    };
+  }, [
+    fieldId,
+    isConnected,
+    supabase,
+  ]);
+
+  async function startHooWorldFireworksSession(
+    request:
+      HooWorldFireworksRequestPayload,
+  ) {
+    const userId =
+      currentUserIdRef.current;
+
+    const activeFieldId =
+      currentFieldIdRef.current;
+
+    if (
+      !userId ||
+      activeFieldId ===
+        null ||
+      !isConnected ||
+      isHooWorldMovementLockedStatus(
+        hooWorldStatusRef.current,
+      )
+    ) {
+      return false;
+    }
+
+    const {
+      data,
+      error,
+    } =
+      await supabase.rpc(
+        "start_hoo_world_fireworks_session",
+        {
+          p_item_id:
+            request.itemId,
+          p_field_id:
+            activeFieldId,
+        },
+      );
+
+    if (error) {
+      const message =
+        error.message ??
+        "";
+
+      if (
+        message.includes(
+          "FIREWORKS_ALREADY_STARTED",
+        ) ||
+        message.includes(
+          "FIREWORKS_NOT_FOUND",
+        )
+      ) {
+        return false;
+      }
+
+      console.warn(
+        `HOO WORLD 불꽃놀이 점화 RPC 실패 | ${message}`,
+      );
+
+      return false;
+    }
+
+    const result =
+      data &&
+      typeof data ===
+        "object" &&
+      !Array.isArray(data)
+        ? data as Record<
+            string,
+            unknown
+          >
+        : null;
+
+    if (
+      result?.ok ===
+      false
+    ) {
+      const errorCode =
+        typeof result.error_code ===
+          "string"
+          ? result.error_code
+          : "FIREWORKS_START_FAILED";
+
+      const errorMessage =
+        typeof result.error_message ===
+          "string"
+          ? result.error_message
+          : "불꽃놀이를 점화하지 못했습니다.";
+
+      console.warn(
+        `HOO WORLD 불꽃놀이 점화 실패 | code=${errorCode} | message=${errorMessage}`,
+      );
+
+      return false;
+    }
+
+    const session =
+      normalizeHooWorldFireworksSession(
+        result?.session,
+      );
+
+    if (session) {
+      mergeFireworksSession(
+        session,
+      );
+    }
+
+    return true;
+  }
+
+  useEffect(() => {
+    if (
+      !isConnected ||
+      fieldId === null
+    ) {
+      return;
+    }
+
+    const activeFieldId =
+      fieldId;
+
+    const channel =
+      supabase
+        .channel(
+          `hoo-world-field-${activeFieldId}-food-interactions`,
+        )
+        .on(
+          "broadcast",
+          {
+            event:
+              "food-start",
+          },
+          (message) => {
+            const rawPayload =
+              message &&
+              typeof message ===
+                "object" &&
+              "payload" in
+                message
+                ? (
+                    message as {
+                      payload?: unknown;
+                    }
+                  ).payload
+                : message;
+
+            if (
+              !rawPayload ||
+              typeof rawPayload !==
+                "object" ||
+              Array.isArray(
+                rawPayload,
+              )
+            ) {
+              return;
+            }
+
+            const payload =
+              rawPayload as Record<
+                string,
+                unknown
+              >;
+
+            const userId =
+              typeof payload.user_id ===
+                "string"
+                ? payload.user_id
+                : "";
+
+            const itemId =
+              typeof payload.item_id ===
+                "string"
+                ? payload.item_id
+                : "";
+
+            const foodId =
+              typeof payload.food_id ===
+                "string"
+                ? payload.food_id
+                : "";
+
+            const startedAt =
+              Number(
+                payload.started_at,
+              );
+
+            const payloadFieldId =
+              Number(
+                payload.field_id,
+              );
+
+            if (
+              !userId ||
+              !itemId ||
+              !foodId ||
+              !Number.isFinite(
+                startedAt,
+              ) ||
+              !Number.isFinite(
+                payloadFieldId,
+              ) ||
+              payloadFieldId !==
+                activeFieldId ||
+              userId ===
+                currentUserIdRef.current ||
+              !getHooWorldFoodDefinition(
+                foodId,
+              )
+            ) {
+              return;
+            }
+
+            const elapsed =
+              Date.now() -
+              startedAt;
+
+            if (
+              elapsed < -2000 ||
+              elapsed >=
+                HOO_WORLD_FOOD_ACTION_DURATION_MS
+            ) {
+              return;
+            }
+
+            const interaction:
+              HooWorldActiveFoodInteraction =
+              {
+                userId,
+                itemId,
+                foodId,
+                startedAt,
+              };
+
+            /*
+             * 다른 이용자가 음식을 집어 든 순간
+             * 해당 음식 오브젝트도 이 클라이언트의 필드에서 즉시 제거한다.
+             */
+            markFoodItemConsumed(
+              itemId,
+            );
+
+            setFoodInteraction(
+              interaction,
+            );
+
+            scheduleFoodTimer(
+              () => {
+                removeFoodInteraction(
+                  userId,
+                  startedAt,
+                );
+              },
+              Math.max(
+                0,
+                HOO_WORLD_FOOD_ACTION_DURATION_MS -
+                  Math.max(
+                    0,
+                    elapsed,
+                  ),
+              ),
+            );
+          },
+        )
+        .subscribe(
+          (
+            subscriptionStatus,
+          ) => {
+            if (
+              subscriptionStatus ===
+              "SUBSCRIBED"
+            ) {
+              foodInteractionChannelRef.current =
+                channel;
+            }
+          },
+        );
+
+    return () => {
+      if (
+        foodInteractionChannelRef.current ===
+        channel
+      ) {
+        foodInteractionChannelRef.current =
+          null;
+      }
+
+      void supabase.removeChannel(
+        channel,
+      );
+    };
+  }, [
+    fieldId,
+    isConnected,
+    supabase,
+  ]);
+
+  function startConsumedHooWorldFoodInteraction(
+    itemId: string,
+    foodId: string,
+  ) {
+    const userId =
+      currentUserIdRef.current;
+
+    const activeFieldId =
+      currentFieldIdRef.current;
+
+    const food =
+      getHooWorldFoodDefinition(
+        foodId,
+      );
+
+    if (
+      !userId ||
+      activeFieldId === null ||
+      !isConnected ||
+      !food ||
+      isHooWorldMovementLockedStatus(
+        hooWorldStatusRef.current,
+      )
+    ) {
+      return;
+    }
+
+    stopPlayerMovementForWorldItemInteraction();
+
+    const current =
+      playerPositionRef.current;
+
+    lastMovementBroadcastAtRef.current =
+      0;
+
+    void updatePositionRef.current(
+      current.x,
+      current.y,
+      playerFacingRef.current,
+      false,
+    );
+
+    const startedAt =
+      Date.now();
+
+    const interaction:
+      HooWorldActiveFoodInteraction =
+      {
+        userId,
+        itemId,
+        foodId:
+          food.id,
+        startedAt,
+      };
+
+    setFoodInteraction(
+      interaction,
+    );
+
+    hooWorldStatusRef.current =
+      "interacting";
+
+    void updateStatus(
+      "interacting",
+    );
+
+    scheduleFoodTimer(
+      () => {
+        const currentInteraction =
+          activeFoodInteractionsRef.current[
+            userId
+          ];
+
+        if (
+          currentInteraction?.startedAt !==
+          startedAt
+        ) {
+          return;
+        }
+
+        hooWorldStatusRef.current =
+          "eating";
+
+        void updateStatus(
+          "eating",
+        );
+      },
+      600,
+    );
+
+    scheduleFoodTimer(
+      () => {
+        removeFoodInteraction(
+          userId,
+          startedAt,
+        );
+
+        activateHooWorldFoodEffectStack();
+      },
+      HOO_WORLD_FOOD_ACTION_DURATION_MS,
+    );
+
+    const channel =
+      foodInteractionChannelRef.current;
+
+    if (channel) {
+      void channel.send({
+        type:
+          "broadcast",
+        event:
+          "food-start",
+        payload: {
+          field_id:
+            activeFieldId,
+          user_id:
+            userId,
+          item_id:
+            itemId,
+          food_id:
+            food.id,
+          started_at:
+            startedAt,
+        },
+      });
+    }
+  }
+
+  /*
+   * 과거 정적 음식 호환 경로.
+   * 신규 음식은 DeliveryGate가 먼저 world item을 1회 소비한 뒤
+   * startConsumedHooWorldFoodInteraction()만 호출한다.
+   */
+  async function startHooWorldFoodInteraction(
+    itemId: string,
+    foodId: string,
+  ) {
+    const food =
+      getHooWorldFoodDefinition(
+        foodId,
+      );
+
+    if (
+      !food ||
+      !isConsumedFoodStateReady ||
+      isFoodItemConsumed(
+        itemId,
+      )
+    ) {
+      return;
+    }
+
+    const claimed =
+      await claimFoodItemConsumption(
+        itemId,
+        food.id,
+      );
+
+    if (!claimed) {
+      return;
+    }
+
+    startConsumedHooWorldFoodInteraction(
+      itemId,
+      food.id,
+    );
+  }
+
+    useEffect(() => {
+    function handleFoodInteractionKey(
+      event: KeyboardEvent,
+    ) {
+      if (
+        event.code !==
+          "KeyF" ||
+        event.repeat ||
+        isControllingAdminCharacterRef.current ||
+        isHooWorldMovementLockedStatus(
+          hooWorldStatusRef.current,
+        ) ||
+        typeof window ===
+          "undefined"
+      ) {
+        return;
+      }
+
+      const player =
+        playerPositionRef.current;
+
+      let nearest:
+        | {
+            itemId: string;
+            foodId: string;
+            distance: number;
+          }
+        | null =
+        null;
+
+      for (
+        const item of
+        HOO_WORLD_FIELD_FOOD_ITEMS
+      ) {
+        const activeFieldId =
+          currentFieldIdRef.current;
+
+        if (
+          activeFieldId === null ||
+          !isConsumedFoodStateReady ||
+          isFoodItemConsumed(
+            item.itemId,
+          )
+        ) {
+          continue;
+        }
+
+        const deltaX =
+          (
+            player.x -
+            item.x
+          ) /
+          100 *
+          window.innerWidth;
+
+        const deltaY =
+          (
+            player.y -
+            item.y
+          ) /
+          100 *
+          window.innerHeight;
+
+        const distance =
+          Math.hypot(
+            deltaX,
+            deltaY,
+          );
+
+        if (
+          distance >
+            HOO_WORLD_FOOD_INTERACTION_DISTANCE_PX ||
+          (
+            nearest &&
+            nearest.distance <=
+              distance
+          )
+        ) {
+          continue;
+        }
+
+        nearest = {
+          itemId:
+            item.itemId,
+          foodId:
+            item.foodId,
+          distance,
+        };
+      }
+
+      if (!nearest) {
+        return;
+      }
+
+      /*
+       * 음식이 실제 상호작용 대상일 때만 F를 선점한다.
+       * 주변의 가판대/메뉴판 등 다른 F 아이템과 충돌하지 않게 한다.
+       */
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      void startHooWorldFoodInteraction(
+        nearest.itemId,
+        nearest.foodId,
+      );
+    }
+
+    window.addEventListener(
+      "keydown",
+      handleFoodInteractionKey,
+      true,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "keydown",
+        handleFoodInteractionKey,
+        true,
+      );
+    };
+  }, [
+    isConnected,
+  ]);
+
   async function enterFocusModeFromHooWorld() {
     if (
       isEnteringFocusMode ||
@@ -4890,6 +7783,13 @@ export default function HooWorldPage() {
         fallbackPositions.length
     ];
   }
+
+  const localVisibleFoodEffectLevel:
+    0 | 1 | 2 | 3 =
+    status ===
+      "dancing"
+      ? localFoodEffectLevel
+      : 0;
 
   return (
     <main className="relative h-[100dvh] min-h-[640px] w-full overflow-hidden bg-[#7fa75d] text-[#2d3329]">
@@ -5315,7 +8215,57 @@ export default function HooWorldPage() {
     상자 열기 / 아이템 꺼내기는 다음 단계에서
     HooWorldDeliveryGate 컴포넌트에 이어서 연결한다.
 ───────────────────────── */}
-<HooWorldDeliveryGate />
+<HooWorldDeliveryGate
+  playerPositionRef={
+    playerPositionRef
+  }
+  interactionLocked={
+    isControllingAdminCharacter ||
+    isHooWorldMovementLockedStatus(
+      status,
+    )
+  }
+  onFoodConsumed={({
+    itemId,
+    foodId,
+  }) => {
+    startConsumedHooWorldFoodInteraction(
+      itemId,
+      foodId,
+    );
+  }}
+  onGroupFoodRequested={
+    startHooWorldGroupFoodSession
+  }
+  onFireworksRequested={
+    startHooWorldFireworksSession
+  }
+/>
+
+{/* ─────────────────────────
+    HOO WORLD 불꽃놀이 공용 연출
+
+    - DB 세션 + Realtime
+    - 90% 성공: 심지 → 15초 불꽃 → 초대형 피날레 → 30초 하얀 잔광
+    - 10% 실패: 심지만 타고 푸슉 + 연기
+    - 애니메이션은 CSS 기반이라 플레이어 이동 RAF와 분리된다.
+───────────────────────── */}
+{Object.values(
+  fireworksSessions,
+).map(
+  (
+    fireworksSession,
+  ) => (
+    <HooWorldFireworksShow
+      key={
+        fireworksSession.sessionId
+      }
+      session={
+        fireworksSession
+      }
+    />
+  ),
+)}
 
 {/* ─────────────────────────
     독립 월드 아이템: HOO COIN 가판대
@@ -5385,6 +8335,55 @@ export default function HooWorldPage() {
       }
     />
   ),
+)}
+
+{/* ─────────────────────────
+    공통 음식 아이템
+
+    음식 종류가 추가되어도 page.tsx / 상호작용 엔진은 수정하지 않는다.
+    hooWorldFoodCatalog.ts에 음식 데이터와 배치만 등록하면
+    F 상호작용 → 먹기 → 빈 그릇 던지기 → 90초 춤까지 자동 적용된다.
+───────────────────────── */}
+{HOO_WORLD_FIELD_FOOD_ITEMS.map(
+  (item) => {
+    const food =
+      getHooWorldFoodDefinition(
+        item.foodId,
+      );
+
+    if (
+      !food ||
+      fieldId === null ||
+      !isConsumedFoodStateReady ||
+      consumedFoodItemIds.has(
+        item.itemId,
+      )
+    ) {
+      return null;
+    }
+
+    return (
+      <HooWorldFoodItem
+        key={
+          item.itemId
+        }
+        item={
+          item
+        }
+        food={
+          food
+        }
+        playerPositionRef={
+          playerPositionRef
+        }
+        interactionLocked={
+          isHooWorldMovementLockedStatus(
+            status,
+          )
+        }
+      />
+    );
+  },
 )}
 
 {/* ─────────────────────────
@@ -6383,6 +9382,329 @@ export default function HooWorldPage() {
       }
 
       {/* ─────────────────────────
+          단체 음식 공용 음식 / 빈 그릇
+
+          - 집결 중: 4배 크기 음식 유지
+          - 약 5초 식사 중: 음식이 100% → 18%까지 점점 줄어듦
+          - 식사 종료: 4배 크기 빈 그릇으로 즉시 전환
+          - 빈 그릇은 90초 유지 후 사라짐
+          - DB 세션 기반이라 중간 입장자도 동일한 진행률을 복원한다.
+      ───────────────────────── */}
+
+      {Object.values(
+        groupFoodSessions,
+      ).map(
+        (
+          session,
+        ) => {
+          if (
+            groupFoodClock <
+              session.startedAt ||
+            groupFoodClock >=
+              session.bowlEndsAt
+          ) {
+            return null;
+          }
+
+          const food =
+            getHooWorldFoodDefinition(
+              session.foodId,
+            );
+
+          if (!food) {
+            return null;
+          }
+
+          const isEmptyBowl =
+            groupFoodClock >=
+            session.actionEndsAt;
+
+          const eatingDuration =
+            Math.max(
+              1,
+              session.actionEndsAt -
+                session.eatStartedAt,
+            );
+
+          const eatingProgress =
+            Math.max(
+              0,
+              Math.min(
+                1,
+                (
+                  groupFoodClock -
+                  session.eatStartedAt
+                ) /
+                  eatingDuration,
+              ),
+            );
+
+          /*
+           * 음식은 먹는 동안 눈에 보이게 점점 줄어든다.
+           * 완전히 0으로 만들면 마지막 프레임에서 깜빡일 수 있으므로
+           * 약 18%까지 줄인 뒤 빈 그릇으로 교체한다.
+           */
+          const foodRemainingScale =
+            isEmptyBowl
+              ? 1
+              : Math.max(
+                  0.18,
+                  1 -
+                    eatingProgress *
+                      0.82,
+                );
+
+          const imagePath =
+            isEmptyBowl
+              ? food.emptyContainerImagePath
+              : food.imagePath;
+
+          const fallbackEmoji =
+            isEmptyBowl
+              ? food.emptyContainerFallbackEmoji
+              : food.fallbackEmoji;
+
+          /*
+           * 빈 그릇은 90초 유지 후 마지막 순간에만 "뿅".
+           *
+           * React에서 소멸 진행률 / 반짝이 6개 / 파동을
+           * 100ms마다 다시 계산하던 방식을 제거했다.
+           *
+           * bowlEndsAt 직전에 한 번 isBowlPopping이 켜지면
+           * 브라우저 CSS 애니메이션이 GPU 친화적인
+           * transform + opacity만 120ms 동안 처리한다.
+           */
+          const bowlPopRemainingMs =
+            session.bowlEndsAt -
+            groupFoodClock;
+
+          const isBowlPopping =
+            isEmptyBowl &&
+            bowlPopRemainingMs <=
+              HOO_WORLD_GROUP_FOOD_BOWL_POP_TRIGGER_MS;
+
+          const bowlVisualScale =
+            isEmptyBowl
+              ? 1
+              : foodRemainingScale;
+
+          const bowlPopAnimation =
+            isBowlPopping
+              ? `hooWorldGroupFoodBowlPop ${HOO_WORLD_GROUP_FOOD_BOWL_POP_ANIMATION_MS}ms cubic-bezier(0.2, 0.9, 0.25, 1) forwards`
+              : "none";
+
+          return (
+            <div
+              key={
+                `group-food-bowl-${session.sessionId}`
+              }
+              className="pointer-events-none absolute left-0 top-0 z-[18] flex -translate-x-1/2 -translate-y-1/2 items-center justify-center"
+              style={{
+                left:
+                  `${session.centerX}%`,
+                top:
+                  `${session.centerY}%`,
+                width:
+                  isEmptyBowl
+                    ? 48 * 4
+                    : 62 * 4,
+                height:
+                  isEmptyBowl
+                    ? 42 * 4
+                    : 54 * 4,
+                fontSize:
+                  isEmptyBowl
+                    ? 30 * 4
+                    : 36 * 4,
+                filter:
+                  "drop-shadow(0 7px 6px rgba(0,0,0,0.22))",
+              }}
+              aria-hidden="true"
+            >
+              {imagePath ? (
+                <img
+                  src={
+                    imagePath
+                  }
+                  alt=""
+                  draggable={false}
+                  className="h-full w-full select-none object-contain"
+                  style={{
+                    transform:
+                      `translate3d(0, 0, 0) scale(${bowlVisualScale})`,
+                    transformOrigin:
+                      "50% 50%",
+                    transition:
+                      isEmptyBowl
+                        ? "none"
+                        : "transform 100ms linear",
+                    animation:
+                      bowlPopAnimation,
+                    willChange:
+                      isBowlPopping
+                        ? "transform, opacity"
+                        : "auto",
+                    backfaceVisibility:
+                      "hidden",
+                  }}
+                />
+              ) : (
+                <span
+                  style={{
+                    display:
+                      "inline-block",
+                    transform:
+                      `translate3d(0, 0, 0) scale(${bowlVisualScale})`,
+                    transformOrigin:
+                      "50% 50%",
+                    transition:
+                      isEmptyBowl
+                        ? "none"
+                        : "transform 100ms linear",
+                    animation:
+                      bowlPopAnimation,
+                    willChange:
+                      isBowlPopping
+                        ? "transform, opacity"
+                        : "auto",
+                    backfaceVisibility:
+                      "hidden",
+                  }}
+                >
+                  {
+                    fallbackEmoji
+                  }
+                </span>
+              )}
+            </div>
+          );
+
+        },
+      )}
+
+      {/*
+       * 단체 음식 전용 와구와구 모션.
+       *
+       * 캐릭터 내부 파츠가 아니라 HooWorldPlayer 전체 래퍼를 움직여
+       * 몸 전체가 음식 중심으로 들려가 머리를 박는 느낌을 만든다.
+       * 각 참가 위치별로 음식 중심을 향하는 방향이 다르다.
+       */}
+      <style>{`
+        @keyframes hooWorldGroupFoodBowlPop {
+          0% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1);
+          }
+
+          35% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0) scale(1.16);
+          }
+
+          100% {
+            opacity: 0;
+            transform: translate3d(0, 0, 0) scale(0.01);
+          }
+        }
+
+        /*
+         * 음식 누적 효과
+         *
+         * 1단계는 HooWorldPlayer 기본 dancing 모션 그대로.
+         * 2단계는 바깥 래퍼까지 크게 흔들고,
+         * 내부 기본 dancing 속도도 2배로 올린다.
+         * 3단계는 내부 흔들림을 끄고 캐릭터 전체를 한 방향으로
+         * 360도 계속 회전시킨다.
+         */
+        @keyframes hooWorldFoodEffectDouble {
+          0%, 100% {
+            transform: translate3d(0, 0, 0) rotate(-9deg);
+          }
+
+          25% {
+            transform: translate3d(0, -7px, 0) rotate(7deg);
+          }
+
+          50% {
+            transform: translate3d(0, 1px, 0) rotate(11deg);
+          }
+
+          75% {
+            transform: translate3d(0, -7px, 0) rotate(-7deg);
+          }
+        }
+
+        @keyframes hooWorldFoodEffectSpin {
+          from {
+            transform: translate3d(0, 0, 0) rotate(0deg);
+          }
+
+          to {
+            transform: translate3d(0, 0, 0) rotate(360deg);
+          }
+        }
+
+        [data-hoo-world-food-effect-level="2"]
+        [data-hoo-player-sprite-motion="true"] {
+          animation-duration: 0.46s !important;
+        }
+
+        [data-hoo-world-food-effect-level="3"]
+        [data-hoo-player-sprite-motion="true"] {
+          animation: none !important;
+          transform: translate3d(0, 0, 0) rotate(0deg) !important;
+        }
+
+        @keyframes hooWorldGroupFoodGobble0 {
+          0%, 100% {
+            transform: translate3d(0, 0, 0) rotate(0deg);
+          }
+          28%, 72% {
+            transform: translate3d(0, -24px, 0) rotate(-2deg);
+          }
+          50% {
+            transform: translate3d(0, -17px, 0) rotate(3deg);
+          }
+        }
+
+        @keyframes hooWorldGroupFoodGobble1 {
+          0%, 100% {
+            transform: translate3d(0, 0, 0) rotate(0deg);
+          }
+          28%, 72% {
+            transform: translate3d(25px, -5px, 0) rotate(17deg);
+          }
+          50% {
+            transform: translate3d(18px, -2px, 0) rotate(11deg);
+          }
+        }
+
+        @keyframes hooWorldGroupFoodGobble2 {
+          0%, 100% {
+            transform: translate3d(0, 0, 0) rotate(0deg);
+          }
+          28%, 72% {
+            transform: translate3d(-25px, -5px, 0) rotate(-17deg);
+          }
+          50% {
+            transform: translate3d(-18px, -2px, 0) rotate(-11deg);
+          }
+        }
+
+        @keyframes hooWorldGroupFoodGobble3 {
+          0%, 100% {
+            transform: translate3d(0, 0, 0) rotate(0deg);
+          }
+          28%, 72% {
+            transform: translate3d(0, 25px, 0) rotate(2deg);
+          }
+          50% {
+            transform: translate3d(0, 18px, 0) rotate(-3deg);
+          }
+        }
+      `}</style>
+
+      {/* ─────────────────────────
           다른 이용자 캐릭터
 
           - 일반 이용자: 현재 캐릭터로 표시
@@ -6411,6 +9733,30 @@ export default function HooWorldPage() {
                 ? remotePlayer.facing
                 : "down";
 
+          const remoteFoodInteraction =
+            activeFoodInteractions[
+              remotePlayer.userId
+            ] ?? null;
+
+          const remoteFood =
+            remoteFoodInteraction
+              ? getHooWorldFoodDefinition(
+                  remoteFoodInteraction.foodId,
+                )
+              : null;
+
+          const remoteFoodEffectLevel =
+            getActiveFoodEffectLevel(
+              remotePlayer.status,
+              remotePlayer.foodEffectLevel,
+              remotePlayer.foodEffectEndsAt,
+            );
+
+          const remoteGroupFoodAnimation =
+            getGroupFoodGobbleAnimation(
+              remotePlayer.userId,
+            );
+
           return (
             <div
               key={
@@ -6426,32 +9772,65 @@ export default function HooWorldPage() {
               }}
             >
               <div
-                className="origin-center"
+                className="relative origin-center"
                 style={{
                   transform:
                     "scale(0.65)",
                 }}
               >
-                <HooWorldPlayer
-                  nickname={
-                    remotePlayer.nickname
+                {remoteFoodInteraction &&
+                remoteFood ? (
+                  <HooWorldFoodInteractionEffect
+                    food={
+                      remoteFood
+                    }
+                    startedAt={
+                      remoteFoodInteraction.startedAt
+                    }
+                  />
+                ) : null}
+
+                <div
+                  data-hoo-world-food-effect-level={
+                    remoteFoodEffectLevel
                   }
-                  status={
-                    remotePlayer.status
-                  }
-                  facing={
-                    remoteFacing
-                  }
-                  characterSlot={
-                    remotePlayer.characterSlot ??
-                    4
-                  }
-                  isAdmin={
-                    remotePlayer.operatorSkin ===
-                    true
-                  }
-                  accessoryIds={[]}
-                />
+                  style={{
+                    animation:
+                      remoteGroupFoodAnimation ??
+                      getFoodEffectCharacterAnimation(
+                        remoteFoodEffectLevel,
+                      ),
+                    transformOrigin:
+                      "50% 72%",
+                    willChange:
+                      remoteGroupFoodAnimation ||
+                      remoteFoodEffectLevel >=
+                        2
+                        ? "transform"
+                        : undefined,
+                  }}
+                >
+                  <HooWorldPlayer
+                    nickname={
+                      remotePlayer.nickname
+                    }
+                    status={
+                      remotePlayer.status
+                    }
+                    facing={
+                      remoteFacing
+                    }
+                    characterSlot={
+                      remotePlayer.characterSlot ??
+                      4
+                    }
+                    isAdmin={
+                      remotePlayer.operatorSkin ===
+                      true
+                    }
+                    accessoryIds={[]}
+                  />
+                </div>
               </div>
             </div>
           );
@@ -6477,17 +9856,85 @@ export default function HooWorldPage() {
       >
         {!isUserLoading && (
           <div
-            className="origin-center"
+            className="relative origin-center"
             style={{
               transform:
                 "scale(0.65)",
             }}
           >
+            {(() => {
+              if (
+                !currentUserId
+              ) {
+                return null;
+              }
+
+              const interaction =
+                activeFoodInteractions[
+                  currentUserId
+                ];
+
+              if (!interaction) {
+                return null;
+              }
+
+              const food =
+                getHooWorldFoodDefinition(
+                  interaction.foodId,
+                );
+
+              if (!food) {
+                return null;
+              }
+
+              return (
+                <HooWorldFoodInteractionEffect
+                  food={
+                    food
+                  }
+                  startedAt={
+                    interaction.startedAt
+                  }
+                />
+              );
+            })()}
+
             <div
               ref={
                 playerMotionRef
               }
             >
+              <div
+                data-hoo-world-food-effect-level={
+                  localVisibleFoodEffectLevel
+                }
+                style={{
+                  animation:
+                    currentUserId
+                      ? (
+                          getGroupFoodGobbleAnimation(
+                            currentUserId,
+                          ) ??
+                          getFoodEffectCharacterAnimation(
+                            localVisibleFoodEffectLevel,
+                          )
+                        )
+                      : undefined,
+                  transformOrigin:
+                    "50% 72%",
+                  willChange:
+                    (
+                      currentUserId &&
+                      getGroupFoodEatingSlotIndex(
+                        currentUserId,
+                      ) !== null
+                    ) ||
+                    localVisibleFoodEffectLevel >=
+                      2
+                      ? "transform"
+                      : undefined,
+                }}
+              >
               <HooWorldPlayer
                 nickname={
                   nickname ??
@@ -6508,6 +9955,7 @@ export default function HooWorldPage() {
                 }
                 accessoryIds={[]}
               />
+              </div>
             </div>
           </div>
         )}
@@ -6803,7 +10251,11 @@ export default function HooWorldPage() {
           !isClientReady ||
           isEnteringFocusMode ||
           !isConnected ||
-          fieldId === null
+          fieldId === null ||
+          status === "interacting" ||
+          status === "eating" ||
+          status === "group_eating" ||
+          status === "dancing"
         }
         className="fixed bottom-5 right-5 z-[100] flex h-12 items-center gap-2 rounded-2xl border border-white/35 bg-[#1d2f24] px-5 text-sm font-black text-white shadow-[0_8px_24px_rgba(20,35,24,0.38)] backdrop-blur-xl transition hover:-translate-y-0.5 hover:bg-[#294132] disabled:cursor-wait disabled:opacity-60 sm:bottom-6 sm:right-6"
         aria-label="포커스모드 시작"
@@ -6823,7 +10275,18 @@ export default function HooWorldPage() {
               : !isConnected ||
                   fieldId === null
                 ? "후월드 연결 중..."
-                : "포커스모드"}
+                : status ===
+                    "interacting" ||
+                    status ===
+                      "eating"
+                  ? "식사 중..."
+                  : status ===
+                      "group_eating"
+                    ? "다 같이 식사 중..."
+                    : status ===
+                        "dancing"
+                      ? "신나는 중..."
+                      : "포커스모드"}
         </span>
       </button>
 
@@ -6831,7 +10294,24 @@ export default function HooWorldPage() {
         {status ===
         "focusing"
           ? "💻 포커스모드 집중 중"
-          : "🌿 HOO 공동 필드"}
+          : status ===
+                "interacting" ||
+              status ===
+                "eating"
+            ? "🍲 맛있게 먹는 중"
+            : status ===
+                "group_eating"
+              ? "🍽️ 다 같이 먹는 중"
+              : status ===
+                  "dancing"
+                ? localFoodEffectLevel >=
+                    3
+                  ? "🌀 신나다 못해 빙글빙글 도는 으아악"
+                  : localFoodEffectLevel ===
+                      2
+                    ? "🎶 두 배로 신나게 덩실덩실"
+                    : "🎵 덩실덩실 신나는 중"
+                : "🌿 HOO 공동 필드"}
       </div>
     </main>
   );

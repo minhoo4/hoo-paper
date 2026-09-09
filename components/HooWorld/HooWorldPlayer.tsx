@@ -198,6 +198,9 @@ export default function HooWorldPlayer({
   const isFocusing =
     status === "focusing";
 
+  const isDancing =
+    status === "dancing";
+
   const characterImagePath =
     isFocusing &&
     !(
@@ -229,6 +232,33 @@ export default function HooWorldPlayer({
               rotate(-0.6deg);
           }
         }
+
+        @keyframes hoo-world-dance-sway {
+          0%,
+          100% {
+            transform:
+              translate3d(0, 0, 0)
+              rotate(-30deg);
+          }
+
+          25% {
+            transform:
+              translate3d(0, -4px, 0)
+              rotate(0deg);
+          }
+
+          50% {
+            transform:
+              translate3d(0, 0, 0)
+              rotate(30deg);
+          }
+
+          75% {
+            transform:
+              translate3d(0, -4px, 0)
+              rotate(0deg);
+          }
+        }
       `}</style>
 
       <div className="relative flex h-[230px] w-[190px] items-end justify-center">
@@ -248,6 +278,7 @@ export default function HooWorldPlayer({
               characterImagePath
             }
             focusing={isFocusing}
+            dancing={isDancing}
           />
         </div>
       </div>
@@ -259,7 +290,9 @@ export default function HooWorldPlayer({
       <div className="mt-1 text-[10px] font-bold tracking-[0.05em] text-white/65 drop-shadow-[0_1px_2px_rgba(20,30,20,0.32)]">
         {isFocusing
           ? "집중 중"
-          : "쉬는 중"}
+          : isDancing
+            ? "신나는 중"
+            : "쉬는 중"}
       </div>
     </div>
   );
@@ -272,6 +305,7 @@ type CharacterBodyProps = {
   accessoryIds: HooWorldAccessoryId[];
   characterImagePath: string;
   focusing?: boolean;
+  dancing?: boolean;
 };
 
 function CharacterBody({
@@ -279,6 +313,7 @@ function CharacterBody({
   accessoryIds,
   characterImagePath,
   focusing = false,
+  dancing = false,
 }: CharacterBodyProps) {
   /*
    * HOO 마스코트는 좌/우 방향만 실제 시각 방향으로 사용한다.
@@ -307,6 +342,13 @@ function CharacterBody({
       ? -1
       : 1;
 
+  const characterMotionAnimation =
+    dancing
+      ? "hoo-world-dance-sway 0.92s ease-in-out infinite"
+      : focusing
+        ? "hoo-world-focus-bob 1.25s ease-in-out infinite"
+        : undefined;
+
   return (
     <div
       className={`relative h-[92px] w-[108px] transition-transform duration-200 ${
@@ -323,6 +365,11 @@ function CharacterBody({
         characterImagePath
       }
       data-accessory-ids={accessoryIds.join(",")}
+      data-hoo-world-dancing={
+        dancing
+          ? "true"
+          : "false"
+      }
     >
       <div
         data-hoo-player-sprite-motion="true"
@@ -331,9 +378,7 @@ function CharacterBody({
           transform:
             "translate3d(0, 0, 0) rotate(0deg)",
           animation:
-            focusing
-              ? "hoo-world-focus-bob 1.25s ease-in-out infinite"
-              : undefined,
+            characterMotionAnimation,
         }}
       >
         <div className="absolute bottom-0 left-1/2 h-[132px] w-[154px] origin-bottom -translate-x-1/2 scale-[0.7]">
