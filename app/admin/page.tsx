@@ -578,6 +578,16 @@ export default function AdminPage() {
     setHooWorldFireworksDeliveryMessage,
   ] = useState("");
 
+  const [
+    hooWorldFirewoodSpawnSending,
+    setHooWorldFirewoodSpawnSending,
+  ] = useState(false);
+
+  const [
+    hooWorldFirewoodSpawnMessage,
+    setHooWorldFirewoodSpawnMessage,
+  ] = useState("");
+
 
   const [
     hooWorldAdminCharacter,
@@ -2613,6 +2623,16 @@ export default function AdminPage() {
       return;
     }
 
+    /*
+     * camp_stew의 내부 ID는 기존 호환성을 위해 유지하되,
+     * 배송상자/배송내역에 표시되는 이름은 항상 "후셰프 스튜"로 통일한다.
+     * SQL 패치에서도 같은 규칙을 한 번 더 적용해 구버전 클라이언트까지 방어한다.
+     */
+    const deliveryFoodName =
+      food.id === "camp_stew"
+        ? "후셰프 스튜"
+        : food.name;
+
     const isGroupFood =
       mode ===
       "group";
@@ -2642,7 +2662,7 @@ export default function AdminPage() {
               food.id,
 
             p_food_name:
-              food.name,
+              deliveryFoodName,
 
             p_food_image_url:
               food.imagePath ||
@@ -2797,11 +2817,11 @@ export default function AdminPage() {
       setHooWorldFoodDeliveryMessage(
         deliveryId
           ? isGroupFood
-            ? `${food.name} 단체 음식 배송 완료 · 누군가 F를 누르면 본인과 가까운 이용자 최대 3명이 함께 식사합니다.`
-            : `${food.name} 배송 완료 · 후월드 입구에 상자가 실시간 도착합니다.`
+            ? `${deliveryFoodName} 단체 음식 배송 완료 · 누군가 F를 누르면 본인과 가까운 이용자 최대 3명이 함께 식사합니다.`
+            : `${deliveryFoodName} 배송 완료 · 후월드 입구에 상자가 실시간 도착합니다.`
           : isGroupFood
-            ? `${food.name} 단체 음식 배송을 보냈습니다.`
-            : `${food.name} 배송을 보냈습니다.`,
+            ? `${deliveryFoodName} 단체 음식 배송을 보냈습니다.`
+            : `${deliveryFoodName} 배송을 보냈습니다.`,
       );
     } catch (error) {
       const errorMessage =
@@ -2955,6 +2975,151 @@ export default function AdminPage() {
       );
     } finally {
       setHooWorldFireworksDeliverySending(
+        false,
+      );
+    }
+  }
+
+  async function spawnHooWorldFirewoodRandomly() {
+    if (
+      !status?.canManage ||
+      hooWorldFirewoodSpawnSending
+    ) {
+      return;
+    }
+
+    setHooWorldFirewoodSpawnSending(
+      true,
+    );
+
+    setHooWorldFirewoodSpawnMessage(
+      "",
+    );
+
+    try {
+      const {
+        data,
+        error,
+      } =
+        await supabase.rpc(
+          "admin_spawn_hoo_world_firewood",
+        );
+
+      if (error) {
+        const errorCode =
+          typeof error.code ===
+            "string"
+            ? error.code
+            : "UNKNOWN";
+
+        const errorMessage =
+          typeof error.message ===
+            "string" &&
+          error.message.trim()
+            ? error.message.trim()
+            : "알 수 없는 오류";
+
+        console.warn(
+          `HOO WORLD 관리자 장작 랜덤 배치 RPC 실패 | code=${errorCode} | message=${errorMessage}`,
+        );
+
+        if (
+          errorCode ===
+            "PGRST202" ||
+          errorMessage.includes(
+            "Could not find the function",
+          )
+        ) {
+          setHooWorldFirewoodSpawnMessage(
+            "장작 랜덤 배치 RPC를 찾지 못했습니다. 함께 제공된 SQL 패치를 먼저 적용해 주세요.",
+          );
+          return;
+        }
+
+        setHooWorldFirewoodSpawnMessage(
+          `장작 배치 실패 · ${errorCode} · ${errorMessage}`,
+        );
+
+        return;
+      }
+
+      const result =
+        data &&
+        typeof data ===
+          "object" &&
+        !Array.isArray(data)
+          ? data as Record<
+              string,
+              unknown
+            >
+          : null;
+
+      if (
+        result?.ok ===
+        false
+      ) {
+        const backendCode =
+          typeof result.error_code ===
+            "string"
+            ? result.error_code
+            : "DB_ERROR";
+
+        const backendMessage =
+          typeof result.error_message ===
+            "string" &&
+          result.error_message.trim()
+            ? result.error_message.trim()
+            : "장작 랜덤 배치 처리 실패";
+
+        setHooWorldFirewoodSpawnMessage(
+          `장작 배치 실패 · ${backendCode} · ${backendMessage}`,
+        );
+
+        return;
+      }
+
+      const itemId =
+        typeof result?.item_id ===
+          "string"
+          ? result.item_id
+          : "";
+
+      const x =
+        Number(
+          result?.x,
+        );
+
+      const y =
+        Number(
+          result?.y,
+        );
+
+      const positionLabel =
+        Number.isFinite(x) &&
+        Number.isFinite(y)
+          ? ` · 위치 ${x.toFixed(1)}, ${y.toFixed(1)}`
+          : "";
+
+      setHooWorldFirewoodSpawnMessage(
+        itemId
+          ? `🪵 장작 랜덤 배치 완료${positionLabel} · 접속 중인 이용자에게 실시간 반영됩니다.`
+          : "🪵 장작 랜덤 배치를 완료했습니다.",
+      );
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      console.warn(
+        `HOO WORLD 관리자 장작 랜덤 배치 처리 중 예외 | ${errorMessage}`,
+      );
+
+      setHooWorldFirewoodSpawnMessage(
+        `장작 랜덤 배치 처리 중 오류 · ${errorMessage}`,
+      );
+    } finally {
+      setHooWorldFirewoodSpawnSending(
         false,
       );
     }
@@ -5081,6 +5246,136 @@ export default function AdminPage() {
               }}
             >
               {hooWorldFireworksDeliveryMessage}
+            </div>
+          ) : null}
+        </section>
+
+        {/* 후월드 관리자 장작 랜덤 배치 */}
+        <section
+          style={{
+            marginBottom: 32,
+            padding: 24,
+            border:
+              "1px solid #4a3b2b",
+            borderRadius: 18,
+            background:
+              "#17120d",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems:
+                "center",
+              justifyContent:
+                "space-between",
+              gap: 18,
+              flexWrap:
+                "wrap",
+            }}
+          >
+            <div
+              style={{
+                minWidth: 0,
+                flex:
+                  "1 1 360px",
+              }}
+            >
+              <div
+                style={{
+                  color: "#d6ad78",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  letterSpacing:
+                    "0.12em",
+                  marginBottom: 6,
+                }}
+              >
+                HOO WORLD FIREWOOD CONTROL
+              </div>
+
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: 22,
+                }}
+              >
+                🪵 장작 랜덤 배치
+              </h2>
+
+              <p
+                style={{
+                  margin:
+                    "8px 0 0",
+                  color: "#9e8e7a",
+                  fontSize: 12,
+                  lineHeight: 1.7,
+                }}
+              >
+                후월드의 안전한 랜덤 위치에 장작 1개를 즉시 배치합니다.
+                중앙 모닥불, 주요 고정 구역, 가판대, 기존 설치 아이템 주변은 피하고
+                기존 장작과 동일하게 X 이동 · 좌표 저장 · Realtime 동기화를 사용합니다.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                void spawnHooWorldFirewoodRandomly();
+              }}
+              disabled={
+                hooWorldFirewoodSpawnSending ||
+                !status.canManage
+              }
+              style={{
+                minWidth: 192,
+                minHeight: 46,
+                border:
+                  "1px solid #a47742",
+                borderRadius: 12,
+                background:
+                  hooWorldFirewoodSpawnSending
+                    ? "#3a3025"
+                    : "#6b4827",
+                color: "#ffe2bd",
+                fontSize: 12,
+                fontWeight: 900,
+                cursor:
+                  hooWorldFirewoodSpawnSending ||
+                  !status.canManage
+                    ? "not-allowed"
+                    : "pointer",
+                opacity:
+                  !status.canManage
+                    ? 0.55
+                    : 1,
+                boxShadow:
+                  "0 7px 18px rgba(66,43,22,0.24)",
+              }}
+            >
+              {hooWorldFirewoodSpawnSending
+                ? "장작 배치 중..."
+                : "🪵 장작 랜덤 배치"}
+            </button>
+          </div>
+
+          {hooWorldFirewoodSpawnMessage ? (
+            <div
+              style={{
+                marginTop: 14,
+                padding:
+                  "11px 13px",
+                border:
+                  "1px solid #5c4630",
+                borderRadius: 11,
+                background:
+                  "#20170f",
+                color: "#e7bd88",
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              {hooWorldFirewoodSpawnMessage}
             </div>
           ) : null}
         </section>
