@@ -298,6 +298,33 @@ const [
 const [isRunning, setIsRunning] =
   useState(false);
 
+/*
+ * 현재 포커스 세션이 이미 기록되었는지 추적한다.
+ * pagehide / beforeunload / 컴포넌트 unmount가 연달아 발생해도
+ * 같은 세션이 프로필에 중복 저장되지 않도록 막는다.
+ */
+const focusHistorySavedForCurrentSessionRef =
+  useRef(false);
+
+/*
+ * 후터디노트로 이동할 때는 포커스가 종료된 것이 아니라
+ * 기존 세션을 이어가는 handoff이므로 자동 종료 기록을 잠시 막는다.
+ */
+const skipAutoFinalizeOnLeaveRef =
+  useRef(false);
+
+/*
+ * unload 시점에는 React state가 이미 정리될 수 있으므로
+ * 마지막 렌더의 포커스 상태를 ref에 보관한다.
+ */
+const focusLeaveSnapshotRef =
+  useRef<{
+    goal: string;
+    plannedSeconds: number;
+    remainingSeconds: number;
+    startedAt: string | null;
+  } | null>(null);
+
 useEffect(() => {
   onFocusRunningChange?.(
     isRunning,
@@ -420,6 +447,48 @@ const {
     formatDurationLabel(
       initialSeconds,
     );
+
+  /*
+   * 현재 화면을 벗어나는 순간 저장할 수 있도록
+   * 실행 중이면 focusEndsAt 기준으로 실제 남은 시간을 계산하고,
+   * 일시정지/종료확인 상태라면 현재 remainingSeconds를 그대로 사용한다.
+   */
+  const leaveRemainingSeconds =
+    isRunning &&
+    focusEndsAt !== null
+      ? Math.max(
+          0,
+          Math.min(
+            initialSeconds,
+            Math.ceil(
+              (
+                focusEndsAt -
+                Date.now()
+              ) / 1000,
+            ),
+          ),
+        )
+      : Math.max(
+          0,
+          Math.min(
+            initialSeconds,
+            remainingSeconds,
+          ),
+        );
+
+  focusLeaveSnapshotRef.current =
+    view === "timer" &&
+    focusStartedAt !== null
+      ? {
+          goal: trimmedGoal,
+          plannedSeconds:
+            initialSeconds,
+          remainingSeconds:
+            leaveRemainingSeconds,
+          startedAt:
+            focusStartedAt,
+        }
+      : null;
 
   const progress = useMemo(() => {
     if (initialSeconds <= 0) {
@@ -1190,6 +1259,35 @@ function handleProfileLauncherClick() {
   }, []);
 
  function closeFocusMode() {
+  /*
+   * X 버튼 등으로 포커스 화면을 바로 닫아도
+   * 종료 버튼을 누른 것과 동일하게 지금까지의 실제 집중시간을 기록한다.
+   */
+  if (
+    view === "timer" &&
+    focusStartedAt !== null &&
+    !focusHistorySavedForCurrentSessionRef.current
+  ) {
+    const currentRemainingSeconds =
+      isRunning &&
+      focusEndsAt !== null
+        ? Math.max(
+            0,
+            Math.ceil(
+              (
+                focusEndsAt -
+                Date.now()
+              ) / 1000,
+            ),
+          )
+        : remainingSeconds;
+
+    saveFocusHistory(
+      initialSeconds -
+        currentRemainingSeconds,
+    );
+  }
+
   setIsOpen(false);
   setIsRunning(false);
   setFocusEndsAt(null);
@@ -1271,6 +1369,12 @@ function handleProfileLauncherClick() {
     return;
   }
 
+  /* 새 포커스 세션이 시작되면 자동 종료 저장 가드를 초기화한다. */
+  focusHistorySavedForCurrentSessionRef.current =
+    false;
+  skipAutoFinalizeOnLeaveRef.current =
+    false;
+
   const now = Date.now();
 
   setRemainingSeconds(
@@ -1313,6 +1417,13 @@ function openFocusStudyNote() {
           currentRemainingSeconds *
             1000
       : null;
+
+  /*
+   * 후터디노트 이동은 화면 이탈이지만 포커스 종료가 아니다.
+   * 아래 handoff 세션을 만든 뒤 unload 자동기록을 억제한다.
+   */
+  skipAutoFinalizeOnLeaveRef.current =
+    true;
 
   window.sessionStorage.setItem(
     "hoo-focus-study-note-session-v1",
@@ -1687,6 +1798,12 @@ function openFocusStudyNote() {
       ? source.startedAt ?? null
       : focusStartedAt;
 
+  if (
+    focusHistorySavedForCurrentSessionRef.current
+  ) {
+    return false;
+  }
+
   try {
     saveFocusHistoryRecord({
       goal: historyGoal,
@@ -1697,6 +1814,9 @@ function openFocusStudyNote() {
       startedAt:
         historyStartedAt,
     });
+
+    focusHistorySavedForCurrentSessionRef.current =
+      true;
 
     /*
      * 기록 저장 성공 직후 프로필을 로컬 기록으로 즉시 갱신한다.
@@ -2191,6 +2311,110 @@ function restartFocusMode() {
 
   setView("setup");
 }
+
+/*
+ * 포커스 실행 중 종료버튼을 누르지 않고
+ * - 다른 페이지로 이동
+ * - 새로고침
+ * - 탭/브라우저 닫기
+ * - 상위 컴포넌트 unmount
+ * 가 발생해도 마지막 실제 집중시간을 로컬 프로필 기록에 남긴다.
+ *
+ * unload 순간에는 비동기 요청을 신뢰할 수 없으므로
+ * saveFocusHistoryRecord(localStorage 기반)를 동기적으로 먼저 기록한다.
+ * 로그인 사용자는 다음 HOO 화면/프로필 진입 시 기존 클라우드 동기화가
+ * 이 로컬 기록을 서버 기록과 다시 합친다.
+ */
+useEffect(() => {
+  function finalizeFocusOnLeave() {
+    if (
+      skipAutoFinalizeOnLeaveRef.current ||
+      focusHistorySavedForCurrentSessionRef.current
+    ) {
+      return;
+    }
+
+    const snapshot =
+      focusLeaveSnapshotRef.current;
+
+    if (!snapshot) {
+      return;
+    }
+
+    const safePlannedSeconds =
+      Math.max(
+        1,
+        Math.floor(
+          snapshot.plannedSeconds,
+        ),
+      );
+
+    const safeRemainingSeconds =
+      Math.max(
+        0,
+        Math.min(
+          safePlannedSeconds,
+          Math.floor(
+            snapshot.remainingSeconds,
+          ),
+        ),
+      );
+
+    const actualSeconds =
+      safePlannedSeconds -
+      safeRemainingSeconds;
+
+    if (actualSeconds < 1) {
+      return;
+    }
+
+    try {
+      saveFocusHistoryRecord({
+        goal: snapshot.goal,
+        plannedSeconds:
+          safePlannedSeconds,
+        actualSeconds,
+        startedAt:
+          snapshot.startedAt,
+      });
+
+      focusHistorySavedForCurrentSessionRef.current =
+        true;
+    } catch (error) {
+      console.error(
+        "화면 이탈 포커스 기록 저장 실패:",
+        error,
+      );
+    }
+  }
+
+  window.addEventListener(
+    "pagehide",
+    finalizeFocusOnLeave,
+  );
+  window.addEventListener(
+    "beforeunload",
+    finalizeFocusOnLeave,
+  );
+
+  return () => {
+    /*
+     * Next.js 내부 라우팅처럼 pagehide가 발생하지 않는 unmount도
+     * 동일하게 마지막 기록을 남긴다.
+     */
+    finalizeFocusOnLeave();
+
+    window.removeEventListener(
+      "pagehide",
+      finalizeFocusOnLeave,
+    );
+    window.removeEventListener(
+      "beforeunload",
+      finalizeFocusOnLeave,
+    );
+  };
+}, []);
+
 useEffect(() => {
   return () => {
     journalLoadRequestIdRef.current +=

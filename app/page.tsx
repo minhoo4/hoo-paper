@@ -12751,8 +12751,11 @@ setSecretPinInput("");
                     </div>
                   </article>
 
-                <aside className="flex min-h-[600px] flex-col bg-[#fbfaff] xl:min-h-0 xl:overflow-y-auto xl:overscroll-contain xl:[scrollbar-color:rgba(116,103,216,0.55)_rgba(255,255,255,0.08)] xl:[scrollbar-width:thin]">
-                    <header className="border-b border-[#dedaf0] px-6 py-5">
+                <aside
+                  data-hoo-vertical-scroll="true"
+                  className="flex min-h-[600px] touch-pan-y flex-col overflow-y-auto overscroll-contain bg-[#fbfaff] [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden xl:min-h-0 xl:max-h-[calc(100dvh-128px)]"
+                >
+                    <header className="shrink-0 border-b border-[#dedaf0] px-6 py-5">
                       <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
                         SELECTED DATE
                       </p>
@@ -12766,7 +12769,7 @@ setSecretPinInput("");
                       </p>
                     </header>
 
-                    <section className="min-h-0 flex-1 overflow-y-auto border-b border-[#dedaf0] px-6 py-4">
+                    <section className="shrink-0 border-b border-[#dedaf0] px-6 py-4">
                       
                      <div className="flex items-center justify-between gap-3">
   <h3 className="text-xl font-black">
@@ -13079,7 +13082,7 @@ setSecretPinInput("");
 
                     <form
                       onSubmit={addSchedule}
-                      className="bg-[#f5f2ff] px-6 py-4"
+                      className="shrink-0 bg-[#f5f2ff] px-6 pb-6 pt-4"
                     >
                       <h3 className="text-lg font-black">
                         {editingScheduleId

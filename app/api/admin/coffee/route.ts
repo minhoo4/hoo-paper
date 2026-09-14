@@ -1,99 +1,156 @@
-import { NextResponse } from "next/server";
-
 import {
-  createClient as createServerClient,
-} from "@/lib/supabase/server";
-
+  NextRequest,
+  NextResponse,
+} from "next/server";
 import {
-  createClient as createServiceClient,
+  createClient,
 } from "@supabase/supabase-js";
-
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 const KST_OFFSET_MS =
   9 * 60 * 60 * 1000;
 
+type AdminStatus = {
+  isLoggedIn?: boolean;
+  isAdmin?: boolean;
+  canManage?: boolean;
+};
+
 type CoffeePaymentRow = {
   order_id: string;
-  amount: number;
+  amount: number | string;
   currency: string;
   status: string;
-  approved_at: string;
+  approved_at: string | null;
 };
 
 function getKstBoundaries() {
-  const now = Date.now();
-
-  const kstNow =
+  const nowKst =
     new Date(
-      now + KST_OFFSET_MS,
+      Date.now() + KST_OFFSET_MS,
     );
 
   const year =
-    kstNow.getUTCFullYear();
-
+    nowKst.getUTCFullYear();
   const month =
-    kstNow.getUTCMonth();
-
+    nowKst.getUTCMonth();
   const day =
-    kstNow.getUTCDate();
+    nowKst.getUTCDate();
 
-  const todayStartUtc =
-    Date.UTC(
-      year,
-      month,
-      day,
-      0,
-      0,
-      0,
-    ) - KST_OFFSET_MS;
+  const todayStart =
+    new Date(
+      Date.UTC(
+        year,
+        month,
+        day,
+      ) - KST_OFFSET_MS,
+    );
 
-  const monthStartUtc =
-    Date.UTC(
-      year,
-      month,
-      1,
-      0,
-      0,
-      0,
-    ) - KST_OFFSET_MS;
+  const tomorrowStart =
+    new Date(
+      todayStart.getTime() +
+        24 * 60 * 60 * 1000,
+    );
+
+  const monthStart =
+    new Date(
+      Date.UTC(
+        year,
+        month,
+        1,
+      ) - KST_OFFSET_MS,
+    );
+
+  const nextMonthStart =
+    new Date(
+      Date.UTC(
+        year,
+        month + 1,
+        1,
+      ) - KST_OFFSET_MS,
+    );
 
   return {
-    todayStartIso:
-      new Date(
-        todayStartUtc,
-      ).toISOString(),
-
-    monthStartIso:
-      new Date(
-        monthStartUtc,
-      ).toISOString(),
+    todayStart,
+    tomorrowStart,
+    monthStart,
+    nextMonthStart,
   };
 }
 
-export async function GET() {
-  try {
-    /*
-     * ========================================
-     * 1. 로그인 + 관리자 권한 확인
-     * ========================================
-     */
+function sumAmounts(
+  rows: Array<{
+    amount: number | string;
+  }>,
+) {
+  return rows.reduce(
+    (sum, row) => {
+      const amount = Number(row.amount);
 
-    const userSupabase =
-      await createServerClient();
+      return (
+        sum +
+        (
+          Number.isFinite(amount)
+            ? amount
+            : 0
+        )
+      );
+    },
+    0,
+  );
+}
 
-    const {
-      data: {
-        user,
+async function verifyAdmin(
+  request: NextRequest,
+) {
+  const meUrl =
+    new URL(
+      "/api/admin/me",
+      request.url,
+    );
+
+  const cookie =
+    request.headers.get("cookie") ??
+    "";
+
+  const response =
+    await fetch(meUrl, {
+      cache: "no-store",
+      headers: {
+        cookie,
       },
-      error: userError,
-    } =
-      await userSupabase.auth.getUser();
+    });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const contentType =
+    response.headers.get(
+      "content-type",
+    ) ?? "";
+
+  if (
+    !contentType.includes(
+      "application/json",
+    )
+  ) {
+    return null;
+  }
+
+  return (
+    await response.json()
+  ) as AdminStatus;
+}
+
+export async function GET(
+  request: NextRequest,
+) {
+  try {
+    const adminStatus =
+      await verifyAdmin(request);
 
     if (
-      userError ||
-      !user
+      !adminStatus?.isLoggedIn
     ) {
       return NextResponse.json(
         {
@@ -107,33 +164,10 @@ export async function GET() {
       );
     }
 
-    const {
-      data: isAdmin,
-      error: adminError,
-    } =
-      await userSupabase.rpc(
-        "is_admin",
-      );
-
-    if (adminError) {
-      console.error(
-        "[Admin Coffee] 관리자 권한 확인 실패:",
-        adminError,
-      );
-
-      return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "관리자 권한을 확인하지 못했습니다.",
-        },
-        {
-          status: 500,
-        },
-      );
-    }
-
-    if (isAdmin !== true) {
+    if (
+      !adminStatus.isAdmin ||
+      adminStatus.canManage === false
+    ) {
       return NextResponse.json(
         {
           ok: false,
@@ -146,20 +180,9 @@ export async function GET() {
       );
     }
 
-    /*
-     * ========================================
-     * 2. Service Role 준비
-     * ========================================
-     *
-     * hoo_coffee_payments는
-     * anon/authenticated 직접 접근을 막았기 때문에
-     * 관리자 인증이 끝난 서버에서만 읽는다.
-     */
-
     const supabaseUrl =
       process.env
         .NEXT_PUBLIC_SUPABASE_URL;
-
     const serviceRoleKey =
       process.env
         .SUPABASE_SERVICE_ROLE_KEY;
@@ -168,15 +191,11 @@ export async function GET() {
       !supabaseUrl ||
       !serviceRoleKey
     ) {
-      console.error(
-        "[Admin Coffee] Supabase server env missing",
-      );
-
       return NextResponse.json(
         {
           ok: false,
           error:
-            "관리자 서버 설정이 완료되지 않았습니다.",
+            "Supabase 관리자 환경변수가 설정되지 않았습니다.",
         },
         {
           status: 500,
@@ -184,165 +203,58 @@ export async function GET() {
       );
     }
 
-    const adminSupabase =
-      createServiceClient(
+    const supabase =
+      createClient(
         supabaseUrl,
         serviceRoleKey,
         {
           auth: {
-            autoRefreshToken:
-              false,
-            persistSession:
-              false,
+            autoRefreshToken: false,
+            persistSession: false,
           },
         },
       );
 
-    /*
-     * ========================================
-     * 3. 한국시간 오늘 / 이번 달 기준
-     * ========================================
-     */
-
     const {
-      todayStartIso,
-      monthStartIso,
-    } =
-      getKstBoundaries();
+      todayStart,
+      tomorrowStart,
+      monthStart,
+      nextMonthStart,
+    } = getKstBoundaries();
 
-    /*
-     * ========================================
-     * 4. 이번 달 완료 결제 조회
-     * ========================================
-     */
-
-    const {
-      data: monthPayments,
-      error:
-        monthPaymentsError,
-    } =
-      await adminSupabase
-        .from(
-          "hoo_coffee_payments",
-        )
-        .select(
-          `
-            order_id,
-            amount,
-            currency,
-            status,
-            approved_at
-          `,
-        )
-        .eq(
-          "status",
-          "DONE",
-        )
+    const [
+      todayResult,
+      monthResult,
+      recentResult,
+    ] = await Promise.all([
+      supabase
+        .from("hoo_coffee_payments")
+        .select("amount")
+        .eq("status", "DONE")
         .gte(
           "approved_at",
-          monthStartIso,
+          todayStart.toISOString(),
         )
-        .order(
+        .lt(
           "approved_at",
-          {
-            ascending:
-              false,
-          },
-        );
+          tomorrowStart.toISOString(),
+        ),
 
-    if (monthPaymentsError) {
-      console.error(
-        "[Admin Coffee] 월간 결제 조회 실패:",
-        monthPaymentsError,
-      );
-
-      return NextResponse.json(
-        {
-          ok: false,
-          error:
-            "커피 결제 기록을 불러오지 못했습니다.",
-        },
-        {
-          status: 500,
-        },
-      );
-    }
-
-    const payments =
-      (
-        monthPayments ??
-        []
-      ) as CoffeePaymentRow[];
-
-    /*
-     * ========================================
-     * 5. 오늘 통계
-     * ========================================
-     */
-
-    const todayPayments =
-      payments.filter(
-        (payment) =>
-          payment.approved_at >=
-          todayStartIso,
-      );
-
-    const todayCount =
-      todayPayments.length;
-
-    const todayAmount =
-      todayPayments.reduce(
-        (
-          total,
-          payment,
-        ) =>
-          total +
-          Number(
-            payment.amount,
-          ),
-        0,
-      );
-
-    /*
-     * ========================================
-     * 6. 이번 달 통계
-     * ========================================
-     */
-
-    const monthCount =
-      payments.length;
-
-    const monthAmount =
-      payments.reduce(
-        (
-          total,
-          payment,
-        ) =>
-          total +
-          Number(
-            payment.amount,
-          ),
-        0,
-      );
-
-    /*
-     * ========================================
-     * 7. 최근 결제 20건
-     * ========================================
-     *
-     * payment_key_hash는 관리자 화면에도
-     * 굳이 노출하지 않는다.
-     */
-
-    const {
-      data: recentPayments,
-      error:
-        recentPaymentsError,
-    } =
-      await adminSupabase
-        .from(
-          "hoo_coffee_payments",
+      supabase
+        .from("hoo_coffee_payments")
+        .select("amount")
+        .eq("status", "DONE")
+        .gte(
+          "approved_at",
+          monthStart.toISOString(),
         )
+        .lt(
+          "approved_at",
+          nextMonthStart.toISOString(),
+        ),
+
+      supabase
+        .from("hoo_coffee_payments")
         .select(
           `
             order_id,
@@ -352,26 +264,28 @@ export async function GET() {
             approved_at
           `,
         )
-        .order(
-          "approved_at",
-          {
-            ascending:
-              false,
-          },
-        )
-        .limit(20);
+        .order("approved_at", {
+          ascending: false,
+        })
+        .limit(20),
+    ]);
 
-    if (recentPaymentsError) {
+    const firstError =
+      todayResult.error ??
+      monthResult.error ??
+      recentResult.error;
+
+    if (firstError) {
       console.error(
-        "[Admin Coffee] 최근 결제 조회 실패:",
-        recentPaymentsError,
+        "GET /api/admin/coffee",
+        firstError,
       );
 
       return NextResponse.json(
         {
           ok: false,
           error:
-            "최근 커피 기록을 불러오지 못했습니다.",
+            "커피 기록을 불러오지 못했습니다.",
         },
         {
           status: 500,
@@ -379,69 +293,44 @@ export async function GET() {
       );
     }
 
-    /*
-     * ========================================
-     * 8. 관리자에게 필요한 정보만 반환
-     * ========================================
-     */
+    const todayRows =
+      todayResult.data ?? [];
+    const monthRows =
+      monthResult.data ?? [];
+    const recentRows =
+      (recentResult.data ?? []) as
+        CoffeePaymentRow[];
 
-    const recent =
-      (
-        recentPayments ??
-        []
-      ).map(
-        (payment) => ({
-          orderId:
-            payment.order_id,
-
+    return NextResponse.json({
+      ok: true,
+      stats: {
+        today: {
+          count: todayRows.length,
           amount:
-            Number(
-              payment.amount,
-            ),
-
-          currency:
-            payment.currency,
-
-          status:
-            payment.status,
-
-          approvedAt:
-            payment.approved_at,
-        }),
-      );
-
-    const response =
-      NextResponse.json({
-        ok: true,
-
-        stats: {
-          today: {
-            count:
-              todayCount,
-            amount:
-              todayAmount,
-          },
-
-          month: {
-            count:
-              monthCount,
-            amount:
-              monthAmount,
-          },
+            sumAmounts(todayRows),
         },
-
-        recent,
-      });
-
-    response.headers.set(
-      "Cache-Control",
-      "no-store",
-    );
-
-    return response;
+        month: {
+          count: monthRows.length,
+          amount:
+            sumAmounts(monthRows),
+        },
+      },
+      recent: recentRows.map(
+        (row) => ({
+          orderId: row.order_id,
+          amount:
+            Number(row.amount) || 0,
+          currency:
+            row.currency || "KRW",
+          status: row.status,
+          approvedAt:
+            row.approved_at ?? "",
+        }),
+      ),
+    });
   } catch (error) {
     console.error(
-      "[Admin Coffee] API 오류:",
+      "GET /api/admin/coffee unexpected error",
       error,
     );
 
@@ -449,7 +338,7 @@ export async function GET() {
       {
         ok: false,
         error:
-          "커피 관리자 정보를 불러오지 못했습니다.",
+          "커피 기록 API 처리 중 오류가 발생했습니다.",
       },
       {
         status: 500,

@@ -62,6 +62,12 @@ type CoffeeData = {
   error?: string;
 };
 
+type NewUserReportItem = {
+  id: string;
+  nickname: string;
+  createdAt: string;
+};
+
 type HooWorldItemRequestStatus =
   | "requested"
   | "making"
@@ -452,6 +458,134 @@ function getRequestStatusColor(
   }
 }
 
+const KST_OFFSET_MS =
+  9 * 60 * 60 * 1000;
+
+const ONE_DAY_MS =
+  24 * 60 * 60 * 1000;
+
+/*
+ * 신규 가입자 안내는 매일 한국시간 정오(12:00)를 기준으로 갱신한다.
+ * - 정오 전 접속: 전날 정오까지 확인된 가입자를 기준으로 표시
+ * - 정오 이후 접속: 오늘 정오까지 확인된 가입자를 기준으로 표시
+ * - 가입자가 없는 날은 가장 최근 가입일의 문구가 그대로 유지된다.
+ */
+function getLatestKstNoonCutoff(
+  now = new Date(),
+) {
+  const kstNow = new Date(
+    now.getTime() + KST_OFFSET_MS,
+  );
+
+  let cutoffKstMs = Date.UTC(
+    kstNow.getUTCFullYear(),
+    kstNow.getUTCMonth(),
+    kstNow.getUTCDate(),
+    12,
+    0,
+    0,
+    0,
+  );
+
+  if (
+    kstNow.getTime() < cutoffKstMs
+  ) {
+    cutoffKstMs -= ONE_DAY_MS;
+  }
+
+  return new Date(
+    cutoffKstMs - KST_OFFSET_MS,
+  );
+}
+
+function getNextKstNoon(
+  now = new Date(),
+) {
+  const kstNow = new Date(
+    now.getTime() + KST_OFFSET_MS,
+  );
+
+  let nextNoonKstMs = Date.UTC(
+    kstNow.getUTCFullYear(),
+    kstNow.getUTCMonth(),
+    kstNow.getUTCDate(),
+    12,
+    0,
+    0,
+    0,
+  );
+
+  if (
+    kstNow.getTime() >=
+    nextNoonKstMs
+  ) {
+    nextNoonKstMs += ONE_DAY_MS;
+  }
+
+  return new Date(
+    nextNoonKstMs - KST_OFFSET_MS,
+  );
+}
+
+function getKstDayRange(
+  value: string,
+) {
+  const source = new Date(value);
+  const kstDate = new Date(
+    source.getTime() + KST_OFFSET_MS,
+  );
+
+  const year =
+    kstDate.getUTCFullYear();
+  const monthIndex =
+    kstDate.getUTCMonth();
+  const day =
+    kstDate.getUTCDate();
+
+  const startKstMs = Date.UTC(
+    year,
+    monthIndex,
+    day,
+    0,
+    0,
+    0,
+    0,
+  );
+
+  const start = new Date(
+    startKstMs - KST_OFFSET_MS,
+  );
+
+  const end = new Date(
+    start.getTime() + ONE_DAY_MS,
+  );
+
+  return {
+    month: monthIndex + 1,
+    day,
+    start,
+    end,
+  };
+}
+
+function formatNewUserJoinedTime(
+  value: string,
+) {
+  try {
+    return new Intl.DateTimeFormat(
+      "ko-KR",
+      {
+        timeZone: "Asia/Seoul",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      },
+    ).format(new Date(value));
+  } catch {
+    return "-";
+  }
+}
+
 export default function AdminPage() {
   const supabase = useMemo(
     () => createClient(),
@@ -462,6 +596,25 @@ export default function AdminPage() {
     useState<AdminStatus | null>(
       null,
     );
+
+  const [
+    newUserSummary,
+    setNewUserSummary,
+  ] = useState(
+    "신규 이용자 가입 현황을 확인 중입니다.",
+  );
+
+  const [
+    newUserSummaryLoading,
+    setNewUserSummaryLoading,
+  ] = useState(true);
+
+  const [
+    newUserReportItems,
+    setNewUserReportItems,
+  ] = useState<NewUserReportItem[]>(
+    [],
+  );
 
   const [coffeeData, setCoffeeData] =
     useState<CoffeeData | null>(
@@ -672,22 +825,266 @@ export default function AdminPage() {
     fetch("/api/admin/me", {
       cache: "no-store",
     })
-      .then((res) => res.json())
-      .then(
-        (
-          result: AdminStatus,
-        ) => {
-          setStatus(result);
-        },
-      )
-      .catch(() =>
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(
+            `/api/admin/me 요청 실패 (${response.status})`,
+          );
+        }
+
+        const contentType =
+          response.headers.get(
+            "content-type",
+          ) ?? "";
+
+        if (
+          !contentType.includes(
+            "application/json",
+          )
+        ) {
+          throw new Error(
+            "/api/admin/me가 JSON이 아닌 응답을 반환했습니다.",
+          );
+        }
+
+        return (
+          await response.json()
+        ) as AdminStatus;
+      })
+      .then((result) => {
+        setStatus(result);
+      })
+      .catch((error) => {
+        console.warn(
+          "관리자 상태 확인 실패:",
+          error,
+        );
+
         setStatus({
           isLoggedIn: false,
           isAdmin: false,
           canManage: false,
-        }),
-      );
+        });
+      });
   }, []);
+
+  /*
+   * 관리자페이지 최상단 신규 가입자 안내
+   *
+   * profiles.created_at을 기준으로 가장 최근 가입일을 찾고,
+   * 같은 한국 날짜에 가입한 이용자 수를 집계한다.
+   * 정오 이후에 가입한 이용자는 다음 날 정오 갱신 때 반영된다.
+   */
+  useEffect(() => {
+    if (
+      !status?.isLoggedIn ||
+      !status.isAdmin
+    ) {
+      setNewUserSummaryLoading(
+        false,
+      );
+
+      return;
+    }
+
+    let cancelled = false;
+    let nextNoonTimer:
+      ReturnType<
+        typeof window.setTimeout
+      > | null = null;
+
+    async function loadNewUserSummary() {
+      try {
+        const cutoff =
+          getLatestKstNoonCutoff();
+
+        const {
+          data: latestProfile,
+          error: latestProfileError,
+        } =
+          await supabase
+            .from("profiles")
+            .select("created_at")
+            .lte(
+              "created_at",
+              cutoff.toISOString(),
+            )
+            .order("created_at", {
+              ascending: false,
+            })
+            .limit(1)
+            .maybeSingle();
+
+        if (cancelled) {
+          return;
+        }
+
+        if (latestProfileError) {
+          throw latestProfileError;
+        }
+
+        if (
+          !latestProfile ||
+          typeof latestProfile.created_at !==
+            "string"
+        ) {
+          setNewUserSummary(
+            "신규 이용자 가입 기록이 없습니다.",
+          );
+          setNewUserReportItems([]);
+
+          return;
+        }
+
+        const dayRange =
+          getKstDayRange(
+            latestProfile.created_at,
+          );
+
+        const {
+          count,
+          error: countError,
+        } =
+          await supabase
+            .from("profiles")
+            .select("id", {
+              count: "exact",
+              head: true,
+            })
+            .gte(
+              "created_at",
+              dayRange.start.toISOString(),
+            )
+            .lt(
+              "created_at",
+              dayRange.end.toISOString(),
+            )
+            .lte(
+              "created_at",
+              cutoff.toISOString(),
+            );
+
+        if (cancelled) {
+          return;
+        }
+
+        if (countError) {
+          throw countError;
+        }
+
+        const {
+          data: joinedProfiles,
+          error: joinedProfilesError,
+        } =
+          await supabase
+            .from("profiles")
+            .select(
+              "id, nickname, created_at",
+            )
+            .gte(
+              "created_at",
+              dayRange.start.toISOString(),
+            )
+            .lt(
+              "created_at",
+              dayRange.end.toISOString(),
+            )
+            .lte(
+              "created_at",
+              cutoff.toISOString(),
+            )
+            .order("created_at", {
+              ascending: false,
+            })
+            .limit(10);
+
+        if (cancelled) {
+          return;
+        }
+
+        if (joinedProfilesError) {
+          throw joinedProfilesError;
+        }
+
+        const joinedCount =
+          Math.max(0, count ?? 0);
+
+        setNewUserReportItems(
+          (joinedProfiles ?? []).map(
+            (profile) => ({
+              id:
+                typeof profile.id ===
+                "string"
+                  ? profile.id
+                  : "",
+              nickname:
+                typeof profile.nickname ===
+                  "string" &&
+                profile.nickname.trim()
+                  ? profile.nickname.trim()
+                  : "닉네임 미설정",
+              createdAt:
+                typeof profile.created_at ===
+                "string"
+                  ? profile.created_at
+                  : "",
+            }),
+          ),
+        );
+
+        setNewUserSummary(
+          `${dayRange.month}월 ${dayRange.day}일 신규 이용자가 ${joinedCount}명 가입했습니다.`,
+        );
+      } catch (error) {
+        console.warn(
+          "관리자 신규 가입자 현황을 불러오지 못했습니다.",
+          error,
+        );
+      } finally {
+        if (!cancelled) {
+          setNewUserSummaryLoading(
+            false,
+          );
+        }
+      }
+    }
+
+    function scheduleNextNoonRefresh() {
+      const now = new Date();
+      const nextNoon =
+        getNextKstNoon(now);
+      const delay = Math.max(
+        1000,
+        nextNoon.getTime() -
+          now.getTime(),
+      );
+
+      nextNoonTimer =
+        window.setTimeout(
+          () => {
+            void loadNewUserSummary();
+            scheduleNextNoonRefresh();
+          },
+          delay,
+        );
+    }
+
+    void loadNewUserSummary();
+    scheduleNextNoonRefresh();
+
+    return () => {
+      cancelled = true;
+
+      if (nextNoonTimer) {
+        window.clearTimeout(
+          nextNoonTimer,
+        );
+      }
+    };
+  }, [
+    status,
+    supabase,
+  ]);
 
   /*
    * HOO WORLD 관리자 운영 캐릭터 상태
@@ -1560,14 +1957,61 @@ export default function AdminPage() {
             },
           );
 
+        if (!response.ok) {
+          if (response.status === 404) {
+            throw new Error(
+              "커피 기록 API(/api/admin/coffee)를 찾을 수 없습니다.",
+            );
+          }
+
+          let errorMessage =
+            `커피 기록 요청 실패 (${response.status})`;
+
+          const contentType =
+            response.headers.get(
+              "content-type",
+            ) ?? "";
+
+          if (
+            contentType.includes(
+              "application/json",
+            )
+          ) {
+            const errorData =
+              (await response.json()) as
+                Partial<CoffeeData>;
+
+            if (errorData.error) {
+              errorMessage =
+                errorData.error;
+            }
+          }
+
+          throw new Error(
+            errorMessage,
+          );
+        }
+
+        const contentType =
+          response.headers.get(
+            "content-type",
+          ) ?? "";
+
+        if (
+          !contentType.includes(
+            "application/json",
+          )
+        ) {
+          throw new Error(
+            "커피 기록 API가 JSON이 아닌 응답을 반환했습니다.",
+          );
+        }
+
         const data =
           (await response.json()) as
             CoffeeData;
 
-        if (
-          !response.ok ||
-          !data.ok
-        ) {
+        if (!data.ok) {
           throw new Error(
             data.error ??
               "커피 기록을 불러오지 못했습니다.",
@@ -3161,8 +3605,29 @@ export default function AdminPage() {
           },
         );
 
+      const contentType =
+        response.headers.get(
+          "content-type",
+        ) ?? "";
+
+      if (
+        !contentType.includes(
+          "application/json",
+        )
+      ) {
+        setMessage(
+          response.status === 404
+            ? "공지 API(/api/admin/notices)를 찾을 수 없습니다."
+            : "공지 API가 JSON이 아닌 응답을 반환했습니다.",
+        );
+
+        return;
+      }
+
       const data =
-        await response.json();
+        (await response.json()) as {
+          error?: string;
+        };
 
       if (!response.ok) {
         setMessage(
@@ -3247,6 +3712,102 @@ export default function AdminPage() {
           maxWidth: 920,
         }}
       >
+        {/* 매일 정오 기준 신규 가입자 안내 */}
+        <section
+          style={{
+            marginBottom: 24,
+            padding: "15px 18px",
+            border:
+              "1px solid #2d2d2d",
+            borderRadius: 14,
+            background: "#101010",
+          }}
+        >
+          <div
+            style={{
+              marginBottom: 5,
+              color: "#707070",
+              fontSize: 10,
+              fontWeight: 800,
+              letterSpacing:
+                "0.12em",
+            }}
+          >
+            NEW USER REPORT · 12:00 KST
+          </div>
+
+          <strong
+            style={{
+              display: "block",
+              color:
+                newUserSummaryLoading
+                  ? "#8b8b8b"
+                  : "#f2f2f2",
+              fontSize: 17,
+              fontWeight: 800,
+              lineHeight: 1.5,
+            }}
+          >
+            {newUserSummary}
+          </strong>
+
+          {!newUserSummaryLoading &&
+          newUserReportItems.length > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 8,
+                marginTop: 11,
+              }}
+            >
+              {newUserReportItems.map(
+                (user) => (
+                  <div
+                    key={user.id}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 7,
+                      padding: "6px 9px",
+                      border:
+                        "1px solid #2a2a2a",
+                      borderRadius: 9,
+                      background: "#0b0b0b",
+                      color: "#aaaaaa",
+                      fontSize: 11,
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    <strong
+                      style={{
+                        color: "#d9d9d9",
+                        fontSize: 11,
+                      }}
+                    >
+                      {user.nickname}
+                    </strong>
+                    <span
+                      style={{
+                        color: "#5f5f5f",
+                      }}
+                    >
+                      ·
+                    </span>
+                    <span>
+                      가입 {
+                        formatNewUserJoinedTime(
+                          user.createdAt,
+                        )
+                      }
+                    </span>
+                  </div>
+                ),
+              )}
+            </div>
+          ) : null}
+        </section>
+
         <h1
           style={{
             marginBottom: 8,
