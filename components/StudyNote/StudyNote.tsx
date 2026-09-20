@@ -109,6 +109,12 @@ type StudyTextBlock = {
   html: string;
   units: number;
   brace: boolean;
+  /*
+   * 사용자가 "새 페이지"를 눌러 만든 명시적 페이지 시작점.
+   * 단순 빈 줄과 구분해야 빈 페이지 자동 생성 버그를 막으면서도
+   * 사용자가 직접 만든 페이지는 유지할 수 있다.
+   */
+  pageBreakBefore?: boolean;
   annotation?: {
     quote: string;
     text: string;
@@ -570,13 +576,19 @@ async function migrateLocalStorageNotesToIndexedDb() {
   }
 }
 
-function createTextBlock(): StudyTextBlock {
+function createTextBlock(
+  pageBreakBefore = false,
+): StudyTextBlock {
   return {
     id: createId(),
     type: "text",
     html: "",
     units: 1,
     brace: false,
+    pageBreakBefore:
+      pageBreakBefore
+        ? true
+        : undefined,
   };
 }
 
@@ -626,6 +638,21 @@ function paginateBlocks(blocks: StudyBlock[]) {
   let usedUnits = 0;
 
   blocks.forEach((block) => {
+    /*
+     * 수동으로 만든 새 페이지는 빈 줄이어도 구조적으로 의미가 있다.
+     * pageBreakBefore가 붙은 첫 줄을 만나면 그 직전까지를 확정하고
+     * 반드시 다음 페이지에서 시작한다.
+     */
+    if (
+      block.type === "text" &&
+      block.pageBreakBefore === true &&
+      page.length > 0
+    ) {
+      pages.push(page);
+      page = [];
+      usedUnits = 0;
+    }
+
     const blockUnits = Math.min(
       PAGE_LINE_LIMIT,
       Math.max(1, getBlockUnits(block)),
@@ -725,28 +752,234 @@ function paginateBlocks(blocks: StudyBlock[]) {
    */
   freeImages.forEach(
     ({ block, pageIndex }) => {
-      while (
-        pages.length <= pageIndex
-      ) {
-        pages.push([]);
-      }
+      /*
+       * 저장된 pageAnchorIndex가 현재 본문 페이지 수보다 커져도
+       * 빈 페이지를 새로 만들어 맞추지 않는다.
+       *
+       * 예: 예전에는 2페이지짜리 노트의 사진 anchor가 5로 남아 있으면
+       * pages[2], pages[3], pages[4]가 자동 생성될 수 있었다.
+       * 이제는 현재 존재하는 마지막 페이지에 안전하게 붙인다.
+       */
+      const safePageIndex =
+        Math.min(
+          Math.max(0, pageIndex),
+          Math.max(
+            0,
+            pages.length - 1,
+          ),
+        );
 
-      pages[pageIndex].push(block);
+      pages[safePageIndex].push(block);
     },
   );
 
   return pages;
 }
 
+function hasMeaningfulStudyText(
+  html: string,
+) {
+  return (
+    stripHtml(html)
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, "")
+      .length > 0
+  );
+}
+
 function isPlainEmptyStudyLine(block: StudyBlock) {
   return (
     block.type === "text" &&
-    stripHtml(block.html)
-      .replace(/\u00a0/g, " ")
-      .trim().length === 0 &&
+    !hasMeaningfulStudyText(
+      block.html,
+    ) &&
     !block.annotation &&
-    !block.brace
+    !block.brace &&
+    block.pageBreakBefore !== true
   );
+}
+
+function getFlowUnits(
+  block: StudyBlock,
+) {
+  if (
+    block.type === "image" &&
+    (
+      block.layout === "free" ||
+      block.layout === "float-right"
+    )
+  ) {
+    return 0;
+  }
+
+  return Math.min(
+    PAGE_LINE_LIMIT,
+    Math.max(
+      1,
+      getBlockUnits(block),
+    ),
+  );
+}
+
+function normalizeActiveLineSegment(
+  segment: StudyBlock[],
+) {
+  if (segment.length === 0) {
+    return Array.from(
+      { length: PAGE_LINE_LIMIT },
+      () => createTextBlock(),
+    );
+  }
+
+  /*
+   * 뒤쪽의 순수 빈 줄은 "아직 쓰지 않은 입력 슬롯"이다.
+   * 이 줄들이 29줄을 넘어 다음 페이지로 밀리면서 빈 페이지를
+   * 만들어내지 않도록 우선 분리한다.
+   *
+   * ID는 가능한 한 재사용해서 타이핑 중 DOM이 불필요하게 갈아끼워지는
+   * 현상을 줄인다.
+   */
+  let trailingStart =
+    segment.length;
+
+  while (
+    trailingStart > 0 &&
+    isPlainEmptyStudyLine(
+      segment[trailingStart - 1],
+    )
+  ) {
+    trailingStart -= 1;
+  }
+
+  const coreBlocks =
+    segment.slice(
+      0,
+      trailingStart,
+    );
+
+  const reusableEmptyLines =
+    segment
+      .slice(trailingStart)
+      .filter(
+        (
+          block,
+        ): block is StudyTextBlock =>
+          block.type === "text" &&
+          isPlainEmptyStudyLine(
+            block,
+          ),
+      );
+
+  let reusableIndex = 0;
+
+  const takeEmptyLine = () => {
+    const reusable =
+      reusableEmptyLines[
+        reusableIndex
+      ];
+
+    reusableIndex += 1;
+
+    if (reusable) {
+      return {
+        ...reusable,
+        units: 1,
+        pageBreakBefore: undefined,
+      } satisfies StudyTextBlock;
+    }
+
+    return createTextBlock();
+  };
+
+  /*
+   * 내용이 전혀 없는 페이지라면 기존 빈 줄 ID를 재사용해 29줄을 유지한다.
+   */
+  if (coreBlocks.length === 0) {
+    return Array.from(
+      { length: PAGE_LINE_LIMIT },
+      () => takeEmptyLine(),
+    );
+  }
+
+  const normalized: StudyBlock[] =
+    [];
+
+  let usedUnits = 0;
+
+  for (const block of coreBlocks) {
+    const blockUnits =
+      getFlowUnits(block);
+
+    /*
+     * 다음 블록이 현재 페이지에 통째로 들어가지 못하면,
+     * 남은 줄을 실제 입력 가능한 빈 줄로 채운 뒤 다음 페이지에서 시작한다.
+     *
+     * 이 처리 덕분에 29개 빈 입력줄 중 하나가 단순 높이 변화 때문에
+     * 30번째 줄로 밀려 "랜덤 새 페이지"를 만드는 현상이 사라진다.
+     */
+    if (
+      blockUnits > 0 &&
+      usedUnits > 0 &&
+      usedUnits + blockUnits >
+        PAGE_LINE_LIMIT
+    ) {
+      const gap =
+        PAGE_LINE_LIMIT -
+        usedUnits;
+
+      for (
+        let index = 0;
+        index < gap;
+        index += 1
+      ) {
+        normalized.push(
+          takeEmptyLine(),
+        );
+      }
+
+      usedUnits = 0;
+    }
+
+    normalized.push(block);
+
+    if (blockUnits > 0) {
+      usedUnits +=
+        blockUnits;
+
+      if (
+        usedUnits >=
+        PAGE_LINE_LIMIT
+      ) {
+        usedUnits =
+          PAGE_LINE_LIMIT;
+      }
+    }
+  }
+
+  /*
+   * 마지막 실제 페이지의 남는 줄만 채운다.
+   * 남는 빈 줄을 "다음 페이지"까지 계속 보존하지 않는다.
+   */
+  const remainingLines =
+    usedUnits === 0
+      ? PAGE_LINE_LIMIT
+      : Math.max(
+          0,
+          PAGE_LINE_LIMIT -
+            usedUnits,
+        );
+
+  for (
+    let index = 0;
+    index < remainingLines;
+    index += 1
+  ) {
+    normalized.push(
+      takeEmptyLine(),
+    );
+  }
+
+  return normalized;
 }
 
 function ensureAlwaysActivePageLines(
@@ -755,9 +988,7 @@ function ensureAlwaysActivePageLines(
   const expandedBlocks: StudyBlock[] = [];
 
   /*
-   * 과거의 "새 페이지" 기능이 만든 units > 1 빈 spacer를
-   * 실제 1줄짜리 editable block들로 풀어낸다.
-   * 그래서 예전 문서도 빈 줄을 클릭하면 바로 입력할 수 있다.
+   * 과거 버전의 units > 1 빈 spacer를 1줄짜리 활성 입력줄로 변환한다.
    */
   for (const block of blocks) {
     if (
@@ -772,10 +1003,16 @@ function ensureAlwaysActivePageLines(
 
       for (
         let index = 1;
-        index < Math.min(PAGE_LINE_LIMIT, block.units);
+        index <
+        Math.min(
+          PAGE_LINE_LIMIT,
+          block.units,
+        );
         index += 1
       ) {
-        expandedBlocks.push(createTextBlock());
+        expandedBlocks.push(
+          createTextBlock(),
+        );
       }
 
       continue;
@@ -784,43 +1021,43 @@ function ensureAlwaysActivePageLines(
     expandedBlocks.push(block);
   }
 
-  const normalizedBlocks =
-    expandedBlocks.length > 0
-      ? expandedBlocks
-      : [createTextBlock()];
+  /*
+   * 수동 페이지 시작점(pageBreakBefore)을 기준으로 구간을 나눈다.
+   * 각 구간은 독립적으로 "실제 내용 + 필요한 만큼의 빈 입력줄"만 가진다.
+   *
+   * 따라서:
+   * - 사용자가 직접 만든 새 페이지는 유지
+   * - 의미 없는 trailing blank page는 제거
+   * - 한 줄 높이가 2줄로 늘어도 빈 filler가 다음 페이지를 만들지 않음
+   */
+  const segments:
+    StudyBlock[][] = [[]];
 
-  const pages = paginateBlocks(normalizedBlocks);
-  const lastPage = pages.at(-1) ?? [];
+  for (const block of expandedBlocks) {
+    const currentSegment =
+      segments[
+        segments.length - 1
+      ];
 
-  const usedUnits = lastPage.reduce(
-    (sum, block) => {
-      if (
-        block.type === "image" &&
-        (
-          block.layout === "free" ||
-          block.layout === "float-right"
-        )
-      ) {
-        return sum;
-      }
+    if (
+      block.type === "text" &&
+      block.pageBreakBefore ===
+        true &&
+      currentSegment.length > 0
+    ) {
+      segments.push([block]);
+      continue;
+    }
 
-      return sum + getBlockUnits(block);
-    },
-    0,
+    currentSegment.push(block);
+  }
+
+  return segments.flatMap(
+    (segment) =>
+      normalizeActiveLineSegment(
+        segment,
+      ),
   );
-
-  const remainingLines = Math.max(
-    0,
-    PAGE_LINE_LIMIT - usedUnits,
-  );
-
-  return [
-    ...normalizedBlocks,
-    ...Array.from(
-      { length: remainingLines },
-      () => createTextBlock(),
-    ),
-  ];
 }
 
 async function getImageAspectRatio(src: string) {
@@ -876,16 +1113,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
-  const [saveLabel, setSaveLabel] = useState("페이지 이탈 시 저장");
+  const [saveLabel, setSaveLabel] = useState("자동 저장");
   const [viewMode, setViewMode] = useState<"home" | "category" | "editor">("home");
   const [toolTab, setToolTab] = useState<"text" | "page">("text");
   const [isEditorToolbarCollapsed, setIsEditorToolbarCollapsed] =
     useState(false);
   const [editorPageZoom, setEditorPageZoom] =
-    useState(1);
-  const [dualPrimaryPageZoom, setDualPrimaryPageZoom] =
-    useState(1);
-  const [dualSecondaryPageZoom, setDualSecondaryPageZoom] =
     useState(1);
   const editorViewportRef =
     useRef<HTMLElement | null>(null);
@@ -942,31 +1175,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const [authMessage, setAuthMessage] = useState("");
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
-  const [pendingPageDeleteIndex, setPendingPageDeleteIndex] =
-    useState<number | null>(null);
-  const [pageMoveState, setPageMoveState] =
-    useState<{
-      noteId: string;
-      sourceIndex: number;
-      targetIndex: number;
-    } | null>(null);
   const [focusStudyNoteSession, setFocusStudyNoteSession] =
     useState<FocusStudyNoteSession | null>(null);
   const [isFocusStudyNotePanelOpen, setIsFocusStudyNotePanelOpen] =
     useState(false);
-  const [isDualFileMode, setIsDualFileMode] = useState(false);
-  const [dualPrimaryNoteId, setDualPrimaryNoteId] =
-    useState<string | null>(null);
-  const [dualSecondaryNoteId, setDualSecondaryNoteId] =
-    useState<string | null>(null);
-  const [pendingDualOpenNoteId, setPendingDualOpenNoteId] =
-    useState<string | null>(null);
-  const [isDualModeConfirmOpen, setIsDualModeConfirmOpen] =
-    useState(false);
-  const [isDualFilePickerOpen, setIsDualFilePickerOpen] =
-    useState(false);
-  const [dualFilePickerTarget, setDualFilePickerTarget] =
-    useState<"primary" | "secondary">("secondary");
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -975,35 +1187,18 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const selectionRangeRef = useRef<Range | null>(null);
   const selectedBlockIdsRef = useRef<string[]>([]);
   const lastSelectedTextBlockIdRef = useRef<string | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const syncTimerRef = useRef<number | null>(null);
   const syncInProgressRef = useRef(false);
   const syncQueuedRef = useRef(false);
   const notesRef = useRef<StudyNoteRecord[]>([]);
-  const dragSelectionCleanupRef = useRef<(() => void) | null>(null);
-  const pageMoveCleanupRef = useRef<(() => void) | null>(null);
   const activeFontSizeRef = useRef(14);
   const typingFontSizeRef = useRef(14);
   const undoHistoryRef = useRef<
     Map<string, StudyNoteRecord[]>
   >(new Map());
   const localMutationRevisionRef = useRef(0);
-  const lastPersistedMutationRevisionRef = useRef(0);
-  const localSaveInProgressRef = useRef(false);
-  const localSaveQueuedRef = useRef(false);
-  const tombstonesRef = useRef<StudyNoteTombstone[]>([]);
-  const previousViewModeRef = useRef<"home" | "category" | "editor">("home");
-  const previousSelectedNoteIdRef = useRef<string | null>(null);
   const cloudPullInProgressRef = useRef(false);
-  /*
-   * 복수파일 모드에서 공용 편집 도구가 어느 파일을 수정할지 가리키는 ref.
-   * StudyNoteRecord/IndexedDB/Supabase 구조는 전혀 변경하지 않는다.
-   */
-  const activeEditorNoteIdRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    return () => {
-      pageMoveCleanupRef.current?.();
-    };
-  }, []);
 
   useEffect(() => {
     let isCancelled = false;
@@ -1119,110 +1314,43 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }, [notes]);
 
   useEffect(() => {
-    tombstonesRef.current = tombstones;
-  }, [tombstones]);
-
-  /*
-   * 타이핑/사진/삭제 때마다 전체 notes를 IndexedDB에 다시 쓰던 기존
-   * 350ms 자동 저장을 제거한다. 이제 편집 중에는 React state만 갱신하고,
-   * 실제 로컬 디스크 저장은 편집 페이지를 나가거나 문서가 숨겨질 때만 한다.
-   */
-  useEffect(() => {
-    if (!isHydrated) {
-      previousViewModeRef.current = viewMode;
-      previousSelectedNoteIdRef.current = selectedNoteId;
-      return;
-    }
-
-    const previousViewMode =
-      previousViewModeRef.current;
-
-    const previousSelectedNoteId =
-      previousSelectedNoteIdRef.current;
-
-    const leftEditor =
-      previousViewMode === "editor" &&
-      viewMode !== "editor";
-
-    const switchedEditorNote =
-      !isDualFileMode &&
-      previousViewMode === "editor" &&
-      viewMode === "editor" &&
-      previousSelectedNoteId !== null &&
-      selectedNoteId !== null &&
-      previousSelectedNoteId !== selectedNoteId;
-
-    previousViewModeRef.current = viewMode;
-    previousSelectedNoteIdRef.current = selectedNoteId;
-
-    if (leftEditor || switchedEditorNote) {
-      void persistStudyNotesLocally(true);
-    }
-
-    // persistStudyNotesLocally는 최신 notesRef/tombstonesRef를 사용한다.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    isHydrated,
-    viewMode,
-    selectedNoteId,
-    isDualFileMode,
-  ]);
-
-  useEffect(() => {
     if (!isHydrated) {
       return;
     }
 
-    const saveBeforeLeaving = () => {
-      /*
-       * IndexedDB는 네트워크가 필요하지 않는다.
-       * visibilitychange(hidden)는 일반적인 탭 전환/페이지 이탈에서
-       * pagehide보다 먼저 오는 경우가 많아 로컬 저장 성공 가능성을 높인다.
-       */
-      void persistStudyNotesLocally(true);
-    };
+    setSaveLabel("저장 중...");
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        saveBeforeLeaving();
-      }
-    };
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
 
-    window.addEventListener(
-      "pagehide",
-      saveBeforeLeaving,
-    );
+    saveTimerRef.current = window.setTimeout(() => {
+      void replaceNotesInIndexedDb(notes)
+        .then(() => {
+          setSaveLabel(navigator.onLine ? "로컬 저장됨" : "오프라인 저장됨");
 
-    window.addEventListener(
-      "beforeunload",
-      saveBeforeLeaving,
-    );
+          if (navigator.onLine) {
+            if (syncTimerRef.current !== null) {
+              window.clearTimeout(syncTimerRef.current);
+            }
 
-    document.addEventListener(
-      "visibilitychange",
-      handleVisibilityChange,
-    );
+            syncTimerRef.current = window.setTimeout(() => {
+              void syncStudyNotes(notesRef.current);
+            }, 900);
+          }
+        })
+        .catch((error) => {
+          console.error("HOO터디 노트 IndexedDB 저장 실패:", error);
+          setSaveLabel("저장 실패");
+        });
+    }, 350);
 
     return () => {
-      window.removeEventListener(
-        "pagehide",
-        saveBeforeLeaving,
-      );
-
-      window.removeEventListener(
-        "beforeunload",
-        saveBeforeLeaving,
-      );
-
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange,
-      );
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+      }
     };
-
-    // persistStudyNotesLocally는 최신 ref를 사용한다.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHydrated]);
+  }, [isHydrated, notes]);
 
   useEffect(() => {
     if (!isHydrated) {
@@ -1827,7 +1955,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
         ),
       );
 
-    const changeSingleEditorPageZoom = (
+    const changeEditorPageZoom = (
       delta: number,
     ) => {
       if (viewMode !== "editor") {
@@ -1842,81 +1970,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
       );
     };
 
-    const changeDualEditorPageZoom = (
-      side: "primary" | "secondary",
-      delta: number,
-    ) => {
-      const setter =
-        side === "primary"
-          ? setDualPrimaryPageZoom
-          : setDualSecondaryPageZoom;
-
-      setter(
-        (previous) =>
-          clampEditorPageZoom(
-            previous + delta,
-          ),
-      );
-    };
-
-    const resetDualEditorPageZoom = (
-      side: "primary" | "secondary",
-    ) => {
-      if (side === "primary") {
-        setDualPrimaryPageZoom(1);
-        return;
-      }
-
-      setDualSecondaryPageZoom(1);
-    };
-
-    const getDualPaneSideFromTarget = (
-      target: EventTarget | null,
-    ): "primary" | "secondary" | null => {
-      if (!(target instanceof Element)) {
-        return null;
-      }
-
-      const pane =
-        target.closest<HTMLElement>(
-          "[data-study-dual-pane]",
-        );
-
-      const side =
-        pane?.dataset.studyDualPane;
-
-      return side === "primary" ||
-        side === "secondary"
-        ? side
-        : null;
-    };
-
-    const getActiveDualPaneSide = ():
-      | "primary"
-      | "secondary"
-      | null => {
-      const activeNoteId =
-        activeEditorNoteIdRef.current;
-
-      if (
-        activeNoteId &&
-        activeNoteId ===
-          dualPrimaryNoteId
-      ) {
-        return "primary";
-      }
-
-      if (
-        activeNoteId &&
-        activeNoteId ===
-          dualSecondaryNoteId
-      ) {
-        return "secondary";
-      }
-
-      return null;
-    };
-
     function handleZoomWheel(
       event: WheelEvent,
     ) {
@@ -1927,39 +1980,17 @@ export default function StudyNote({ active }: StudyNoteProps) {
         return;
       }
 
+      /*
+       * 사용자가 직접 요청한 확대/축소만 허용한다.
+       * 브라우저 창 크기가 변했다고 페이지 배율을 자동으로 바꾸지는 않는다.
+       */
+      event.preventDefault();
+
       if (viewMode !== "editor") {
         return;
       }
 
-      /*
-       * 단일파일은 기존 editorPageZoom을 그대로 사용한다.
-       * 복수파일에서는 휠 이벤트가 실제로 발생한 좌/우 pane만
-       * 확대/축소하고 반대쪽 파일의 배율은 절대 건드리지 않는다.
-       */
-      if (isDualFileMode) {
-        const side =
-          getDualPaneSideFromTarget(
-            event.target,
-          );
-
-        if (!side) {
-          return;
-        }
-
-        event.preventDefault();
-
-        changeDualEditorPageZoom(
-          side,
-          event.deltaY < 0
-            ? 0.1
-            : -0.1,
-        );
-        return;
-      }
-
-      event.preventDefault();
-
-      changeSingleEditorPageZoom(
+      changeEditorPageZoom(
         event.deltaY < 0
           ? 0.1
           : -0.1,
@@ -1997,44 +2028,18 @@ export default function StudyNote({ active }: StudyNoteProps) {
         return;
       }
 
+      event.preventDefault();
+
       if (viewMode !== "editor") {
         return;
       }
-
-      if (isDualFileMode) {
-        const side =
-          getActiveDualPaneSide();
-
-        if (!side) {
-          return;
-        }
-
-        event.preventDefault();
-
-        if (isZoomReset) {
-          resetDualEditorPageZoom(
-            side,
-          );
-          return;
-        }
-
-        changeDualEditorPageZoom(
-          side,
-          isZoomIn
-            ? 0.1
-            : -0.1,
-        );
-        return;
-      }
-
-      event.preventDefault();
 
       if (isZoomReset) {
         setEditorPageZoom(1);
         return;
       }
 
-      changeSingleEditorPageZoom(
+      changeEditorPageZoom(
         isZoomIn
           ? 0.1
           : -0.1,
@@ -2068,9 +2073,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }, [
     active,
     viewMode,
-    isDualFileMode,
-    dualPrimaryNoteId,
-    dualSecondaryNoteId,
   ]);
 
   useEffect(() => {
@@ -2186,21 +2188,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
             categoryFilter === "전체" ||
             note.category === categoryFilter,
         )
-        .sort((first, second) => {
-          /*
-           * 메인(전체)에서는 최근 수정 파일을 우선하고,
-           * 실제 카테고리 폴더 안에서는 파일 생성일 기준으로 정렬한다.
-           */
-          if (categoryFilter === "전체") {
-            return second.updatedAt.localeCompare(
-              first.updatedAt,
-            );
-          }
-
-          return second.createdAt.localeCompare(
-            first.createdAt,
-          );
-        }),
+        .sort((first, second) =>
+          second.updatedAt.localeCompare(
+            first.updatedAt,
+          ),
+        ),
     [categoryFilter, notes],
   );
 
@@ -2605,38 +2597,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
   }
 
-  function getActiveEditorNote() {
-    const targetNoteId =
-      activeEditorNoteIdRef.current ??
-      selectedNote?.id ??
-      selectedNoteId;
-
-    if (!targetNoteId) {
-      return null;
-    }
-
-    return (
-      notesRef.current.find(
-        (note) => note.id === targetNoteId,
-      ) ??
-      notes.find(
-        (note) => note.id === targetNoteId,
-      ) ??
-      null
-    );
-  }
-
-  function activateEditorNote(noteId: string) {
-    activeEditorNoteIdRef.current = noteId;
-
-    if (selectedNoteId !== noteId) {
-      setSelectedNoteId(noteId);
-    }
-  }
-
   function undoSelectedNote() {
     const noteId =
-      activeEditorNoteIdRef.current ??
       selectedNote?.id ??
       selectedNoteId;
 
@@ -2817,109 +2779,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
   }
 
-  async function persistStudyNotesLocally(
-    syncCloudAfterSave = true,
-  ) {
-    if (!isHydrated) {
-      return;
-    }
-
-    const currentRevision =
-      localMutationRevisionRef.current;
-
-    if (
-      currentRevision ===
-      lastPersistedMutationRevisionRef.current
-    ) {
-      return;
-    }
-
-    if (localSaveInProgressRef.current) {
-      localSaveQueuedRef.current = true;
-      return;
-    }
-
-    localSaveInProgressRef.current = true;
-    localSaveQueuedRef.current = false;
-
-    const revisionAtStart =
-      localMutationRevisionRef.current;
-
-    const notesSnapshot =
-      notesRef.current;
-
-    const tombstonesSnapshot =
-      tombstonesRef.current;
-
-    setSaveLabel(
-      navigator.onLine
-        ? "로컬 저장 중..."
-        : "오프라인 저장 중...",
-    );
-
-    try {
-      await Promise.all([
-        replaceNotesInIndexedDb(
-          notesSnapshot,
-        ),
-        replaceStudyNoteTombstones(
-          tombstonesSnapshot,
-        ),
-      ]);
-
-      lastPersistedMutationRevisionRef.current =
-        revisionAtStart;
-
-      setSaveLabel(
-        navigator.onLine
-          ? "로컬 저장됨"
-          : "오프라인 저장됨",
-      );
-
-      if (
-        syncCloudAfterSave &&
-        navigator.onLine
-      ) {
-        /*
-         * 로컬 저장을 먼저 끝낸 뒤 클라우드 동기화를 시작한다.
-         * 실제 페이지 종료 중에는 브라우저가 네트워크 요청을 중단할 수 있으므로,
-         * 실패해도 다음 접속/온라인 복귀 시 기존 sync 루트가 다시 처리한다.
-         */
-        void syncStudyNotes(
-          notesRef.current,
-        );
-      }
-    } catch (error) {
-      console.error(
-        "HOO터디 노트 페이지 이탈 로컬 저장 실패:",
-        error,
-      );
-      setSaveLabel("로컬 저장 실패");
-    } finally {
-      localSaveInProgressRef.current = false;
-
-      const hasNewMutation =
-        localMutationRevisionRef.current !==
-        lastPersistedMutationRevisionRef.current;
-
-      if (
-        localSaveQueuedRef.current ||
-        hasNewMutation
-      ) {
-        localSaveQueuedRef.current = false;
-
-        void persistStudyNotesLocally(
-          syncCloudAfterSave,
-        );
-      }
-    }
-  }
-
   function updateSelectedNote(
     updater: (note: StudyNoteRecord) => StudyNoteRecord,
   ) {
     const targetNoteId =
-      activeEditorNoteIdRef.current ??
       selectedNote?.id ??
       selectedNoteId;
 
@@ -2952,8 +2815,19 @@ export default function StudyNote({ active }: StudyNoteProps) {
     const updatedNote =
       updater(currentNote);
 
+    /*
+     * 모든 본문 변경 뒤 29줄 활성 라인을 즉시 재균형한다.
+     * 텍스트가 한 줄 더 차지하거나 주석/사진 높이가 바뀌어도
+     * trailing filler가 다음 페이지로 밀려 빈 페이지를 만들지 않는다.
+     */
+    const stabilizedBlocks =
+      ensureAlwaysActivePageLines(
+        updatedNote.blocks,
+      );
+
     const nextNote: StudyNoteRecord = {
       ...updatedNote,
+      blocks: stabilizedBlocks,
       updatedAt:
         new Date().toISOString(),
       version:
@@ -3028,12 +2902,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
     selectionRangeRef.current = null;
 
     setNotes(nextNotes);
-    activeEditorNoteIdRef.current = nextNote.id;
-    setIsDualFileMode(false);
-    setDualPrimaryNoteId(null);
-    setDualSecondaryNoteId(null);
-    setIsDualModeConfirmOpen(false);
-    setIsDualFilePickerOpen(false);
     setSelectedNoteId(nextNote.id);
     setCategoryFilter(category);
     setToolTab("text");
@@ -3061,7 +2929,31 @@ export default function StudyNote({ active }: StudyNoteProps) {
       ),
     );
 
-    setSaveLabel("저장 대기 · 페이지 이탈 시 저장");
+    void replaceNotesInIndexedDb(nextNotes)
+      .then(() => {
+        setSaveLabel(
+          navigator.onLine
+            ? "로컬 저장됨"
+            : "오프라인 저장됨",
+        );
+
+        if (navigator.onLine) {
+          if (syncTimerRef.current !== null) {
+            window.clearTimeout(syncTimerRef.current);
+          }
+
+          syncTimerRef.current = window.setTimeout(() => {
+            void syncStudyNotes(nextNotes);
+          }, 900);
+        }
+      })
+      .catch((error) => {
+        console.error(
+          "새 HOO터디 노트 저장 실패:",
+          error,
+        );
+        setSaveLabel("저장 실패");
+      });
   }
 
   function requestCreateNote(category: string) {
@@ -3090,7 +2982,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     createNewNote(category, title);
   }
 
-  function openSingleNote(noteId: string) {
+  function openNote(noteId: string) {
     const targetNote =
       notesRef.current.find(
         (note) => note.id === noteId,
@@ -3099,61 +2991,136 @@ export default function StudyNote({ active }: StudyNoteProps) {
         (note) => note.id === noteId,
       );
 
-    const lastFocusableTextBlock =
-      targetNote?.blocks
-        .filter(
-          (
-            block,
-          ): block is StudyTextBlock =>
-            block.type === "text" &&
-            !(
-              stripHtml(block.html).trim() === "" &&
-              !block.annotation &&
-              !block.brace &&
-              block.units > 1
-            ),
-        )
-        .at(-1) ?? null;
+    if (!targetNote) {
+      return;
+    }
+
+    const targetPages =
+      paginateBlocks(
+        targetNote.blocks,
+      );
+
+    /*
+     * 별도 "마지막 페이지"에도 실제 텍스트가 있다면
+     * 본문보다 뒤에 있는 페이지이므로 그 페이지가 최우선이다.
+     * 공백/줄바꿈/NBSP/zero-width 문자만 있으면 빈 페이지로 본다.
+     */
+    const shouldOpenLastPage =
+      hasMeaningfulStudyText(
+        targetNote.lastPageHtml ?? "",
+      );
+
+    let targetPageIndex = 0;
+    let targetTextBlock:
+      | StudyTextBlock
+      | null = null;
+
+    if (!shouldOpenLastPage) {
+      /*
+       * 본문 마지막 페이지부터 거꾸로 확인해서
+       * "실제 글자"가 존재하는 마지막 페이지를 찾는다.
+       *
+       * 공백 / 줄바꿈 / NBSP / zero-width 문자만 있는 줄은
+       * 기록으로 취급하지 않는다.
+       */
+      for (
+        let pageIndex =
+          targetPages.length - 1;
+        pageIndex >= 0;
+        pageIndex -= 1
+      ) {
+        const meaningfulTextBlock =
+          targetPages[pageIndex]
+            .filter(
+              (
+                block,
+              ): block is StudyTextBlock =>
+                block.type === "text" &&
+                hasMeaningfulStudyText(
+                  block.html,
+                ),
+            )
+            .at(-1) ?? null;
+
+        if (meaningfulTextBlock) {
+          targetPageIndex =
+            pageIndex;
+          targetTextBlock =
+            meaningfulTextBlock;
+          break;
+        }
+      }
+
+      /*
+       * 아직 아무 글자도 없는 새 파일이라면 1페이지 첫 입력줄을 사용한다.
+       */
+      if (!targetTextBlock) {
+        targetTextBlock =
+          targetPages
+            .flat()
+            .find(
+              (
+                block,
+              ): block is StudyTextBlock =>
+                block.type === "text",
+            ) ?? null;
+
+        targetPageIndex = 0;
+      }
+    }
 
     lastSelectedTextBlockIdRef.current =
-      lastFocusableTextBlock?.id ?? null;
+      shouldOpenLastPage
+        ? null
+        : targetTextBlock?.id ?? null;
+
     selectedBlockIdsRef.current =
-      lastFocusableTextBlock
-        ? [lastFocusableTextBlock.id]
-        : [];
+      shouldOpenLastPage
+        ? []
+        : targetTextBlock
+          ? [targetTextBlock.id]
+          : [];
+
     selectionRangeRef.current = null;
 
-    activeEditorNoteIdRef.current = noteId;
-    setIsDualFileMode(false);
-    setDualPrimaryNoteId(null);
-    setDualSecondaryNoteId(null);
-    setIsDualModeConfirmOpen(false);
-    setIsDualFilePickerOpen(false);
     setSelectedNoteId(noteId);
     setViewMode("editor");
     setToolTab("text");
 
-    if (lastFocusableTextBlock) {
-      window.setTimeout(() => {
-        const editable =
-          document.querySelector<HTMLElement>(
-            `[data-study-editable-id="${lastFocusableTextBlock.id}"]`,
-          );
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (shouldOpenLastPage) {
+          const lastPageEditable =
+            document.querySelector<HTMLElement>(
+              `[data-study-last-page-id="${noteId}"]`,
+            );
 
-        if (!editable) {
-          return;
-        }
+          if (!lastPageEditable) {
+            return;
+          }
 
-        editable.focus();
+          lastPageEditable.scrollIntoView({
+            behavior: "auto",
+            block: "start",
+          });
 
-        const selection =
-          window.getSelection();
+          lastPageEditable.focus({
+            preventScroll: true,
+          });
 
-        if (selection) {
+          const selection =
+            window.getSelection();
+
+          if (!selection) {
+            return;
+          }
+
           const range =
             document.createRange();
 
-          range.selectNodeContents(editable);
+          range.selectNodeContents(
+            lastPageEditable,
+          );
           range.collapse(false);
 
           selection.removeAllRanges();
@@ -3161,157 +3128,65 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
           selectionRangeRef.current =
             range.cloneRange();
+
+          return;
         }
-      }, 0);
-    }
-  }
 
-  function openNote(noteId: string) {
-    const currentNotes =
-      notesRef.current.length > 0
-        ? notesRef.current
-        : notes;
+        const pageBody =
+          document.querySelector<HTMLElement>(
+            `[data-study-page-index="${targetPageIndex}"]`,
+          );
 
-    if (
-      !currentNotes.some(
-        (note) => note.id === noteId,
-      )
-    ) {
-      return;
-    }
+        /*
+         * 파일 진입 시 먼저 "마지막 텍스트 기록 페이지" 자체를 노출한다.
+         */
+        pageBody?.scrollIntoView({
+          behavior: "auto",
+          block: "start",
+        });
 
-    if (isDualFileMode) {
-      const activeSide =
-        activeEditorNoteIdRef.current ===
-        dualSecondaryNoteId
-          ? "secondary"
-          : "primary";
+        if (!targetTextBlock) {
+          return;
+        }
 
-      const otherNoteId =
-        activeSide === "primary"
-          ? dualSecondaryNoteId
-          : dualPrimaryNoteId;
+        const editable =
+          document.querySelector<HTMLElement>(
+            `[data-study-editable-id="${targetTextBlock.id}"]`,
+          );
 
-      if (noteId === otherNoteId) {
-        window.alert(
-          "이미 반대쪽에 열려 있는 파일입니다.",
+        if (!editable) {
+          return;
+        }
+
+        /*
+         * focus가 다시 스크롤 위치를 바꾸지 않도록 preventScroll 사용.
+         */
+        editable.focus({
+          preventScroll: true,
+        });
+
+        const selection =
+          window.getSelection();
+
+        if (!selection) {
+          return;
+        }
+
+        const range =
+          document.createRange();
+
+        range.selectNodeContents(
+          editable,
         );
-        return;
-      }
+        range.collapse(false);
 
-      /* 현재 두 파일의 메모리 상태를 먼저 로컬에 보존한 뒤 교체한다. */
-      void persistStudyNotesLocally(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
 
-      if (activeSide === "primary") {
-        setDualPrimaryPageZoom(1);
-        setDualPrimaryNoteId(noteId);
-      } else {
-        setDualSecondaryPageZoom(1);
-        setDualSecondaryNoteId(noteId);
-      }
-
-      activateEditorNote(noteId);
-      return;
-    }
-
-    const hasAnotherFile =
-      currentNotes.some(
-        (note) => note.id !== noteId,
-      );
-
-    if (!hasAnotherFile) {
-      openSingleNote(noteId);
-      return;
-    }
-
-    setPendingDualOpenNoteId(noteId);
-    setIsDualModeConfirmOpen(true);
-  }
-
-  function startDualFileMode(noteId: string) {
-    activeEditorNoteIdRef.current = noteId;
-    setDualPrimaryPageZoom(1);
-    setDualSecondaryPageZoom(1);
-    setDualPrimaryNoteId(noteId);
-    setDualSecondaryNoteId(null);
-    setSelectedNoteId(noteId);
-    setIsDualFileMode(true);
-    setIsDualModeConfirmOpen(false);
-    setPendingDualOpenNoteId(null);
-    setDualFilePickerTarget("secondary");
-    setIsDualFilePickerOpen(true);
-    setToolTab("text");
-    setViewMode("editor");
-  }
-
-  function requestDualFileReplacement(
-    target: "primary" | "secondary",
-  ) {
-    setDualFilePickerTarget(target);
-    setIsDualFilePickerOpen(true);
-  }
-
-  function selectDualFile(noteId: string) {
-    const otherNoteId =
-      dualFilePickerTarget === "primary"
-        ? dualSecondaryNoteId
-        : dualPrimaryNoteId;
-
-    if (noteId === otherNoteId) {
-      window.alert(
-        "같은 파일을 양쪽에 동시에 열 수 없습니다.",
-      );
-      return;
-    }
-
-    const currentTargetId =
-      dualFilePickerTarget === "primary"
-        ? dualPrimaryNoteId
-        : dualSecondaryNoteId;
-
-    if (
-      currentTargetId &&
-      currentTargetId !== noteId
-    ) {
-      void persistStudyNotesLocally(true);
-    }
-
-    if (dualFilePickerTarget === "primary") {
-      setDualPrimaryPageZoom(1);
-      setDualPrimaryNoteId(noteId);
-    } else {
-      setDualSecondaryPageZoom(1);
-      setDualSecondaryNoteId(noteId);
-    }
-
-    setIsDualFileMode(true);
-    setIsDualFilePickerOpen(false);
-    activateEditorNote(noteId);
-  }
-
-  function leaveDualFileMode() {
-    void persistStudyNotesLocally(true);
-
-    const currentNote =
-      getActiveEditorNote() ??
-      notesRef.current.find(
-        (note) => note.id === dualPrimaryNoteId,
-      );
-
-    if (currentNote) {
-      setCategoryFilter(currentNote.category);
-    }
-
-    setIsDualFileMode(false);
-    setDualPrimaryNoteId(null);
-    setDualSecondaryNoteId(null);
-    setPendingDualOpenNoteId(null);
-    setIsDualModeConfirmOpen(false);
-    setIsDualFilePickerOpen(false);
-    setSelectedNoteId(null);
-    activeEditorNoteIdRef.current = null;
-    setSearchQuery("");
-    setViewMode("category");
+        selectionRangeRef.current =
+          range.cloneRange();
+      });
+    });
   }
 
   function selectSearchTextInEditable(
@@ -3632,7 +3507,26 @@ export default function StudyNote({ active }: StudyNoteProps) {
     setNotes(nextNotes);
     setTombstones(nextTombstones);
 
-    setSaveLabel("저장 대기 · 페이지 이탈 시 저장");
+    void Promise.all([
+      replaceNotesInIndexedDb(nextNotes),
+      replaceStudyNoteTombstones(
+        nextTombstones,
+      ),
+    ])
+      .then(() => {
+        if (navigator.onLine) {
+          window.setTimeout(() => {
+            void syncStudyNotes(nextNotes);
+          }, 150);
+        }
+      })
+      .catch((error) => {
+        console.error(
+          "HOO터디 노트 삭제 저장 실패:",
+          error,
+        );
+        setSaveLabel("삭제 저장 실패");
+      });
   }
 
   function deleteNoteById(noteId: string) {
@@ -3815,7 +3709,38 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : current,
     );
 
-    setSaveLabel("저장 대기 · 페이지 이탈 시 저장");
+    void replaceNotesInIndexedDb(nextNotes)
+      .then(() => {
+        setSaveLabel(
+          navigator.onLine
+            ? "로컬 저장됨"
+            : "오프라인 저장됨",
+        );
+
+        if (navigator.onLine) {
+          if (
+            syncTimerRef.current !== null
+          ) {
+            window.clearTimeout(
+              syncTimerRef.current,
+            );
+          }
+
+          syncTimerRef.current =
+            window.setTimeout(() => {
+              void syncStudyNotes(
+                notesRef.current,
+              );
+            }, 900);
+        }
+      })
+      .catch((error) => {
+        console.error(
+          "HOO터디 노트 사진 삭제 저장 실패:",
+          error,
+        );
+        setSaveLabel("삭제 저장 실패");
+      });
   }
 
   function beginDeleteDrag(
@@ -3954,7 +3879,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
   function insertTextBlock(afterBlockId?: string) {
-    if (!getActiveEditorNote()) {
+    if (!selectedNote) {
       return;
     }
 
@@ -3975,57 +3900,35 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
   function appendNewPage() {
-    const activeNote =
-      getActiveEditorNote();
-
-    if (!activeNote) {
+    if (!selectedNote) {
       return;
     }
 
-    const currentPages =
-      paginateBlocks(activeNote.blocks);
-    const lastPage =
-      currentPages.at(-1) ?? [];
+    /*
+     * 첫 줄에 pageBreakBefore를 기록해
+     * "사용자가 만든 새 페이지"와 단순 trailing 빈 줄을 구분한다.
+     *
+     * 나머지 28줄도 모두 실제 contentEditable 줄이다.
+     */
+    const newPageLines =
+      Array.from(
+        {
+          length:
+            PAGE_LINE_LIMIT,
+        },
+        (_, index) =>
+          createTextBlock(
+            index === 0,
+          ),
+      );
 
-    const usedUnits = lastPage.reduce(
-      (sum, block) => {
-        if (
-          block.type === "image" &&
-          (
-            block.layout === "free" ||
-            block.layout === "float-right"
-          )
-        ) {
-          return sum;
-        }
-
-        return sum + getBlockUnits(block);
-      },
-      0,
-    );
-
-    const remainingLines = Math.max(
-      0,
-      PAGE_LINE_LIMIT - usedUnits,
-    );
-
-    const currentPageFillers = Array.from(
-      { length: remainingLines },
-      () => createTextBlock(),
-    );
-
-    const newPageLines = Array.from(
-      { length: PAGE_LINE_LIMIT },
-      () => createTextBlock(),
-    );
-
-    const focusBlock = newPageLines[0];
+    const focusBlock =
+      newPageLines[0];
 
     updateSelectedNote((note) => ({
       ...note,
       blocks: [
         ...note.blocks,
-        ...currentPageFillers,
         ...newPageLines,
       ],
     }));
@@ -4038,469 +3941,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
         );
       });
     });
-  }
-
-  function deleteStudyPage(pageIndex: number) {
-    const activeNote =
-      getActiveEditorNote();
-
-    if (!activeNote) {
-      return;
-    }
-
-    const currentPages =
-      paginateBlocks(activeNote.blocks);
-
-    const targetPage =
-      currentPages[pageIndex];
-
-    if (!targetPage) {
-      setPendingPageDeleteIndex(null);
-      return;
-    }
-
-    const targetBlockIds = new Set(
-      targetPage.map((block) => block.id),
-    );
-
-    updateSelectedNote((note) => {
-      const remainingBlocks = note.blocks
-        .filter(
-          (block) =>
-            !targetBlockIds.has(block.id),
-        )
-        .map((block) => {
-          if (
-            block.type !== "image" ||
-            block.layout !== "free" ||
-            !Number.isFinite(
-              block.pageAnchorIndex,
-            )
-          ) {
-            return block;
-          }
-
-          const currentAnchor = Math.max(
-            0,
-            Math.floor(
-              block.pageAnchorIndex ?? 0,
-            ),
-          );
-
-          if (currentAnchor <= pageIndex) {
-            return block;
-          }
-
-          return {
-            ...block,
-            pageAnchorIndex:
-              currentAnchor - 1,
-          };
-        });
-
-      const hasPageContent =
-        remainingBlocks.some(
-          (block) =>
-            block.type !== "image" ||
-            block.layout !== "free",
-        );
-
-      return {
-        ...note,
-        blocks: hasPageContent
-          ? remainingBlocks
-          : Array.from(
-              { length: PAGE_LINE_LIMIT },
-              () => createTextBlock(),
-            ),
-      };
-    });
-
-    selectedBlockIdsRef.current = [];
-    selectionRangeRef.current = null;
-    lastSelectedTextBlockIdRef.current = null;
-    setPendingPageDeleteIndex(null);
-  }
-
-  function moveStudyPage(
-    noteId: string,
-    sourceIndex: number,
-    targetIndex: number,
-  ) {
-    if (
-      sourceIndex === targetIndex ||
-      sourceIndex < 0 ||
-      targetIndex < 0
-    ) {
-      return;
-    }
-
-    activateEditorNote(noteId);
-
-    updateSelectedNote((note) => {
-      if (note.id !== noteId) {
-        return note;
-      }
-
-      const currentPages =
-        paginateBlocks(note.blocks);
-
-      if (
-        sourceIndex >= currentPages.length ||
-        targetIndex >= currentPages.length
-      ) {
-        return note;
-      }
-
-      /*
-       * 페이지를 옮긴 뒤에도 서로 다른 페이지의 내용이 합쳐지지 않도록
-       * 각 페이지의 남은 줄을 실제 1줄짜리 빈 블록으로 채운 뒤 이동한다.
-       * 자유 배치 사진은 기존 페이지와 함께 이동하도록 anchor도 다시 매긴다.
-       */
-      const pageEntries =
-        currentPages.map(
-          (pageBlocks) => {
-            const freeImages =
-              pageBlocks.filter(
-                (
-                  block,
-                ): block is StudyImageBlock =>
-                  block.type === "image" &&
-                  block.layout === "free",
-              );
-
-            const flowBlocks =
-              pageBlocks.filter(
-                (block) =>
-                  !(
-                    block.type === "image" &&
-                    block.layout === "free"
-                  ),
-              );
-
-            const usedUnits =
-              flowBlocks.reduce(
-                (sum, block) => {
-                  if (
-                    block.type === "image" &&
-                    block.layout ===
-                      "float-right"
-                  ) {
-                    return sum;
-                  }
-
-                  return (
-                    sum +
-                    getBlockUnits(block)
-                  );
-                },
-                0,
-              );
-
-            const fillers =
-              Array.from(
-                {
-                  length: Math.max(
-                    0,
-                    PAGE_LINE_LIMIT -
-                      usedUnits,
-                  ),
-                },
-                () => createTextBlock(),
-              );
-
-            return {
-              flowBlocks: [
-                ...flowBlocks,
-                ...fillers,
-              ],
-              freeImages,
-            };
-          },
-        );
-
-      const [movedPage] =
-        pageEntries.splice(
-          sourceIndex,
-          1,
-        );
-
-      if (!movedPage) {
-        return note;
-      }
-
-      pageEntries.splice(
-        targetIndex,
-        0,
-        movedPage,
-      );
-
-      const nextBlocks =
-        pageEntries.flatMap(
-          (
-            entry,
-            pageIndex,
-          ) => [
-            ...entry.flowBlocks,
-            ...entry.freeImages.map(
-              (block) => ({
-                ...block,
-                pageAnchorIndex:
-                  pageIndex,
-              }),
-            ),
-          ],
-        );
-
-      return {
-        ...note,
-        blocks: nextBlocks,
-      };
-    });
-
-    selectedBlockIdsRef.current = [];
-    selectionRangeRef.current = null;
-    lastSelectedTextBlockIdRef.current = null;
-  }
-
-  function beginStudyPageLongPress(
-    event: ReactPointerEvent<HTMLElement>,
-    noteId: string,
-    pageIndex: number,
-  ) {
-    if (
-      event.button !== 0 ||
-      pageMoveState
-    ) {
-      return;
-    }
-
-    const target =
-      event.target as HTMLElement;
-
-    const isMoveHandle =
-      Boolean(
-        target.closest(
-          "[data-study-page-move-handle='true']",
-        ),
-      );
-
-    const isInteractiveContent =
-      Boolean(
-        target.closest(
-          [
-            "[data-study-editable-id]",
-            "[data-study-image-wrapper-id]",
-            "[data-study-annotation-id]",
-            "button",
-            "input",
-            "textarea",
-            "select",
-            "[contenteditable='true']",
-          ].join(","),
-        ),
-      );
-
-    /*
-     * 텍스트 드래그/사진 조작과 충돌하지 않게
-     * 페이지 여백 또는 왼쪽 위 이동 핸들을 길게 눌렀을 때만 시작한다.
-     */
-    if (
-      isInteractiveContent &&
-      !isMoveHandle
-    ) {
-      return;
-    }
-
-    pageMoveCleanupRef.current?.();
-
-    const startX = event.clientX;
-    const startY = event.clientY;
-    let targetIndex = pageIndex;
-    let isActivated = false;
-    let longPressTimer:
-      number | null = null;
-
-    const previousUserSelect =
-      document.body.style.userSelect;
-    const previousCursor =
-      document.body.style.cursor;
-
-    const cleanup = () => {
-      if (longPressTimer !== null) {
-        window.clearTimeout(
-          longPressTimer,
-        );
-        longPressTimer = null;
-      }
-
-      window.removeEventListener(
-        "pointermove",
-        handleMove,
-      );
-      window.removeEventListener(
-        "pointerup",
-        handleUp,
-      );
-      window.removeEventListener(
-        "pointercancel",
-        handleCancel,
-      );
-
-      if (isActivated) {
-        document.body.style.userSelect =
-          previousUserSelect;
-        document.body.style.cursor =
-          previousCursor;
-      }
-
-      setPageMoveState(null);
-
-      if (
-        pageMoveCleanupRef.current ===
-        cleanup
-      ) {
-        pageMoveCleanupRef.current =
-          null;
-      }
-    };
-
-    const getTargetPageIndex = (
-      clientX: number,
-      clientY: number,
-    ) => {
-      const pointTarget =
-        document.elementFromPoint(
-          clientX,
-          clientY,
-        ) as HTMLElement | null;
-
-      const pageElement =
-        pointTarget?.closest<HTMLElement>(
-          "[data-study-page-container='true']",
-        );
-
-      if (
-        !pageElement ||
-        pageElement.dataset.studyNoteId !==
-          noteId
-      ) {
-        return null;
-      }
-
-      const nextIndex = Number(
-        pageElement.dataset
-          .studyPageIndex,
-      );
-
-      return Number.isInteger(nextIndex)
-        ? nextIndex
-        : null;
-    };
-
-    const handleMove = (
-      moveEvent: PointerEvent,
-    ) => {
-      const distance = Math.hypot(
-        moveEvent.clientX - startX,
-        moveEvent.clientY - startY,
-      );
-
-      if (!isActivated) {
-        if (distance > 6) {
-          cleanup();
-        }
-        return;
-      }
-
-      moveEvent.preventDefault();
-
-      const nextTargetIndex =
-        getTargetPageIndex(
-          moveEvent.clientX,
-          moveEvent.clientY,
-        );
-
-      if (nextTargetIndex === null) {
-        return;
-      }
-
-      targetIndex =
-        nextTargetIndex;
-
-      setPageMoveState({
-        noteId,
-        sourceIndex: pageIndex,
-        targetIndex,
-      });
-    };
-
-    const handleUp = (
-      upEvent: PointerEvent,
-    ) => {
-      if (isActivated) {
-        const releasedTargetIndex =
-          getTargetPageIndex(
-            upEvent.clientX,
-            upEvent.clientY,
-          );
-
-        if (
-          releasedTargetIndex !== null
-        ) {
-          targetIndex =
-            releasedTargetIndex;
-        }
-
-        if (
-          targetIndex !== pageIndex
-        ) {
-          moveStudyPage(
-            noteId,
-            pageIndex,
-            targetIndex,
-          );
-        }
-      }
-
-      cleanup();
-    };
-
-    const handleCancel = () => {
-      cleanup();
-    };
-
-    longPressTimer =
-      window.setTimeout(() => {
-        isActivated = true;
-        document.body.style.userSelect =
-          "none";
-        document.body.style.cursor =
-          "grabbing";
-
-        setPageMoveState({
-          noteId,
-          sourceIndex: pageIndex,
-          targetIndex: pageIndex,
-        });
-      }, 450);
-
-    window.addEventListener(
-      "pointermove",
-      handleMove,
-      { passive: false },
-    );
-    window.addEventListener(
-      "pointerup",
-      handleUp,
-    );
-    window.addEventListener(
-      "pointercancel",
-      handleCancel,
-    );
-
-    pageMoveCleanupRef.current =
-      cleanup;
   }
 
   function isEditableTextBlock(
@@ -4572,15 +4012,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
     currentBlockId: string,
     direction: "previous" | "next",
   ) {
-    const activeNote =
-      getActiveEditorNote();
-
-    if (!activeNote) {
+    if (!selectedNote) {
       return false;
     }
 
     const activatedTextBlocks =
-      activeNote.blocks.filter(
+      selectedNote.blocks.filter(
         (
           item,
         ): item is StudyTextBlock =>
@@ -4987,7 +4424,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
       }
 
       const currentNote =
-        getActiveEditorNote();
+        notesRef.current.find(
+          (note) => note.id === selectedNoteId,
+        ) ?? selectedNote;
 
       if (!currentNote) {
         return;
@@ -5019,11 +4458,21 @@ export default function StudyNote({ active }: StudyNoteProps) {
       if (canReuseNextLine) {
         nextFocusId = nextExistingBlock.id;
 
-        /* Enter로 줄을 나눌 때도 기존 units를 유지한다. */
+        const currentMeasuredUnits = Math.max(
+          1,
+          Math.min(
+            PAGE_LINE_LIMIT,
+            Math.ceil(
+              editable.scrollHeight /
+                ROW_HEIGHT,
+            ),
+          ),
+        );
 
         const needsStateChange =
           beforeHtml !== block.html ||
-          afterHtml.trim().length > 0 ;
+          afterHtml.trim().length > 0 ||
+          currentMeasuredUnits !== block.units;
 
         if (needsStateChange) {
           updateSelectedNote((note) => ({
@@ -5036,6 +4485,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 return {
                   ...item,
                   html: beforeHtml,
+                  units: currentMeasuredUnits,
                 };
               }
 
@@ -5056,7 +4506,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
         }
       } else {
         const nextBlock: StudyTextBlock = {
-          ...createTextBlock(),
+          /*
+           * 다음 활성 줄이 아예 없다는 것은 현재 페이지가 꽉 찬 상태다.
+           * Enter로 생성되는 첫 줄을 다음 페이지 시작점으로 표시한다.
+           */
+          ...createTextBlock(true),
           html: afterHtml,
         };
 
@@ -5083,7 +4537,16 @@ export default function StudyNote({ active }: StudyNoteProps) {
             return note;
           }
 
-          /* Enter로 줄을 나눌 때도 기존 units를 유지한다. */
+          const currentMeasuredUnits = Math.max(
+            1,
+            Math.min(
+              PAGE_LINE_LIMIT,
+              Math.ceil(
+                editable.scrollHeight /
+                  ROW_HEIGHT,
+              ),
+            ),
+          );
 
           const nextBlocks = note.blocks.map(
             (item) =>
@@ -5092,6 +4555,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 ? {
                     ...item,
                     html: beforeHtml,
+                    units: currentMeasuredUnits,
                   }
                 : item,
           );
@@ -5148,11 +4612,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
 
     if (
-      !event.shiftKey &&
-      (
-        event.key === "ArrowUp" ||
-        event.key === "ArrowDown"
-      )
+      event.key === "ArrowUp" ||
+      event.key === "ArrowDown"
     ) {
       const moved =
         focusAdjacentEditableTextBlock(
@@ -5191,100 +4652,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
   }
 
-  function getStudyEditorRootForRange(
-    range: Range | null,
-  ) {
-    if (!range) {
-      return null;
-    }
-
-    const commonNode =
-      range.commonAncestorContainer;
-
-    const commonElement =
-      commonNode instanceof HTMLElement
-        ? commonNode
-        : commonNode.parentElement;
-
-    return (
-      commonElement?.closest<HTMLElement>(
-        "[data-study-editor-root]",
-      ) ?? null
-    );
-  }
-
-  function getActiveStudyEditorRoot() {
-    const activeBlockId =
-      lastSelectedTextBlockIdRef.current;
-
-    if (!activeBlockId) {
-      return null;
-    }
-
-    return (
-      document
-        .querySelector<HTMLElement>(
-          `[data-study-editable-id="${activeBlockId}"]`,
-        )
-        ?.closest<HTMLElement>(
-          "[data-study-editor-root]",
-        ) ?? null
-    );
-  }
-
-  function restoreCapturedTextSelectionForToolbar() {
-    const selection =
-      window.getSelection();
-
-    if (!selection) {
-      return false;
-    }
-
-    const currentRange =
-      selection.rangeCount > 0
-        ? selection.getRangeAt(0)
-        : null;
-
-    /*
-     * 현재 선택이 아직 에디터 안에 살아 있으면 그대로 쓴다.
-     * 툴바가 포커스를 가져가 선택이 사라졌을 때만 저장된 Range를 복원한다.
-     */
-    if (
-      currentRange &&
-      getStudyEditorRootForRange(
-        currentRange,
-      )
-    ) {
-      return true;
-    }
-
-    const savedRange =
-      selectionRangeRef.current;
-
-    if (
-      !savedRange ||
-      !getStudyEditorRootForRange(
-        savedRange,
-      )
-    ) {
-      return false;
-    }
-
-    try {
-      selection.removeAllRanges();
-      selection.addRange(
-        savedRange.cloneRange(),
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
   function captureSelection(fallbackBlockId?: string) {
     const selection = window.getSelection();
-
-    if (!selection || selection.rangeCount === 0) {
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
       if (fallbackBlockId) {
         lastSelectedTextBlockIdRef.current = fallbackBlockId;
         selectedBlockIdsRef.current = [fallbackBlockId];
@@ -5293,24 +4663,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
 
     const range = selection.getRangeAt(0);
+    const editorRoot = document.querySelector("[data-study-editor-root]");
 
-    if (selection.isCollapsed) {
-      selectionRangeRef.current =
-        range.cloneRange();
-
-      if (fallbackBlockId) {
-        lastSelectedTextBlockIdRef.current = fallbackBlockId;
-        selectedBlockIdsRef.current = [fallbackBlockId];
-      }
-      return;
-    }
-
-    const editorRoot =
-      getStudyEditorRootForRange(
-        range,
-      );
-
-    if (!editorRoot) {
+    if (!editorRoot || !editorRoot.contains(range.commonAncestorContainer)) {
       return;
     }
 
@@ -5460,23 +4815,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
           activeFontSizeRef.current =
             nearestSize;
-
-          /*
-           * 커서만 놓인 상태에서는 현재 실제 글자 크기를
-           * 다음 입력 크기의 기준으로도 동기화한다.
-           * 이전에 선택했던 30px 같은 값이 typing ref에 남아서
-           * 14px 줄에서 Enter 했는데 다음 줄이 갑자기 30px이 되는
-           * 문제를 막는다. 드래그 선택 중에는 현재 typing 크기를
-           * 바꾸지 않는다.
-           */
-          if (
-            !selection ||
-            selection.isCollapsed
-          ) {
-            typingFontSizeRef.current =
-              nearestSize;
-          }
-
           setActiveFontSize(
             nearestSize,
           );
@@ -5498,7 +4836,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
       | "underline"
       | "strikeThrough",
   ) {
-    restoreCapturedTextSelectionForToolbar();
     const selection =
       window.getSelection();
 
@@ -5513,10 +4850,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
       selection.getRangeAt(0);
 
     const editorRoot =
-      getStudyEditorRootForRange(
-        range,
-      ) ??
-      getActiveStudyEditorRoot();
+      document.querySelector<HTMLElement>(
+        "[data-study-editor-root]",
+      );
 
     if (
       !editorRoot ||
@@ -5626,7 +4962,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
   function applyUnderlineColor(
     color: string,
   ) {
-    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -5637,10 +4972,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      getStudyEditorRootForRange(
-        range,
-      ) ??
-      getActiveStudyEditorRoot();
+      document.querySelector<HTMLElement>(
+        "[data-study-editor-root]",
+      );
 
     if (!editorRoot) {
       return;
@@ -5894,7 +5228,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
   function applyStrikeColor(
     color: string,
   ) {
-    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -5905,10 +5238,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      getStudyEditorRootForRange(
-        range,
-      ) ??
-      getActiveStudyEditorRoot();
+      document.querySelector<HTMLElement>(
+        "[data-study-editor-root]",
+      );
 
     if (!editorRoot) {
       return;
@@ -6162,7 +5494,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
   function applyFontColor(
     color: string,
   ) {
-    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -6173,10 +5504,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      getStudyEditorRootForRange(
-        range,
-      ) ??
-      getActiveStudyEditorRoot();
+      document.querySelector<HTMLElement>(
+        "[data-study-editor-root]",
+      );
 
     if (!editorRoot) {
       return;
@@ -6290,7 +5620,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
   function toggleHighlightFormat() {
-    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -6301,10 +5630,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      getStudyEditorRootForRange(
-        range,
-      ) ??
-      getActiveStudyEditorRoot();
+      document.querySelector<HTMLElement>(
+        "[data-study-editor-root]",
+      );
 
     if (!editorRoot) {
       return;
@@ -6468,7 +5796,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
   function applyFontSize(
     fontSize: number,
   ) {
-    restoreCapturedTextSelectionForToolbar();
     let selection =
       window.getSelection();
 
@@ -6479,10 +5806,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      getStudyEditorRootForRange(
-        range,
-      ) ??
-      getActiveStudyEditorRoot();
+      document.querySelector<HTMLElement>(
+        "[data-study-editor-root]",
+      );
 
     if (!editorRoot) {
       return;
@@ -6802,7 +6128,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
        * 새 본문 한 줄을 만든다.
        */
       const nextBlock =
-        createTextBlock();
+        createTextBlock(true);
 
       updateSelectedNote((note) => {
         const targetIndex =
@@ -6882,33 +6208,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
   }
 
-  function getActiveEditorPageZoom() {
-    if (!isDualFileMode) {
-      return editorPageZoom;
-    }
-
-    const activeNoteId =
-      activeEditorNoteIdRef.current;
-
-    if (
-      activeNoteId &&
-      activeNoteId ===
-        dualSecondaryNoteId
-    ) {
-      return dualSecondaryPageZoom;
-    }
-
-    return dualPrimaryPageZoom;
-  }
-
   async function insertImageForResize(
     file: File,
     alt = file.name || "붙여넣은 사진",
   ) {
-    const activeNote =
-      getActiveEditorNote();
-
-    if (!activeNote) {
+    if (!selectedNote) {
       return;
     }
 
@@ -6976,7 +6280,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
       const editorScale =
         Math.max(
           0.01,
-          getActiveEditorPageZoom(),
+          editorPageZoom,
         );
 
       const positionYPx =
@@ -7042,7 +6346,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
        */
       setSelectedImageDeleteTarget(null);
       setResizingImageTarget({
-        noteId: activeNote.id,
+        noteId: selectedNote.id,
         blockId: imageBlock.id,
       });
 
@@ -7080,7 +6384,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   async function handleEditorPaste(
     event: ClipboardEvent<HTMLDivElement>,
   ) {
-    if (!getActiveEditorNote()) {
+    if (!selectedNote) {
       return;
     }
 
@@ -7358,7 +6662,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     const visualScale =
       Math.max(
         0.01,
-        getActiveEditorPageZoom(),
+        editorPageZoom,
       );
 
     const pageWidth =
@@ -7778,347 +7082,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
     setResizingImageTarget(null);
   }
 
-  function getCaretRangeFromPoint(
-    clientX: number,
-    clientY: number,
-  ) {
-    const documentWithCaretApi =
-      document as Document & {
-        caretRangeFromPoint?: (
-          x: number,
-          y: number,
-        ) => Range | null;
-        caretPositionFromPoint?: (
-          x: number,
-          y: number,
-        ) => {
-          offsetNode: Node;
-          offset: number;
-        } | null;
-      };
-
-    const caretPosition =
-      documentWithCaretApi
-        .caretPositionFromPoint?.(
-          clientX,
-          clientY,
-        );
-
-    if (caretPosition) {
-      const range =
-        document.createRange();
-
-      range.setStart(
-        caretPosition.offsetNode,
-        caretPosition.offset,
-      );
-      range.collapse(true);
-      return range;
-    }
-
-    return (
-      documentWithCaretApi
-        .caretRangeFromPoint?.(
-          clientX,
-          clientY,
-        ) ?? null
-    );
-  }
-
-  function beginUnlimitedTextDragSelection(
-    event: ReactPointerEvent<HTMLDivElement>,
-  ) {
-    if (
-      event.button !== 0 ||
-      event.pointerType === "touch"
-    ) {
-      return;
-    }
-
-    const target =
-      event.target as HTMLElement;
-
-    const startEditable =
-      target.closest<HTMLElement>(
-        "[data-study-editable-id]",
-      );
-
-    if (!startEditable) {
-      return;
-    }
-
-    const editorRoot =
-      target.closest<HTMLElement>(
-        "[data-study-editor-root]",
-      );
-
-    if (!editorRoot) {
-      return;
-    }
-
-    const startRange =
-      getCaretRangeFromPoint(
-        event.clientX,
-        event.clientY,
-      );
-
-    if (!startRange) {
-      return;
-    }
-
-    const startElement =
-      startRange.startContainer instanceof
-      HTMLElement
-        ? startRange.startContainer
-        : startRange.startContainer
-            .parentElement;
-
-    if (
-      !startElement?.closest(
-        "[data-study-editable-id]",
-      )
-    ) {
-      return;
-    }
-
-    dragSelectionCleanupRef.current?.();
-
-    const anchorNode =
-      startRange.startContainer;
-    const anchorOffset =
-      startRange.startOffset;
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const fallbackBlockId =
-      startEditable.dataset
-        .studyEditableId;
-
-    let isDragging = false;
-
-    const cleanup = () => {
-      window.removeEventListener(
-        "pointermove",
-        handleMove,
-      );
-      window.removeEventListener(
-        "pointerup",
-        handleUp,
-      );
-      window.removeEventListener(
-        "pointercancel",
-        handleCancel,
-      );
-
-      if (
-        dragSelectionCleanupRef.current ===
-        cleanup
-      ) {
-        dragSelectionCleanupRef.current =
-          null;
-      }
-    };
-
-    const handleMove = (
-      moveEvent: PointerEvent,
-    ) => {
-      if (
-        (moveEvent.buttons & 1) === 0
-      ) {
-        cleanup();
-        return;
-      }
-
-      const distance =
-        Math.hypot(
-          moveEvent.clientX - startX,
-          moveEvent.clientY - startY,
-        );
-
-      if (
-        !isDragging &&
-        distance < 3
-      ) {
-        return;
-      }
-
-      const currentRange =
-        getCaretRangeFromPoint(
-          moveEvent.clientX,
-          moveEvent.clientY,
-        );
-
-      if (!currentRange) {
-        return;
-      }
-
-      const currentElement =
-        currentRange.startContainer instanceof
-        HTMLElement
-          ? currentRange.startContainer
-          : currentRange.startContainer
-              .parentElement;
-
-      const currentEditable =
-        currentElement?.closest<HTMLElement>(
-          "[data-study-editable-id]",
-        );
-
-      if (
-        !currentEditable ||
-        !editorRoot.contains(
-          currentEditable,
-        )
-      ) {
-        return;
-      }
-
-      isDragging = true;
-      moveEvent.preventDefault();
-
-      const anchorRange =
-        document.createRange();
-      anchorRange.setStart(
-        anchorNode,
-        anchorOffset,
-      );
-      anchorRange.collapse(true);
-
-      const focusRange =
-        document.createRange();
-      focusRange.setStart(
-        currentRange.startContainer,
-        currentRange.startOffset,
-      );
-      focusRange.collapse(true);
-
-      const nextRange =
-        document.createRange();
-
-      const anchorBeforeFocus =
-        anchorRange.compareBoundaryPoints(
-          Range.START_TO_START,
-          focusRange,
-        ) <= 0;
-
-      if (anchorBeforeFocus) {
-        nextRange.setStart(
-          anchorNode,
-          anchorOffset,
-        );
-        nextRange.setEnd(
-          currentRange.startContainer,
-          currentRange.startOffset,
-        );
-      } else {
-        nextRange.setStart(
-          currentRange.startContainer,
-          currentRange.startOffset,
-        );
-        nextRange.setEnd(
-          anchorNode,
-          anchorOffset,
-        );
-      }
-
-      const selection =
-        window.getSelection();
-
-      if (!selection) {
-        return;
-      }
-
-      selection.removeAllRanges();
-
-      /*
-       * Selection 자체는 실제 드래그 방향(anchor → focus)을 유지한다.
-       * Range는 DOM 규칙상 앞→뒤로 정규화되므로 저장용으로만 사용한다.
-       * 이 분리로 오른쪽→왼쪽 역방향 드래그도 정상 선택된다.
-       */
-      if (
-        typeof selection.setBaseAndExtent ===
-        "function"
-      ) {
-        selection.setBaseAndExtent(
-          anchorNode,
-          anchorOffset,
-          currentRange.startContainer,
-          currentRange.startOffset,
-        );
-      } else {
-        selection.addRange(nextRange);
-      }
-
-      selectionRangeRef.current =
-        nextRange.cloneRange();
-
-      const selectedIds =
-        Array.from(
-          editorRoot.querySelectorAll<HTMLElement>(
-            "[data-study-editable-id]",
-          ),
-        )
-          .filter((editable) => {
-            try {
-              return nextRange.intersectsNode(
-                editable,
-              );
-            } catch {
-              return false;
-            }
-          })
-          .map(
-            (editable) =>
-              editable.dataset
-                .studyEditableId,
-          )
-          .filter(
-            (
-              value,
-            ): value is string =>
-              Boolean(value),
-          );
-
-      selectedBlockIdsRef.current =
-        selectedIds;
-      lastSelectedTextBlockIdRef.current =
-        selectedIds[0] ??
-        fallbackBlockId ??
-        null;
-    };
-
-    const handleUp = () => {
-      if (isDragging) {
-        captureSelection(
-          fallbackBlockId,
-        );
-        syncPrimaryTextFormatState();
-      }
-
-      cleanup();
-    };
-
-    const handleCancel = () => {
-      cleanup();
-    };
-
-    window.addEventListener(
-      "pointermove",
-      handleMove,
-      { passive: false },
-    );
-    window.addEventListener(
-      "pointerup",
-      handleUp,
-    );
-    window.addEventListener(
-      "pointercancel",
-      handleCancel,
-    );
-
-    dragSelectionCleanupRef.current =
-      cleanup;
-  }
-
   function handleEditorPointerDownCapture(
     event: ReactPointerEvent<HTMLDivElement>,
   ) {
@@ -8146,10 +7109,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
         setSelectedImageDeleteTarget(null);
       }
     }
-
-    beginUnlimitedTextDragSelection(
-      event,
-    );
   }
 
   function selectAllTextInCurrentPage(
@@ -8725,6 +7684,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
               ),
             ),
             brace: rawBlock.brace === true,
+            pageBreakBefore:
+              rawBlock.pageBreakBefore === true
+                ? true
+                : undefined,
             annotation,
           });
           continue;
@@ -9414,6 +8377,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 ),
               ),
               brace: rawBlock.brace === true,
+              pageBreakBefore:
+                rawBlock.pageBreakBefore === true
+                  ? true
+                  : undefined,
               annotation,
             });
             continue;
@@ -9798,6 +8765,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 html: block.html,
                 units: block.units,
                 brace: block.brace,
+                pageBreakBefore:
+                  block.pageBreakBefore,
                 annotation: block.annotation,
               });
               continue;
@@ -10126,79 +9095,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
   }
 
-  function renderPageDeleteModal() {
-    if (
-      pendingPageDeleteIndex === null ||
-      !getActiveEditorNote()
-    ) {
-      return null;
-    }
-
-    const pageNumber =
-      pendingPageDeleteIndex + 1;
-
-    return (
-      <div
-        className="fixed inset-0 z-[13050] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm"
-        onMouseDown={(event) => {
-          if (
-            event.target ===
-            event.currentTarget
-          ) {
-            setPendingPageDeleteIndex(null);
-          }
-        }}
-      >
-        <div
-          className={`w-full max-w-[390px] rounded-[16px] border p-6 shadow-[0_30px_100px_rgba(0,0,0,0.45)] ${
-            isDarkMode
-              ? "border-[#3a3d43] bg-[#17191d] text-white"
-              : "border-[#e3e3de] bg-white text-[#222]"
-          }`}
-        >
-          <p className="text-[10px] font-black tracking-[0.16em] opacity-40">
-            DELETE PAGE
-          </p>
-          <h2 className="mt-1 text-[20px] font-black">
-            {pageNumber}페이지를 삭제할까요?
-          </h2>
-          <p className="mt-3 text-[11px] font-bold leading-5 opacity-55">
-            이 페이지의 텍스트, 사진, 주석이 함께 삭제됩니다.
-            삭제 후에는 실행 취소 기록으로 되돌릴 수 있지만,
-            실수 방지를 위해 한 번 더 확인해 주세요.
-          </p>
-
-          <div className="mt-6 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() =>
-                setPendingPageDeleteIndex(null)
-              }
-              className={`rounded-lg px-4 py-3 text-[11px] font-black transition ${
-                isDarkMode
-                  ? "bg-white/10 hover:bg-white/15"
-                  : "bg-[#f0f0ed] hover:bg-[#e7e7e2]"
-              }`}
-            >
-              취소
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                deleteStudyPage(
-                  pendingPageDeleteIndex,
-                )
-              }
-              className="rounded-lg bg-[#9f3142] px-4 py-3 text-[11px] font-black text-white transition hover:bg-[#b43a4d]"
-            >
-              삭제
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   function renderLoginModal() {
     if (!isLoginOpen) {
       return null;
@@ -10438,201 +9334,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
   }
 
-  function renderDualModeConfirmModal() {
-    if (
-      !isDualModeConfirmOpen ||
-      !pendingDualOpenNoteId
-    ) {
-      return null;
-    }
-
-    const pendingNote =
-      notesRef.current.find(
-        (note) =>
-          note.id === pendingDualOpenNoteId,
-      ) ??
-      notes.find(
-        (note) =>
-          note.id === pendingDualOpenNoteId,
-      );
-
-    if (!pendingNote) {
-      return null;
-    }
-
-    return (
-      <div
-        className="fixed inset-0 z-[13100] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm"
-        role="dialog"
-        aria-modal="true"
-        aria-label="복수파일 모드 선택"
-      >
-        <div
-          className={`w-full max-w-[420px] rounded-[18px] border p-6 shadow-[0_30px_100px_rgba(0,0,0,0.45)] ${
-            isDarkMode
-              ? "border-[#3a3d43] bg-[#17191d] text-white"
-              : "border-[#e3e3de] bg-white text-[#222]"
-          }`}
-        >
-          <p className="text-[10px] font-black tracking-[0.16em] opacity-40">
-            OPEN NOTE
-          </p>
-          <h2 className="mt-1 text-[20px] font-black">
-            복수파일을 생성하시겠습니까?
-          </h2>
-          <p className="mt-3 text-[11px] font-bold leading-5 opacity-55">
-            YES를 누르면 “{pendingNote.title}” 파일을 왼쪽에 열고,
-            오른쪽에 함께 볼 두 번째 파일을 선택합니다.
-          </p>
-
-          <div className="mt-6 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                const noteId =
-                  pendingDualOpenNoteId;
-
-                setIsDualModeConfirmOpen(false);
-                setPendingDualOpenNoteId(null);
-
-                if (noteId) {
-                  openSingleNote(noteId);
-                }
-              }}
-              className={`rounded-lg px-4 py-3 text-[11px] font-black transition ${
-                isDarkMode
-                  ? "bg-white/10 hover:bg-white/15"
-                  : "bg-[#f0f0ed] hover:bg-[#e7e7e2]"
-              }`}
-            >
-              NO · 단일파일
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                startDualFileMode(
-                  pendingDualOpenNoteId,
-                )
-              }
-              className="rounded-lg bg-[#6a5410] px-4 py-3 text-[11px] font-black text-[#ffe48a] transition hover:bg-[#7a6214]"
-            >
-              YES · 복수파일
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function renderDualFilePickerModal() {
-    if (!isDualFilePickerOpen) {
-      return null;
-    }
-
-    const blockedNoteId =
-      dualFilePickerTarget === "primary"
-        ? dualSecondaryNoteId
-        : dualPrimaryNoteId;
-
-    const availableNotes =
-      [...notes]
-        .filter(
-          (note) =>
-            note.id !== blockedNoteId,
-        )
-        .sort((first, second) =>
-          second.updatedAt.localeCompare(
-            first.updatedAt,
-          ),
-        );
-
-    return (
-      <div
-        className="fixed inset-0 z-[13110] flex items-center justify-center bg-black/65 px-4 backdrop-blur-sm"
-        role="dialog"
-        aria-modal="true"
-        aria-label="복수파일 선택"
-      >
-        <div
-          className={`w-full max-w-[620px] rounded-[18px] border p-6 shadow-[0_30px_100px_rgba(0,0,0,0.48)] ${
-            isDarkMode
-              ? "border-[#3a3d43] bg-[#17191d] text-white"
-              : "border-[#e3e3de] bg-white text-[#222]"
-          }`}
-        >
-          <p className="text-[10px] font-black tracking-[0.16em] opacity-40">
-            MULTI FILE
-          </p>
-          <h2 className="mt-1 text-[20px] font-black">
-            {dualFilePickerTarget === "primary"
-              ? "왼쪽 파일 선택"
-              : "오른쪽 파일 선택"}
-          </h2>
-          <p className="mt-2 text-[11px] font-bold opacity-45">
-            양쪽 파일은 각각 독립적으로 스크롤하고 기존 편집 기능을 그대로 사용합니다.
-          </p>
-
-          <div className="mt-5 max-h-[430px] space-y-2 overflow-y-auto pr-1">
-            {availableNotes.map((note) => (
-              <button
-                key={note.id}
-                type="button"
-                onClick={() =>
-                  selectDualFile(note.id)
-                }
-                className={`flex w-full items-center justify-between gap-4 rounded-xl border px-4 py-4 text-left transition ${
-                  isDarkMode
-                    ? "border-white/10 bg-white/[0.035] hover:bg-white/[0.07]"
-                    : "border-black/10 bg-[#fafaf8] hover:bg-[#f4f1e8]"
-                }`}
-              >
-                <div className="min-w-0">
-                  <p className="truncate text-[13px] font-black">
-                    {note.title}
-                  </p>
-                  <p className="mt-1 truncate text-[9px] font-bold opacity-45">
-                    {note.category} · {formatModifiedDateTime(note.updatedAt)}
-                  </p>
-                </div>
-                <span className="shrink-0 text-lg opacity-45">›</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-5 flex justify-end">
-            <button
-              type="button"
-              onClick={() => {
-                setIsDualFilePickerOpen(false);
-
-                if (
-                  !dualPrimaryNoteId ||
-                  !dualSecondaryNoteId
-                ) {
-                  const fallbackNoteId =
-                    dualPrimaryNoteId ??
-                    dualSecondaryNoteId;
-
-                  if (fallbackNoteId) {
-                    openSingleNote(fallbackNoteId);
-                  }
-                }
-              }}
-              className={`rounded-lg px-5 py-2.5 text-[11px] font-black transition ${
-                isDarkMode
-                  ? "bg-white/10 hover:bg-white/15"
-                  : "bg-[#f0f0ed] hover:bg-[#e7e7e3]"
-              }`}
-            >
-              취소
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   function renderTrashBin() {
     const hasSelectedImage =
       selectedImageDeleteTarget !== null;
@@ -10706,14 +9407,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
      * 카테고리 화면에서는 메인으로,
      * 메인에서는 이전 페이지(HOO)로 돌아간다.
      */
-    if (
-      viewMode === "editor" &&
-      isDualFileMode
-    ) {
-      leaveDualFileMode();
-      return;
-    }
-
     if (viewMode === "editor") {
       const currentNote =
         selectedNote ??
@@ -11283,18 +9976,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 ? "pointer-events-none ml-0 max-w-0 translate-x-8 border-transparent px-0 opacity-0"
                 : "ml-1 max-w-[calc(100%-36px)] flex-1 translate-x-0 px-2 opacity-100"
             }`}
-            onMouseDownCapture={() => {
-              const selection =
-                window.getSelection();
-
-              if (
-                selection &&
-                selection.rangeCount > 0 &&
-                !selection.isCollapsed
-              ) {
-                captureSelection();
-              }
-            }}
           >
             <button
               type="button"
@@ -11901,790 +10582,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
 
-  function renderDualEditorPane(
-    paneNote: StudyNoteRecord | null,
-    side: "primary" | "secondary",
-  ) {
-    if (!paneNote) {
-      return (
-        <section
-          className={`flex min-h-0 min-w-0 flex-col items-center justify-center overflow-hidden border ${
-            isDarkMode
-              ? "border-[#303238] bg-[#111316] text-white"
-              : "border-[#deded9] bg-[#f8f8f6] text-[#2a2a2a]"
-          }`}
-        >
-          <p className="text-[13px] font-black opacity-55">
-            함께 열 두 번째 파일을 선택하세요.
-          </p>
-          <button
-            type="button"
-            onClick={() =>
-              requestDualFileReplacement(side)
-            }
-            className="mt-4 rounded-lg bg-[#6a5410] px-5 py-3 text-[11px] font-black text-[#ffe48a]"
-          >
-            파일 선택
-          </button>
-        </section>
-      );
-    }
-
-    const panePages =
-      paginateBlocks(paneNote.blocks);
-
-    const panePageZoom =
-      side === "primary"
-        ? dualPrimaryPageZoom
-        : dualSecondaryPageZoom;
-
-    const activatePane = () => {
-      activateEditorNote(paneNote.id);
-    };
-
-    return (
-      <section
-        data-study-dual-pane={side}
-        className={`flex min-h-0 min-w-0 flex-col overflow-hidden border ${
-          isDarkMode
-            ? "border-[#303238] bg-[#111316] text-white"
-            : "border-[#deded9] bg-[#f8f8f6] text-[#2a2a2a]"
-        }`}
-        onPointerDownCapture={activatePane}
-        onFocusCapture={activatePane}
-        onPasteCapture={activatePane}
-      >
-        <div
-          className={`flex h-[38px] shrink-0 items-center justify-between border-b px-3 ${
-            isDarkMode
-              ? "border-[#303238] bg-[#17191d]"
-              : "border-[#deded9] bg-white"
-          }`}
-        >
-          <span className="truncate text-[10px] font-black opacity-45">
-            {side === "primary" ? "왼쪽 파일" : "오른쪽 파일"}
-          </span>
-          <button
-            type="button"
-            onClick={() =>
-              requestDualFileReplacement(side)
-            }
-            className={`rounded-md border px-3 py-1.5 text-[9px] font-black transition ${
-              isDarkMode
-                ? "border-white/10 bg-white/5 hover:bg-white/10"
-                : "border-black/10 bg-[#f4f2ec] hover:bg-[#ece8dd]"
-            }`}
-          >
-            파일 교체
-          </button>
-        </div>
-
-        <div
-          data-hoo-vertical-scroll="true"
-          className="min-h-0 flex-1 overflow-auto p-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-        >
-          <div
-            className="origin-top-left"
-            style={{
-              zoom: panePageZoom,
-            } as CSSProperties}
-          >
-                            <div
-                              className="min-w-0 space-y-4"
-                              style={{
-                                width: PAGE_SHEET_WIDTH,
-                                minWidth: PAGE_SHEET_WIDTH,
-                                fontSize: `${PAGE_TEXT_FONT_SIZE}px`,
-                                fontVariantNumeric: "tabular-nums",
-                                fontFeatureSettings: '"tnum" 1',
-                              }}
-                            >
-                              <div
-                                className={`relative flex min-h-[76px] w-full items-center justify-center border px-7 py-4 ${
-                                  isDarkMode
-                                    ? "border-[#303238] bg-[#17191d] text-[#efefef]"
-                                    : "border-[#deded9] bg-white text-[#2a2a2a]"
-                                }`}
-                              >
-                                <div className="relative inline-block max-w-[70%]">
-                                  <span
-                                    contentEditable
-                                    suppressContentEditableWarning
-                                    ref={(element) => {
-                                      if (
-                                        !element ||
-                                        document.activeElement === element
-                                      ) {
-                                        return;
-                                      }
-          
-                                      if (
-                                        (element.textContent ?? "") !==
-                                        paneNote.title
-                                      ) {
-                                        element.textContent =
-                                          paneNote.title;
-                                      }
-                                    }}
-                                    onInput={(event) => {
-                                      const nextTitle =
-                                        (
-                                          event.currentTarget
-                                            .textContent ?? ""
-                                        )
-                                          .replace(/[\r\n]+/g, " ")
-                                          .slice(0, 80);
-          
-                                      if (
-                                        nextTitle !==
-                                        event.currentTarget.textContent
-                                      ) {
-                                        event.currentTarget.textContent =
-                                          nextTitle;
-                                      }
-          
-                                      updateSelectedNote((note) => ({
-                                        ...note,
-                                        title: nextTitle,
-                                      }));
-                                    }}
-                                    onKeyDown={(event) => {
-                                      if (event.key === "Enter") {
-                                        event.preventDefault();
-                                      }
-                                    }}
-                                    className={`inline-block min-w-[1ch] max-w-full break-words bg-transparent text-center text-[24px] font-black leading-[1.35] outline-none ${
-                                      isDarkMode
-                                        ? "text-white"
-                                        : "text-[#2a2a2a]"
-                                    }`}
-                                    role="textbox"
-                                    aria-label="노트 제목"
-                                    data-placeholder="기록 제목"
-                                  />
-          
-                                  <span className="absolute bottom-0 left-[calc(100%+10px)] inline-flex shrink-0 flex-col items-start whitespace-nowrap leading-none opacity-45">
-                                    <span className="mb-1 text-[8px] font-black">
-                                      (최종 수정)
-                                    </span>
-                                    <span className="text-[13px] font-bold">
-                                      - {formatModifiedDateTime(paneNote.updatedAt)}
-                                    </span>
-                                  </span>
-                                </div>
-                              </div>
-          
-                              <div
-                                data-study-editor-root
-                                className="space-y-4"
-                          onPaste={handleEditorPaste}
-                          onPointerDownCapture={
-                            handleEditorPointerDownCapture
-                          }
-                          onKeyDownCapture={
-                            handleEditorKeyDownCapture
-                          }
-                        >
-                          {panePages.map((pageBlocks, pageIndex) => (
-                            <article
-                              key={`${paneNote.id}-page-${pageIndex}`}
-                              data-study-page-container="true"
-                              data-study-note-id={paneNote.id}
-                              data-study-page-index={pageIndex}
-                              onPointerDownCapture={(event) =>
-                                beginStudyPageLongPress(
-                                  event,
-                                  paneNote.id,
-                                  pageIndex,
-                                )
-                              }
-                              className={`relative overflow-hidden border ${
-                                isDarkMode
-                                  ? "border-[#303238] bg-[#17191d] text-[#efefef]"
-                                  : "border-[#deded9] bg-[#fff] text-[#2a2a2a]"
-                              } ${
-                                pageMoveState?.noteId ===
-                                  paneNote.id &&
-                                pageMoveState.sourceIndex ===
-                                  pageIndex
-                                  ? "cursor-grabbing opacity-80"
-                                  : ""
-                              } ${
-                                pageMoveState?.noteId ===
-                                  paneNote.id &&
-                                pageMoveState.targetIndex ===
-                                  pageIndex
-                                  ? "ring-2 ring-[#d6b522] ring-inset"
-                                  : ""
-                              }`}
-                            >
-                              <span
-                                data-study-page-move-handle="true"
-                                className={`absolute left-2 top-2 z-40 flex h-7 w-7 cursor-grab items-center justify-center rounded-full border text-[14px] font-black opacity-45 transition hover:opacity-90 ${
-                                  isDarkMode
-                                    ? "border-white/10 bg-[#111316]/90"
-                                    : "border-black/10 bg-white/90"
-                                }`}
-                                title="길게 눌러 페이지 이동"
-                                aria-label="길게 눌러 페이지 이동"
-                              >
-                                ⠿
-                              </span>
-
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setPendingPageDeleteIndex(
-                                    pageIndex,
-                                  )
-                                }
-                                className={`absolute right-2 top-2 z-40 flex h-7 w-7 items-center justify-center rounded-full border text-[13px] font-black transition ${
-                                  isDarkMode
-                                    ? "border-white/10 bg-[#111316]/90 text-white/45 hover:border-[#ff6b7d]/50 hover:bg-[#4d2028] hover:text-[#ffd9df]"
-                                    : "border-black/10 bg-white/90 text-black/35 hover:border-[#c84a5c]/40 hover:bg-[#fff0f2] hover:text-[#a12e40]"
-                                }`}
-                                title={`${pageIndex + 1}페이지 삭제`}
-                                aria-label={`${pageIndex + 1}페이지 삭제`}
-                              >
-                                ×
-                              </button>
-          
-                              <div
-                                data-study-page-body="true"
-                                data-study-page-index={pageIndex}
-                                className="relative pl-[60px] pr-5"
-                                style={{
-                                  minHeight: PAGE_LINE_LIMIT * ROW_HEIGHT,
-                                  fontVariantNumeric: "tabular-nums",
-                                  fontFeatureSettings: '"tnum" 1',
-                                  backgroundImage: isDarkMode
-                                    ? "repeating-linear-gradient(to bottom, transparent 0, transparent 27px, rgba(255,255,255,0.075) 27px, rgba(255,255,255,0.075) 28px)"
-                                    : "repeating-linear-gradient(to bottom, transparent 0, transparent 27px, rgba(112,102,86,0.16) 27px, rgba(112,102,86,0.16) 28px)",
-                                }}
-                                onPointerDown={(event) => {
-                                  if (
-                                    event.target ===
-                                    event.currentTarget
-                                  ) {
-                                    event.preventDefault();
-                                    focusActiveTextBlockAtEnd();
-                                  }
-                                }}
-                              >
-                                <div
-                                  className={`pointer-events-none absolute bottom-0 left-0 top-0 w-[43px] border-r text-right text-[9px] font-bold opacity-35 ${
-                                    isDarkMode ? "border-[#303238]" : "border-[#e8e8e3]"
-                                  }`}
-                                >
-                                  {Array.from({ length: PAGE_LINE_LIMIT }, (_, lineIndex) => (
-                                    <div key={lineIndex} className="h-7 pr-3 leading-7">{lineIndex + 1}</div>
-                                  ))}
-                                </div>
-          
-                                {pageBlocks.map((block) => {
-                                  if (block.type === "image") {
-                                    const isResizingImage =
-                                      resizingImageTarget?.noteId ===
-                                        paneNote.id &&
-                                      resizingImageTarget.blockId ===
-                                        block.id;
-          
-                                    const isSelectedForDelete =
-                                      selectedImageDeleteTarget?.noteId ===
-                                        paneNote.id &&
-                                      selectedImageDeleteTarget.blockId ===
-                                        block.id;
-          
-                                    const isFreeImage =
-                                      block.layout === "free";
-          
-                                    const isFloatRight =
-                                      !isResizingImage &&
-                                      block.layout ===
-                                        "float-right";
-          
-                                    return (
-                                      <figure
-                                        key={block.id}
-                                        data-study-block-id={block.id}
-                                        data-study-image-figure-id={
-                                          block.id
-                                        }
-                                        className={
-                                          isFreeImage
-                                            ? "group absolute z-20 m-0 select-none p-0"
-                                            : isFloatRight
-                                              ? "group relative float-right mb-2 ml-4 select-none py-1"
-                                              : "group relative flex select-none items-start justify-start py-1"
-                                        }
-                                        style={
-                                          isFreeImage
-                                            ? {
-                                                left: `${
-                                                  block.positionXPercent ??
-                                                  7
-                                                }%`,
-                                                top: `${
-                                                  block.positionYPx ??
-                                                  0
-                                                }px`,
-                                                width: `${
-                                                  block.widthPercent ??
-                                                  65
-                                                }%`,
-                                                minHeight: 0,
-                                                userSelect:
-                                                  "none",
-                                                WebkitUserSelect:
-                                                  "none",
-                                              }
-                                            : isFloatRight
-                                              ? {
-                                                  width: `${
-                                                    block.widthPercent ??
-                                                    48
-                                                  }%`,
-                                                  minHeight: 0,
-                                                  userSelect:
-                                                    "none",
-                                                  WebkitUserSelect:
-                                                    "none",
-                                                }
-                                              : {
-                                                  minHeight:
-                                                    block.units *
-                                                    ROW_HEIGHT,
-                                                  userSelect:
-                                                    "none",
-                                                  WebkitUserSelect:
-                                                    "none",
-                                                }
-                                        }
-                                      >
-                                        <div
-                                          data-study-image-wrapper-id={
-                                            block.id
-                                          }
-                                          className="relative inline-flex max-w-full items-start justify-start rounded-[9px]"
-                                          style={{
-                                            width:
-                                              isFreeImage ||
-                                              isFloatRight
-                                                ? "100%"
-                                                : `${
-                                                    block.widthPercent ??
-                                                    65
-                                                  }%`,
-                                            boxShadow:
-                                              isResizingImage ||
-                                              isSelectedForDelete
-                                                ? "0 0 0 3px #ff4f6d"
-                                                : "none",
-                                            backgroundColor:
-                                              isResizingImage ||
-                                              isSelectedForDelete
-                                                ? "rgba(255, 79, 109, 0.06)"
-                                                : "transparent",
-                                          }}
-                                        >
-                                          <img
-                                            data-study-image-source="true"
-                                            src={block.src}
-                                            alt={block.alt}
-                                            draggable={false}
-                                            className={`pointer-events-none block h-auto w-full select-none rounded-[7px] object-contain shadow-sm ${
-                                              isDarkMode
-                                                ? "bg-white/5"
-                                                : "bg-[#f2eee6]"
-                                            }`}
-                                            style={{
-                                              userSelect: "none",
-                                              WebkitUserSelect:
-                                                "none",
-                                            }}
-                                          />
-          
-                                          <button
-                                            type="button"
-                                            aria-label={
-                                              isResizingImage
-                                                ? "사진 위치 이동"
-                                                : "사진 선택"
-                                            }
-                                            draggable={false}
-                                            onPointerDown={
-                                              isResizingImage &&
-                                              isFreeImage
-                                                ? (event) =>
-                                                    handleImageBlockMovePointerDown(
-                                                      event,
-                                                      block,
-                                                    )
-                                                : undefined
-                                            }
-                                            onClick={(event) => {
-                                              event.preventDefault();
-                                              event.stopPropagation();
-          
-                                              if (isResizingImage) {
-                                                return;
-                                              }
-          
-                                              setSelectedImageDeleteTarget(
-                                                (current) =>
-                                                  current?.noteId ===
-                                                    paneNote.id &&
-                                                  current.blockId ===
-                                                    block.id
-                                                    ? null
-                                                    : {
-                                                        kind: "image",
-                                                        noteId:
-                                                          paneNote.id,
-                                                        blockId:
-                                                          block.id,
-                                                        label:
-                                                          block.alt ||
-                                                          "사진",
-                                                      },
-                                              );
-                                            }}
-                                            className={`absolute inset-0 z-10 rounded-[9px] bg-transparent ${
-                                              isResizingImage &&
-                                              isFreeImage
-                                                ? "cursor-move"
-                                                : "cursor-pointer"
-                                            }`}
-                                            style={{
-                                              touchAction:
-                                                isResizingImage &&
-                                                isFreeImage
-                                                  ? "none"
-                                                  : undefined,
-                                            }}
-                                            title={
-                                              isResizingImage &&
-                                              isFreeImage
-                                                ? "사진을 잡아 원하는 위치로 이동하세요"
-                                                : isResizingImage
-                                                  ? "사진 밖을 클릭하거나 Enter를 누르면 크기가 확정됩니다"
-                                                  : "사진을 클릭하면 삭제 상태가 됩니다"
-                                            }
-                                          />
-          
-                                          {isResizingImage && (
-                                            <button
-                                              type="button"
-                                              aria-label="사진 크기 조절"
-                                              draggable={false}
-                                              onPointerDown={(
-                                                event,
-                                              ) =>
-                                                handleImageBlockResizePointerDown(
-                                                  event,
-                                                  block,
-                                                )
-                                              }
-                                              className="absolute -bottom-3 -right-3 z-40 flex h-7 w-7 cursor-se-resize items-center justify-center rounded-full border-2 border-white bg-[#ffca28] text-[12px] font-black text-black shadow-lg"
-                                              style={{
-                                                touchAction:
-                                                  "none",
-                                              }}
-                                              title="오른쪽 아래 모서리를 움직여 크기를 조절하세요"
-                                            >
-                                              ↘
-                                            </button>
-                                          )}
-          
-                                          {isSelectedForDelete && (
-                                            <button
-                                              type="button"
-                                              draggable={false}
-                                              onClick={(event) => {
-                                                event.preventDefault();
-                                                event.stopPropagation();
-          
-                                                deleteImageBlock(
-                                                  paneNote.id,
-                                                  block.id,
-                                                  block.alt ||
-                                                    "사진",
-                                                );
-                                              }}
-                                              className="absolute left-2 top-2 z-30 rounded-full bg-[#5f1f2a]/95 px-3 py-1 text-[9px] font-black text-[#ffd9df] shadow-lg transition hover:bg-[#7a2635]"
-                                              title="사진 삭제"
-                                            >
-                                              🗑 삭제
-                                            </button>
-                                          )}
-                                        </div>
-                                      </figure>
-                                    );
-                                  }
-          
-                                  return (
-                                    <div
-                                      key={block.id}
-                                      data-study-block-id={block.id}
-                                      className="relative"
-                                      style={{ minHeight: getBlockUnits(block) * ROW_HEIGHT }}
-                                    >
-                                      <div
-                                        ref={(element) => {
-                                          if (!element) {
-                                            return;
-                                          }
-          
-                                          /*
-                                           * 입력 중 React 재렌더링이 contentEditable의 innerHTML을
-                                           * 다시 덮어쓰면 커서가 맨 앞으로 이동하면서 새 글자가
-                                           * 왼쪽에 계속 쌓이는 현상이 생긴다.
-                                           *
-                                           * 편집 중에는 브라우저 DOM을 그대로 유지하고,
-                                           * 포커스가 없을 때만 저장된 HTML과 동기화한다.
-                                           */
-                                          if (
-                                            document.activeElement !== element &&
-                                            element.innerHTML !== block.html
-                                          ) {
-                                            element.innerHTML = block.html;
-                                          }
-                                        }}
-                                        data-study-editable-id={block.id}
-                                        contentEditable
-                                        suppressContentEditableWarning
-                                        dir="ltr"
-                                        style={
-                                          getFreeImageTextWrapStyle(
-                                            pageBlocks,
-                                            block,
-                                          )
-                                        }
-                                        onPointerDown={(event) => {
-                                          /*
-                                           * 실제 text block으로 존재하는 줄은 이미 Enter로
-                                           * 활성화된 줄이므로 클릭 이동을 허용한다.
-                                           *
-                                           * 새 페이지를 맞추기 위해 만든 큰 빈 spacer만
-                                           * 편집 줄이 아니므로 클릭 진입을 차단한다.
-                                           */
-                                          if (
-                                            !isEditableTextBlock(
-                                              block,
-                                            )
-                                          ) {
-                                            event.preventDefault();
-                                            event.stopPropagation();
-                                            focusActiveTextBlockAtEnd();
-                                          }
-                                        }}
-                                        onFocus={(event) => {
-                                          if (
-                                            !isEditableTextBlock(
-                                              block,
-                                            )
-                                          ) {
-                                            event.currentTarget.blur();
-          
-                                            window.setTimeout(() => {
-                                              focusActiveTextBlockAtEnd();
-                                            }, 0);
-          
-                                            return;
-                                          }
-          
-                                          lastSelectedTextBlockIdRef.current =
-                                            block.id;
-                                          selectedBlockIdsRef.current = [
-                                            block.id,
-                                          ];
-          
-                                          window.setTimeout(() => {
-                                            syncPrimaryTextFormatState();
-                                          }, 0);
-                                        }}
-                                        onMouseUp={() => {
-                                          captureSelection(
-                                            block.id,
-                                          );
-                                          syncPrimaryTextFormatState();
-                                        }}
-                                        onKeyUp={() => {
-                                          captureSelection(
-                                            block.id,
-                                          );
-                                          syncPrimaryTextFormatState();
-                                        }}
-                                        onKeyDown={(event) => handleTextKeyDown(event, block)}
-                                        onInput={(event) => {
-                                          const element = event.currentTarget;
-          
-                                          normalizeFontSizeMarkup(
-                                            element,
-                                            typingFontSizeRef.current,
-                                          );
-          
-                                          /* 편집 중에는 기존 페이지 줄 점유수(units)를 유지한다. */
-          
-                                          updateBlock(
-                                            block.id,
-                                            (currentBlock) =>
-                                              currentBlock.type === "text"
-                                                ? {
-                                                    ...currentBlock,
-                                                    html: element.innerHTML,
-                                                  }
-                                                : currentBlock,
-                                          );
-                                        }}
-                                        className={`min-h-7 whitespace-pre-wrap break-words text-left text-[14px] font-medium leading-7 outline-none ${
-                                          isDarkMode
-                                            ? "text-[#efefef]"
-                                            : "text-[#302b27]"
-                                        }`}
-                                      />
-          
-                                      {block.annotation && (
-                                        <div
-                                          className={`relative h-7 text-[13px] ${
-                                            isDarkMode
-                                              ? "text-[#d9d9d9]"
-                                              : "text-[#5b554c]"
-                                          }`}
-                                        >
-                                          <div
-                                            className="pointer-events-none absolute top-[4px] h-[18px]"
-                                            style={{
-                                              left: `${
-                                                block.annotation
-                                                  .anchorPercent ??
-                                                50
-                                              }%`,
-                                              width: "28px",
-                                            }}
-                                            title={
-                                              block.annotation.quote
-                                            }
-                                          >
-                                            <svg
-                                              viewBox="0 0 28 18"
-                                              className="h-[18px] w-[28px] overflow-visible"
-                                              aria-hidden="true"
-                                            >
-                                              <path
-                                                d="M4 1.5 V9.5 Q4 13 7.5 13 H19"
-                                                fill="none"
-                                                stroke="#d6a800"
-                                                strokeWidth="2.2"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                              />
-                                              <path
-                                                d="M15.5 9.8 L19.5 13 L15.5 16.2"
-                                                fill="none"
-                                                stroke="#d6a800"
-                                                strokeWidth="2.2"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                              />
-                                            </svg>
-                                          </div>
-          
-                                          <input
-                                            data-study-annotation-id={
-                                              block.id
-                                            }
-                                            value={
-                                              block.annotation.text
-                                            }
-                                            onKeyDown={(event) =>
-                                              handleAnnotationKeyDown(
-                                                event,
-                                                block,
-                                              )
-                                            }
-                                            onChange={(event) =>
-                                              updateBlock(
-                                                block.id,
-                                                (
-                                                  currentBlock,
-                                                ) =>
-                                                  currentBlock.type ===
-                                                    "text" &&
-                                                  currentBlock.annotation
-                                                    ? {
-                                                        ...currentBlock,
-                                                        annotation:
-                                                          {
-                                                            ...currentBlock.annotation,
-                                                            text: event
-                                                              .target
-                                                              .value,
-                                                          },
-                                                      }
-                                                    : currentBlock,
-                                              )
-                                            }
-                                            placeholder={
-                                              block.annotation.quote
-                                                ? `“${block.annotation.quote}” 주석 입력`
-                                                : "주석 입력"
-                                            }
-                                            className="absolute top-0 h-7 bg-transparent pr-7 font-bold outline-none placeholder:opacity-35"
-                                            style={{
-                                              left: `calc(${block.annotation.anchorPercent ?? 50}% + 30px)`,
-                                              width: `calc(100% - (${block.annotation.anchorPercent ?? 50}% + 38px))`,
-                                            }}
-                                          />
-          
-                                          <button
-                                            type="button"
-                                            onClick={() =>
-                                              updateBlock(
-                                                block.id,
-                                                (
-                                                  currentBlock,
-                                                ) => {
-                                                  if (
-                                                    currentBlock.type !==
-                                                    "text"
-                                                  ) {
-                                                    return currentBlock;
-                                                  }
-          
-                                                  const {
-                                                    annotation:
-                                                      _annotation,
-                                                    ...remainingBlock
-                                                  } = currentBlock;
-          
-                                                  return remainingBlock;
-                                                },
-                                              )
-                                            }
-                                            className="absolute right-1 top-1/2 -translate-y-1/2 text-xs font-black opacity-40"
-                                            title="주석 삭제"
-                                            aria-label="주석 삭제"
-                                          >
-                                            ×
-                                          </button>
-                                        </div>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </article>
-                          ))}
-                              </div>
-                            </div>
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-
   if (viewMode === "home") {
     const folderColors = [
       ["#f8dda0", "#9a6b12"],
@@ -12699,8 +10596,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
       <section className="flex h-[100dvh] w-screen shrink-0 overflow-hidden bg-[#f4f4f1] p-0">
         {renderLoginModal()}
         {renderFocusStudyNotePanel()}
-        {renderDualModeConfirmModal()}
-        {renderDualFilePickerModal()}
 
         {renderTrashBin()}
 
@@ -12723,33 +10618,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
             >
               <button
                 type="button"
-                onClick={() => {
-                  if (focusStudyNoteSession) {
-                    returnToMainFocusScreen(
-                      "resume",
-                    );
-                    return;
-                  }
-
-                  window.location.href = "/";
-                }}
-                className={`rounded-md border px-3 py-2 text-[11px] font-black tracking-[0.08em] transition ${
-                  isDarkMode
-                    ? "border-white/15 bg-white/5 text-white hover:bg-white/10"
-                    : "border-black/10 bg-white text-[#292929] hover:bg-[#f5f3ec]"
-                }`}
-                title={
-                  focusStudyNoteSession
-                    ? "포커스 화면으로 돌아가기"
-                    : "HOO로 돌아가기"
-                }
-                aria-label={
-                  focusStudyNoteSession
-                    ? "포커스 화면으로 돌아가기"
-                    : "HOO로 돌아가기"
-                }
+                className="text-[22px] leading-none opacity-80"
+                title="메뉴"
               >
-                [ HOO ]
+                ☰
               </button>
               <h1 className="text-[17px] font-black tracking-[-0.03em]">HOO터디 노트</h1>
             </div>
@@ -12979,8 +10851,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
         {renderLoginModal()}
         {renderFocusStudyNotePanel()}
         {renderNoteNameModal()}
-        {renderDualModeConfirmModal()}
-        {renderDualFilePickerModal()}
         {renderTrashBin()}
 
         <div
@@ -13176,117 +11046,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
   }
 
-  if (
-    viewMode === "editor" &&
-    isDualFileMode
-  ) {
-    const primaryNote =
-      notes.find(
-        (note) => note.id === dualPrimaryNoteId,
-      ) ?? null;
-
-    const secondaryNote =
-      notes.find(
-        (note) => note.id === dualSecondaryNoteId,
-      ) ?? null;
-
-    return (
-      <section
-        className={`flex h-[100dvh] w-screen shrink-0 overflow-hidden p-0 ${
-          isDarkMode
-            ? "bg-[#111316] text-white"
-            : "bg-[#f4f4f1] text-[#222]"
-        }`}
-      >
-        {renderLoginModal()}
-        {renderFocusStudyNotePanel()}
-        {renderPageDeleteModal()}
-        {renderDualModeConfirmModal()}
-        {renderDualFilePickerModal()}
-        {renderTrashBin()}
-
-        <div
-          className={`grid h-full w-full min-h-0 grid-rows-[66px_minmax(0,1fr)] overflow-hidden border ${
-            isDarkMode
-              ? "border-[#303238] bg-[#15171a]"
-              : "border-[#e6e6e2] bg-[#fbfbfa]"
-          }`}
-        >
-          <header
-            className={`grid grid-cols-[266px_minmax(0,1fr)] border-b ${
-              isDarkMode
-                ? "border-[#303238]"
-                : "border-[#e6e6e2]"
-            }`}
-          >
-            <div
-              className={`flex items-center gap-4 border-r px-6 ${
-                isDarkMode
-                  ? "border-[#303238]"
-                  : "border-[#e6e6e2]"
-              }`}
-            >
-              <button
-                type="button"
-                onClick={leaveDualFileMode}
-                className="text-[22px] leading-none opacity-80"
-                title="복수파일 모드 종료"
-                aria-label="복수파일 모드 종료"
-              >
-                ☰
-              </button>
-
-              <h1 className="truncate text-[17px] font-black tracking-[-0.03em]">
-                HOO터디 노트
-              </h1>
-            </div>
-
-            <div className="flex min-w-0 items-center justify-between gap-4 px-5">
-              <div className="min-w-0">
-                <p className="text-[9px] font-black tracking-[0.16em] opacity-40">
-                  MULTI FILE MODE
-                </p>
-                <p className="truncate text-[14px] font-black">
-                  {primaryNote?.title ?? "왼쪽 파일"}
-                  {"  +  "}
-                  {secondaryNote?.title ?? "오른쪽 파일 선택"}
-                </p>
-              </div>
-
-              <span
-                className="shrink-0 text-[9px] font-black opacity-60"
-                title={saveLabel}
-              >
-                {saveLabel}
-              </span>
-            </div>
-          </header>
-
-          <div className="grid min-h-0 grid-cols-[266px_minmax(0,1fr)]">
-            {renderSidebar()}
-
-            <main className="flex min-h-0 min-w-0 flex-col overflow-hidden p-3">
-              <div className="relative h-[50px] shrink-0">
-                {renderCompactEditorToolbar()}
-              </div>
-
-              <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
-                {renderDualEditorPane(
-                  primaryNote,
-                  "primary",
-                )}
-                {renderDualEditorPane(
-                  secondaryNote,
-                  "secondary",
-                )}
-              </div>
-            </main>
-          </div>
-        </div>
-      </section>
-    );
-  }
-
   if (!selectedNote) {
     return (
       <section className="flex h-[100dvh] w-screen items-center justify-center bg-[#f4f4f1]">
@@ -13307,9 +11066,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
     <section className="flex h-[100dvh] w-screen shrink-0 overflow-hidden bg-[#f4f4f1] p-0">
         {renderLoginModal()}
         {renderFocusStudyNotePanel()}
-        {renderPageDeleteModal()}
-        {renderDualModeConfirmModal()}
-        {renderDualFilePickerModal()}
         {renderTrashBin()}
       <div
         className={`grid h-full w-full min-h-0 grid-rows-[66px_minmax(0,1fr)] overflow-hidden border ${
@@ -13413,9 +11169,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
                     style={{
                       width: PAGE_SHEET_WIDTH,
                       minWidth: PAGE_SHEET_WIDTH,
-                      fontSize: `${PAGE_TEXT_FONT_SIZE}px`,
-                      fontVariantNumeric: "tabular-nums",
-                      fontFeatureSettings: '"tnum" 1',
                     }}
                   >
                     <div
@@ -13507,67 +11260,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 {notePages.map((pageBlocks, pageIndex) => (
                   <article
                     key={`${selectedNote.id}-page-${pageIndex}`}
-                    data-study-page-container="true"
-                    data-study-note-id={selectedNote.id}
-                    data-study-page-index={pageIndex}
-                    onPointerDownCapture={(event) =>
-                      beginStudyPageLongPress(
-                        event,
-                        selectedNote.id,
-                        pageIndex,
-                      )
-                    }
-                    className={`relative overflow-hidden border ${
+                    className={`overflow-hidden border ${
                       isDarkMode
                         ? "border-[#303238] bg-[#17191d] text-[#efefef]"
                         : "border-[#deded9] bg-[#fff] text-[#2a2a2a]"
-                    } ${
-                      pageMoveState?.noteId ===
-                        selectedNote.id &&
-                      pageMoveState.sourceIndex ===
-                        pageIndex
-                        ? "cursor-grabbing opacity-80"
-                        : ""
-                    } ${
-                      pageMoveState?.noteId ===
-                        selectedNote.id &&
-                      pageMoveState.targetIndex ===
-                        pageIndex
-                        ? "ring-2 ring-[#d6b522] ring-inset"
-                        : ""
                     }`}
                   >
-                    <span
-                      data-study-page-move-handle="true"
-                      className={`absolute left-2 top-2 z-40 flex h-7 w-7 cursor-grab items-center justify-center rounded-full border text-[14px] font-black opacity-45 transition hover:opacity-90 ${
-                        isDarkMode
-                          ? "border-white/10 bg-[#111316]/90"
-                          : "border-black/10 bg-white/90"
-                      }`}
-                      title="길게 눌러 페이지 이동"
-                      aria-label="길게 눌러 페이지 이동"
-                    >
-                      ⠿
-                    </span>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setPendingPageDeleteIndex(
-                          pageIndex,
-                        )
-                      }
-                      className={`absolute right-2 top-2 z-40 flex h-7 w-7 items-center justify-center rounded-full border text-[13px] font-black transition ${
-                        isDarkMode
-                          ? "border-white/10 bg-[#111316]/90 text-white/45 hover:border-[#ff6b7d]/50 hover:bg-[#4d2028] hover:text-[#ffd9df]"
-                          : "border-black/10 bg-white/90 text-black/35 hover:border-[#c84a5c]/40 hover:bg-[#fff0f2] hover:text-[#a12e40]"
-                      }`}
-                      title={`${pageIndex + 1}페이지 삭제`}
-                      aria-label={`${pageIndex + 1}페이지 삭제`}
-                    >
-                      ×
-                    </button>
-
                     <div
                       data-study-page-body="true"
                       data-study-page-index={pageIndex}
@@ -13917,10 +11615,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
                                 selectedBlockIdsRef.current = [
                                   block.id,
                                 ];
-
-                                window.setTimeout(() => {
-                                  syncPrimaryTextFormatState();
-                                }, 0);
                               }}
                               onMouseUp={() => {
                                 captureSelection(
@@ -13943,7 +11637,16 @@ export default function StudyNote({ active }: StudyNoteProps) {
                                   typingFontSizeRef.current,
                                 );
 
-                                /* 편집 중에는 기존 페이지 줄 점유수(units)를 유지한다. */
+                                const measuredUnits = Math.max(
+                                  1,
+                                  Math.min(
+                                    PAGE_LINE_LIMIT,
+                                    Math.ceil(
+                                      element.scrollHeight /
+                                        ROW_HEIGHT,
+                                    ),
+                                  ),
+                                );
 
                                 updateBlock(
                                   block.id,
@@ -13952,6 +11655,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
                                       ? {
                                           ...currentBlock,
                                           html: element.innerHTML,
+                                          units: measuredUnits,
                                         }
                                       : currentBlock,
                                 );
@@ -14099,14 +11803,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
                   </div>
 
               <aside
-                className={`sticky top-1/2 z-30 self-start -translate-y-1/2 overflow-hidden border ${
+                className={`sticky top-0 overflow-hidden border ${
                   isDarkMode
                     ? "border-[#303238] bg-[#17191d] text-white"
                     : "border-[#deded9] bg-[#fff] text-[#302b27]"
                 }`}
-                style={{
-                  maxHeight: "calc(100dvh - 110px)",
-                }}
               >
                 <div
                   className={`flex h-[48px] items-center justify-between border-b px-5 ${
