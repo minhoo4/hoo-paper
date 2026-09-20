@@ -888,10 +888,7 @@ export default function AdminPage() {
     }
 
     let cancelled = false;
-    let nextNoonTimer:
-      ReturnType<
-        typeof window.setTimeout
-      > | null = null;
+    let nextNoonTimer: number | null = null;
 
     async function loadNewUserSummary() {
       try {

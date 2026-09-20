@@ -1958,20 +1958,6 @@ const [selectedNotice, setSelectedNotice] =
   
   const noticeRef = useRef<HTMLDivElement>(null);
 
-  /*
-   * 상단 검색바를 접을 때 왼쪽 하단의
-   * 공지/피드백 버튼도 Focus 버튼과 같은 방향으로
-   * 검색 토글 버튼 쪽으로 빨려 들어가듯 사라지게 한다.
-   */
-  const leftFloatingButtonsAnimationRef =
-    useRef<Animation | null>(null);
-
-  const leftFloatingButtonsOffsetRef =
-    useRef({
-      x: 0,
-      y: 0,
-    });
-
 const [hasUnreadNotice, setHasUnreadNotice] =
   useState(false);
   
@@ -2428,10 +2414,6 @@ useEffect(() => {
         floatingButtonsTimerRef.current =
           null;
       }
-
-      leftFloatingButtonsAnimationRef.current?.cancel();
-      leftFloatingButtonsAnimationRef.current =
-        null;
 
       setIsSearchBarCollapsed(false);
       setShowFloatingButtons(true);
@@ -10445,104 +10427,6 @@ function moveHorizontalPage(
   }, 750);
 }
 
-function animateLeftFloatingButtons(
-  direction: "toSearch" | "fromSearch",
-) {
-  const container =
-    noticeRef.current;
-
-  if (!container) {
-    return;
-  }
-
-  leftFloatingButtonsAnimationRef.current?.cancel();
-
-  let offset =
-    leftFloatingButtonsOffsetRef.current;
-
-  /*
-   * 접기 시작 시 현재 공지/피드백 그룹의 중심점과
-   * 검색 토글 버튼의 중심점을 기준으로 정확한 이동 거리를 저장한다.
-   * 펼칠 때는 같은 거리를 역방향으로 사용한다.
-   */
-  if (direction === "toSearch") {
-    const searchButton =
-      searchToggleButtonRef.current;
-
-    if (searchButton) {
-      const sourceRect =
-        container.getBoundingClientRect();
-
-      const targetRect =
-        searchButton.getBoundingClientRect();
-
-      offset = {
-        x:
-          targetRect.left +
-          targetRect.width / 2 -
-          (sourceRect.left +
-            sourceRect.width / 2),
-        y:
-          targetRect.top +
-          targetRect.height / 2 -
-          (sourceRect.top +
-            sourceRect.height / 2),
-      };
-
-      leftFloatingButtonsOffsetRef.current =
-        offset;
-    }
-  }
-
-  const collapsedTransform =
-    `translate(${offset.x}px, ${offset.y}px) scale(0.18)`;
-
-  const expandedTransform =
-    "translate(0px, 0px) scale(1)";
-
-  const keyframes: Keyframe[] =
-    direction === "toSearch"
-      ? [
-          {
-            transform:
-              expandedTransform,
-            opacity: 1,
-            filter: "blur(0px)",
-          },
-          {
-            transform:
-              collapsedTransform,
-            opacity: 0.04,
-            filter: "blur(8px)",
-          },
-        ]
-      : [
-          {
-            transform:
-              collapsedTransform,
-            opacity: 0.04,
-            filter: "blur(8px)",
-          },
-          {
-            transform:
-              expandedTransform,
-            opacity: 1,
-            filter: "blur(0px)",
-          },
-        ];
-
-  leftFloatingButtonsAnimationRef.current =
-    container.animate(
-      keyframes,
-      {
-        duration: 900,
-        easing:
-          "cubic-bezier(0.22, 1, 0.36, 1)",
-        fill: "forwards",
-      },
-    );
-}
-
 function toggleSearchBar() {
   if (floatingButtonsDirection !== null) {
     return;
@@ -10571,14 +10455,8 @@ function toggleSearchBar() {
 
   if (!isSearchBarCollapsed) {
     setIsUiOpacityOpen(false);
-    setIsNoticeOpen(false);
-    setIsFeedbackOpen(false);
 
     setFloatingButtonsDirection(
-      "toSearch",
-    );
-
-    animateLeftFloatingButtons(
       "toSearch",
     );
 
@@ -10601,23 +10479,9 @@ function toggleSearchBar() {
     "fromSearch",
   );
 
-  /*
-   * 기존 사라짐 애니메이션의 마지막 프레임을 제거한 뒤,
-   * 같은 목표점에서 원래 자리로 돌아오는 애니메이션을 실행한다.
-   */
-  window.requestAnimationFrame(() => {
-    animateLeftFloatingButtons(
-      "fromSearch",
-    );
-  });
-
   floatingButtonsTimerRef.current =
     window.setTimeout(() => {
       setFloatingButtonsDirection(null);
-
-      leftFloatingButtonsAnimationRef.current?.cancel();
-      leftFloatingButtonsAnimationRef.current =
-        null;
 
       floatingButtonsTimerRef.current =
         null;
@@ -15829,12 +15693,7 @@ const messageDesign =
       {/* 왼쪽 하단 전달사항 */}
 <div
   ref={noticeRef}
-  className={`fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] flex items-end gap-3 sm:bottom-6 sm:left-6 ${
-    showStickyHeader &&
-    !showFloatingButtons
-      ? "pointer-events-none opacity-0"
-      : ""
-  }`}
+className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] flex items-end gap-3 sm:bottom-6 sm:left-6"
 >
  <button
   type="button"
