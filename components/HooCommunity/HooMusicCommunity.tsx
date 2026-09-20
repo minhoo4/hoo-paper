@@ -35,7 +35,7 @@ export * from "./hooMusicCommunityVisuals";
 export type HooMusicCommunityProps = {
   isLoggedIn: boolean;
   nickname: string | null;
-  /** Pass the current slide's active state if the parent keeps inactive slides mounted. */
+  /** Controls foreground-only UI/data refresh; audio playback is allowed to continue off-screen. */
   isActive?: boolean;
 };
 
@@ -43,44 +43,6 @@ const PICKS_ENDPOINT = "/api/community/music-picks";
 const PLAYLIST_LIMIT = 60;
 const FAVORITES_KEY = "hoo-music-favorites:v1";
 const REFRESH_INTERVAL = 30_000;
-
-function getPickCreatedTime(value: string): number {
-  const time = new Date(value).getTime();
-  return Number.isFinite(time) ? time : 0;
-}
-
-function getPickDateGroup(value: string): {
-  key: string;
-  label: string;
-} {
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return {
-      key: "unknown",
-      label: "날짜 미상",
-    };
-  }
-
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    timeZone: "Asia/Seoul",
-  }).formatToParts(date);
-
-  const year =
-    parts.find((part) => part.type === "year")?.value ?? "0000";
-  const month =
-    parts.find((part) => part.type === "month")?.value ?? "00";
-  const day =
-    parts.find((part) => part.type === "day")?.value ?? "00";
-
-  return {
-    key: `${year}-${month}-${day}`,
-    label: `${year}.${month}.${day}`,
-  };
-}
 
 type IconName =
   | "play"
@@ -145,7 +107,6 @@ function Equalizer({ playing }: { playing: boolean }) {
       data-playing={playing}
       aria-hidden="true"
     >
-      <i />
       <i />
       <i />
       <i />
@@ -307,34 +268,6 @@ function useYouTubePlayer(
   });
   const settings = useRef({ volume: 76, muted: false });
   const ended = useRef(onEnded);
-
-  // Keep HOO's intended audio state separate from YouTube's transient iframe state.
-  // In particular, a newly loaded video may briefly start muted even after a user click.
-  function applyAudiblePreference(player: YouTubePlayer) {
-    const preferredVolume = clamp(
-      settings.current.volume > 0 ? settings.current.volume : 76,
-      1,
-      100,
-    );
-
-    if (settings.current.muted) {
-      player.setVolume(preferredVolume);
-      player.mute();
-      return;
-    }
-
-    player.setVolume(preferredVolume);
-    player.unMute();
-  }
-
-  function forceAudiblePlay(player: YouTubePlayer) {
-    // Do this in the same user gesture as the HOO play/track click whenever possible.
-    // Calling loadVideoById first is important: some YouTube sessions can re-apply a
-    // muted startup state while swapping videos.
-    applyAudiblePreference(player);
-    player.playVideo();
-    applyAudiblePreference(player);
-  }
   const [retry, setRetry] = useState(0);
   const [state, setState] = useState<PlaybackState>(INITIAL_PLAYBACK);
   useEffect(() => {
@@ -354,21 +287,8 @@ function useYouTubePlayer(
     }));
     const player = playerRef.current;
     if (player && readyRef.current) {
-      if (play) {
-        // Load first, then unmute in the SAME click gesture. This avoids the case
-        // where YouTube resets the new video to muted immediately after load.
-        player.loadVideoById(id);
-        forceAudiblePlay(player);
-      } else {
-        player.cueVideoById(id);
-        applyAudiblePreference(player);
-      }
-
-      setState((s) => ({
-        ...s,
-        volume: settings.current.volume > 0 ? settings.current.volume : 76,
-        muted: settings.current.muted,
-      }));
+      if (play) player.loadVideoById(id);
+      else player.cueVideoById(id);
     }
   }, []);
 
@@ -420,22 +340,7 @@ function useYouTubePlayer(
       const time = instance.getCurrentTime();
       const duration = instance.getDuration();
       const volume = instance.getVolume();
-      let muted = instance.isMuted();
-
-      // If HOO is supposed to be audible but YouTube silently flipped the iframe
-      // back to muted while loading, immediately repair it. This does not override
-      // an intentional user mute because that preference lives in settings.current.
-      if (
-        desired.current.play &&
-        instance.getPlayerState() === 1 &&
-        !settings.current.muted &&
-        settings.current.volume > 0 &&
-        muted
-      ) {
-        applyAudiblePreference(instance);
-        muted = instance.isMuted();
-      }
-
+      const muted = instance.isMuted();
       setState((s) => ({
         ...s,
         time: Number.isFinite(time) ? time : 0,
@@ -443,11 +348,7 @@ function useYouTubePlayer(
         volume: Number.isFinite(volume) ? volume : s.volume,
         muted,
       }));
-
-      // IMPORTANT: settings.current is the user's preference, not the iframe's
-      // transient state. Do not overwrite it here. YouTube may briefly report
-      // itself muted while loading, which previously caused all later playback
-      // to stay silent even though the UI showed "playing".
+      settings.current = { volume, muted };
     }
     void loadYouTubeApi()
       .then((api) => {
@@ -485,27 +386,13 @@ function useYouTubePlayer(
                 "referrerpolicy",
                 "strict-origin-when-cross-origin",
               );
-              frame.setAttribute(
-                "allow",
-                "autoplay; encrypted-media; picture-in-picture",
-              );
-
-              // Restore the intended audio state. For a queued play request we
-              // load the video first and then restore audio, because loading a new
-              // YouTube item can otherwise reintroduce a muted startup state.
+              target.setVolume(settings.current.volume);
+              if (settings.current.muted) target.mute();
               const request = desired.current;
               if (request.id) {
-                if (request.play && !document.hidden) {
+                if (request.play)
                   target.loadVideoById(request.id);
-                  applyAudiblePreference(target);
-                  target.playVideo();
-                  applyAudiblePreference(target);
-                } else {
-                  target.cueVideoById(request.id);
-                  applyAudiblePreference(target);
-                }
-              } else {
-                applyAudiblePreference(target);
+                else target.cueVideoById(request.id);
               }
               setState((s) => ({ ...s, ready: true }));
               tick = window.setInterval(sync, 400);
@@ -515,33 +402,6 @@ function useYouTubePlayer(
               if (disposed) return;
               const currentId = extractYouTubeVideoId(target.getVideoUrl());
               if (currentId && currentId !== desired.current.id) return;
-
-              // Once playback actually starts, re-assert the requested audio
-              // state. This is safe for intentional mute because that choice is
-              // stored in settings.current.muted.
-              if (data === 1) {
-                desired.current.play = true;
-                applyAudiblePreference(target);
-
-                // YouTube can change its muted flag a moment after PLAYING fires.
-                // Re-check once more without turning a deliberately muted player on.
-                window.setTimeout(() => {
-                  if (
-                    disposed ||
-                    !readyRef.current ||
-                    settings.current.muted ||
-                    settings.current.volume <= 0 ||
-                    target.getPlayerState() !== 1
-                  ) {
-                    return;
-                  }
-                  applyAudiblePreference(target);
-                  sync();
-                }, 120);
-              } else if (data === 2 || data === 0) {
-                desired.current.play = false;
-              }
-
               setState((s) => ({
                 ...s,
                 playing: data === 1,
@@ -597,20 +457,12 @@ function useYouTubePlayer(
                 : "YouTube 연결에 실패했어요.",
           }));
       });
-    function pauseWhenHidden() {
-      if (document.hidden && readyRef.current) {
-        desired.current.play = false;
-        playerRef.current?.pauseVideo();
-      }
-    }
-    document.addEventListener("visibilitychange", pauseWhenHidden);
     return () => {
       disposed = true;
       readyRef.current = false;
       desired.current.play = false;
       window.clearInterval(tick);
       window.clearTimeout(readyTimeout);
-      document.removeEventListener("visibilitychange", pauseWhenHidden);
       instance?.destroy();
       playerRef.current = null;
       host.replaceChildren();
@@ -620,31 +472,14 @@ function useYouTubePlayer(
   function toggle() {
     const player = playerRef.current;
     if (!videoId || !player || !readyRef.current) return;
-
-    const playerState = player.getPlayerState();
-    const unexpectedlySilent =
-      !settings.current.muted &&
-      settings.current.volume > 0 &&
-      player.isMuted();
-
-    // If the video is already moving but YouTube/browser started it muted,
-    // the first HOO play-button click should TURN SOUND ON, not pause the song.
-    if ((playerState === 1 || playerState === 3) && unexpectedlySilent) {
-      desired.current.play = true;
-      setState((s) => ({ ...s, blocked: false, error: "", muted: false }));
-      forceAudiblePlay(player);
-      return;
-    }
-
-    if (playerState === 1 || playerState === 3) {
+    if (player.getPlayerState() === 1 || player.getPlayerState() === 3) {
       desired.current.play = false;
       player.pauseVideo();
-      return;
+    } else {
+      desired.current.play = true;
+      setState((s) => ({ ...s, blocked: false, error: "" }));
+      player.playVideo();
     }
-
-    desired.current.play = true;
-    setState((s) => ({ ...s, blocked: false, error: "" }));
-    forceAudiblePlay(player);
   }
   function seek(seconds: number) {
     if (!readyRef.current || state.duration <= 0) return;
@@ -656,35 +491,20 @@ function useYouTubePlayer(
     if (!readyRef.current) return;
     const next = clamp(volume, 0, 100);
     settings.current = { volume: next, muted: next === 0 };
-    const player = playerRef.current;
-    if (player) {
-      player.setVolume(next);
-      if (next > 0) {
-        player.unMute();
-        // Moving the HOO volume slider is also an explicit request for sound.
-        if (desired.current.play && player.getPlayerState() !== 1) {
-          player.playVideo();
-        }
-      } else {
-        player.mute();
-      }
-    }
+    playerRef.current?.setVolume(next);
+    if (next > 0) playerRef.current?.unMute();
+    else playerRef.current?.mute();
     setState((s) => ({ ...s, volume: next, muted: next === 0 }));
   }
   function toggleMute() {
     if (!readyRef.current) return;
-    const player = playerRef.current;
-    if (!player) return;
-
-    if (state.muted || player.isMuted() || state.volume === 0) {
-      const nextVolume = state.volume > 0 ? state.volume : 76;
-      settings.current = { volume: nextVolume, muted: false };
-      player.setVolume(nextVolume);
-      player.unMute();
-      if (desired.current.play) player.playVideo();
-      setState((s) => ({ ...s, volume: nextVolume, muted: false }));
+    if (state.muted || state.volume === 0) {
+      if (state.volume === 0) setVolume(76);
+      playerRef.current?.unMute();
+      settings.current.muted = false;
+      setState((s) => ({ ...s, muted: false }));
     } else {
-      player.mute();
+      playerRef.current?.mute();
       settings.current.muted = true;
       setState((s) => ({ ...s, muted: true }));
     }
@@ -721,21 +541,16 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
 function Composer({
   nickname,
   isLoggedIn,
-  mode = "create",
-  pick = null,
   onClose,
   onSaved,
 }: {
   nickname: string | null;
   isLoggedIn: boolean;
-  mode?: "create" | "edit";
-  pick?: MusicPick | null;
   onClose: () => void;
   onSaved: (pick: MusicPick) => void;
 }) {
-  const editing = mode === "edit" && Boolean(pick);
-  const [title, setTitle] = useState(pick?.title ?? "");
-  const [url, setUrl] = useState(pick?.youtubeUrl ?? "");
+  const [title, setTitle] = useState("");
+  const [url, setUrl] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const modalRef = useRef<HTMLDialogElement>(null);
@@ -746,11 +561,10 @@ function Composer({
   const titleId = useId();
   const errorId = useId();
   const videoId = extractYouTubeVideoId(url);
-
+  const displayNickname = nickname?.trim() || "HOO";
   useEffect(() => {
     closeRef.current = onClose;
   }, [onClose]);
-
   useEffect(() => {
     mounted.current = true;
     const prior =
@@ -766,7 +580,6 @@ function Composer({
       prior?.focus({ preventScroll: true });
     };
   }, []);
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (savingRef.current) return;
@@ -780,66 +593,49 @@ function Composer({
       setError("80자 이내의 제목과 올바른 YouTube 링크를 입력해주세요.");
       return;
     }
-    if (editing && !pick?.id) {
-      setError("수정할 추천곡을 찾을 수 없어요.");
-      return;
-    }
-
     savingRef.current = true;
     setSaving(true);
     setError("");
     abort.current = new AbortController();
-
     try {
       const response = await fetch(PICKS_ENDPOINT, {
-        method: editing ? "PATCH" : "POST",
+        method: "POST",
         credentials: "same-origin",
         signal: abort.current.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...(editing ? { id: pick?.id } : {}),
           title: cleanTitle,
           youtubeUrl: `https://www.youtube.com/watch?v=${videoId}`,
         }),
       });
-
       if (response.status === 401) {
         onClose();
         requestLogin();
         return;
       }
-
       const data = await readJson(response);
-      if (!response.ok || !isMusicPick(data.pick)) {
+      if (!response.ok || !isMusicPick(data.pick))
         throw new Error(
           typeof data.error === "string"
             ? data.error
-            : editing
-              ? "추천곡을 수정하지 못했어요."
-              : "추천곡을 등록하지 못했어요.",
+            : "추천곡을 등록하지 못했어요.",
         );
-      }
-
       if (mounted.current) onSaved(data.pick);
     } catch (caught) {
       if (
         mounted.current &&
         !(caught instanceof DOMException && caught.name === "AbortError")
-      ) {
+      )
         setError(
           caught instanceof Error
             ? caught.message
-            : editing
-              ? "추천곡을 수정하지 못했어요."
-              : "추천곡을 등록하지 못했어요.",
+            : "추천곡을 등록하지 못했어요.",
         );
-      }
     } finally {
       savingRef.current = false;
       if (mounted.current) setSaving(false);
     }
   }
-
   return createPortal(
     <dialog
       ref={modalRef}
@@ -857,36 +653,26 @@ function Composer({
           event.clientX > rect.right ||
           event.clientY < rect.top ||
           event.clientY > rect.bottom
-        ) {
+        )
           onClose();
-        }
       }}
     >
       <div className={styles.composerHeading}>
         <div>
-          <p className={styles.eyebrow}>
-            {editing ? "EDIT A RECORD" : "LEAVE A RECORD"}
-          </p>
-          <h2 id={titleId}>
-            {editing ? "추천곡을 수정해요" : "오늘의 한 곡을 남겨요"}
-          </h2>
-          <p>
-            {editing
-              ? "제목이나 YouTube 링크를 바꿀 수 있어요."
-              : "누군가의 하루에, 당신의 음악을."}
-          </p>
+          <p className={styles.eyebrow}>당신의 노래추천</p>
+          <h2 id={titleId}>{displayNickname}의 추천곡</h2>
+          <p>누군가의 하루에, 당신의 음악을.</p>
         </div>
         <button
           type="button"
           className={styles.iconButton}
-          aria-label={editing ? "수정 창 닫기" : "등록 창 닫기"}
+          aria-label="등록 창 닫기"
           disabled={saving}
           onClick={onClose}
         >
           <Icon name="close" />
         </button>
       </div>
-
       <form onSubmit={submit} className={styles.composerForm}>
         <label className={styles.field}>
           <span>
@@ -902,7 +688,6 @@ function Composer({
             disabled={saving}
           />
         </label>
-
         <label className={styles.field}>
           <span>YouTube 링크</span>
           <input
@@ -919,7 +704,6 @@ function Composer({
             aria-invalid={Boolean(url && !videoId)}
           />
         </label>
-
         <div className={styles.composerPreview}>
           {videoId ? (
             <Artwork videoId={videoId} />
@@ -928,32 +712,22 @@ function Composer({
           )}
           <div>
             <strong>
-              {normalizeTitle(title) || "당신의 플레이리스트에서"}
+              {normalizeTitle(title) || "당신의 노래추천"}
             </strong>
-            <span>{nickname || pick?.nickname || "HOO"}의 추천곡</span>
+            <span>{displayNickname}의 추천곡</span>
           </div>
         </div>
-
         {error && (
           <p className={styles.formError} id={errorId} role="alert">
             {error}
           </p>
         )}
-
         <button
           type="submit"
           className={styles.submitButton}
           disabled={saving || !videoId || !normalizeTitle(title)}
         >
-          <span>
-            {saving
-              ? editing
-                ? "수정하는 중…"
-                : "레코드를 올리는 중…"
-              : editing
-                ? "수정 내용 저장"
-                : "추천곡 남기기"}
-          </span>
+          <span>{saving ? "레코드를 올리는 중…" : "추천곡 남기기"}</span>
           <Icon name="arrow" />
         </button>
       </form>
@@ -974,15 +748,6 @@ export default function HooMusicCommunity({
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [composerOpen, setComposerOpen] = useState(false);
-  const [editingPick, setEditingPick] = useState<MusicPick | null>(null);
-  const [menuPickId, setMenuPickId] = useState<string | null>(null);
-  const [menuPosition, setMenuPosition] = useState<{
-    pickId: string;
-    left: number;
-    top: number;
-    placement: "above" | "below";
-  } | null>(null);
-  const [deletingPickId, setDeletingPickId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [savedOnly, setSavedOnly] = useState(false);
@@ -1003,54 +768,18 @@ export default function HooMusicCommunity({
   const favoriteSet = useMemo(() => new Set(favorites), [favorites]);
   const visiblePicks = useMemo(() => {
     const search = query.trim().toLocaleLowerCase("ko-KR");
-
-    return picks
-      .filter(
-        (pick) =>
-          (!savedOnly || favoriteSet.has(pick.id)) &&
-          (!search ||
-            `${pick.title} ${pick.nickname}`
-              .toLocaleLowerCase("ko-KR")
-              .includes(search)),
-      )
-      .sort(
-        (left, right) =>
-          getPickCreatedTime(right.createdAt) -
-          getPickCreatedTime(left.createdAt),
-      );
+    return picks.filter(
+      (pick) =>
+        (!savedOnly || favoriteSet.has(pick.id)) &&
+        (!search ||
+          `${pick.title} ${pick.nickname}`
+            .toLocaleLowerCase("ko-KR")
+            .includes(search)),
+    );
   }, [query, picks, savedOnly, favoriteSet]);
 
-  const groupedVisiblePicks = useMemo(() => {
-    const groups: Array<{
-      key: string;
-      label: string;
-      picks: MusicPick[];
-    }> = [];
-
-    for (const pick of visiblePicks) {
-      const dateGroup =
-        getPickDateGroup(pick.createdAt);
-
-      const previous =
-        groups[groups.length - 1];
-
-      if (previous?.key === dateGroup.key) {
-        previous.picks.push(pick);
-        continue;
-      }
-
-      groups.push({
-        key: dateGroup.key,
-        label: dateGroup.label,
-        picks: [pick],
-      });
-    }
-
-    return groups;
-  }, [visiblePicks]);
-
   function nextAfterEnd() {
-    if (!selected || !isActive) return;
+    if (!selected) return;
     if (repeat === "one") {
       playback.select(selected.youtubeVideoId, true);
       return;
@@ -1061,7 +790,7 @@ export default function HooMusicCommunity({
     move("next");
   }
   const playback = useYouTubePlayer(
-    isActive && view === "player",
+    view === "player",
     selected?.youtubeVideoId,
     nextAfterEnd,
   );
@@ -1178,44 +907,10 @@ export default function HooMusicCommunity({
     return () => window.clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
-    if (!menuPickId) return;
-
-    function closeTrackMenu(event: PointerEvent) {
-      const target = event.target;
-      if (target instanceof Element && target.closest("[data-music-track-menu]")) {
-        return;
-      }
-      setMenuPickId(null);
-      setMenuPosition(null);
-    }
-
-    function closeOnViewportChange() {
-      setMenuPickId(null);
-      setMenuPosition(null);
-    }
-
-    document.addEventListener("pointerdown", closeTrackMenu);
-    document.addEventListener("scroll", closeOnViewportChange, true);
-    window.addEventListener("resize", closeOnViewportChange);
-
-    return () => {
-      document.removeEventListener("pointerdown", closeTrackMenu);
-      document.removeEventListener("scroll", closeOnViewportChange, true);
-      window.removeEventListener("resize", closeOnViewportChange);
-    };
-  }, [menuPickId]);
-  useEffect(() => {
-    if (!isActive) {
-      setComposerOpen(false);
-      setEditingPick(null);
-      setMenuPickId(null);
-      setMenuPosition(null);
-    }
+    if (!isActive) setComposerOpen(false);
   }, [isActive]);
 
   function select(pick: MusicPick) {
-    setMenuPickId(null);
-    setMenuPosition(null);
     if (selected?.id === pick.id) {
       if (playback.ready) playback.toggle();
       else playback.select(pick.youtubeVideoId, true);
@@ -1269,90 +964,6 @@ export default function HooMusicCommunity({
       return;
     }
     setComposerOpen(true);
-  }
-  function beginEdit(pick: MusicPick) {
-    setMenuPickId(null);
-    if (!isLoggedIn) {
-      requestLogin();
-      return;
-    }
-    if (!pick.canManage) {
-      setToast("내가 올린 추천곡만 수정할 수 있어요.");
-      return;
-    }
-    setEditingPick(pick);
-  }
-
-  function updated(pick: MusicPick) {
-    setPicks((current) =>
-      current.map((item) => (item.id === pick.id ? pick : item)),
-    );
-    setEditingPick(null);
-    setToast("추천곡을 수정했어요.");
-  }
-
-  async function removePick(pick: MusicPick) {
-    setMenuPickId(null);
-    if (!isLoggedIn) {
-      requestLogin();
-      return;
-    }
-    if (!pick.canManage) {
-      setToast("내가 올린 추천곡만 삭제할 수 있어요.");
-      return;
-    }
-    if (deletingPickId) return;
-    const confirmed = window.confirm(
-      `“${pick.title}” 추천곡을 삭제할까요?`,
-    );
-    if (!confirmed) return;
-
-    setDeletingPickId(pick.id);
-    try {
-      const response = await fetch(PICKS_ENDPOINT, {
-        method: "DELETE",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: pick.id }),
-      });
-      if (response.status === 401) {
-        requestLogin();
-        return;
-      }
-      const data = await readJson(response);
-      if (!response.ok || data.ok !== true) {
-        throw new Error(
-          typeof data.error === "string"
-            ? data.error
-            : "추천곡을 삭제하지 못했어요.",
-        );
-      }
-
-      setPicks((current) => current.filter((item) => item.id !== pick.id));
-      setFavorites((current) => {
-        const next = current.filter((id) => id !== pick.id);
-        try {
-          localStorage.setItem(FAVORITES_KEY, JSON.stringify(next));
-        } catch {
-          // 삭제 자체는 성공했으므로 로컬 보관함 오류는 무시합니다.
-        }
-        return next;
-      });
-      if (selectedId === pick.id) {
-        const next = picks.find((item) => item.id !== pick.id) ?? null;
-        setSelectedId(next?.id ?? null);
-        if (next) playback.select(next.youtubeVideoId, false);
-      }
-      setToast("추천곡을 삭제했어요.");
-    } catch (caught) {
-      setToast(
-        caught instanceof Error
-          ? caught.message
-          : "추천곡을 삭제하지 못했어요.",
-      );
-    } finally {
-      setDeletingPickId(null);
-    }
   }
   function saved(pick: MusicPick) {
     // Invalidate an older GET so it cannot erase the just-created record.
@@ -1417,10 +1028,10 @@ export default function HooMusicCommunity({
           <div className={styles.landingCopy}>
             <p className={styles.eyebrow}>HOO COMMUNITY</p>
             <h2 className={styles.landingTitle}>
-              MUSIC <span>PICK</span>
+              HOO-PLAY <span>LIST</span>
             </h2>
             <p className={styles.landingSubtitle}>
-              음악으로 이어지는 새로운 공간
+              (후플리) · 음악으로 이어지는 새로운 공간
             </p>
             <button
               ref={enterRef}
@@ -1428,7 +1039,7 @@ export default function HooMusicCommunity({
               className={styles.enterButton}
               onClick={enter}
             >
-              <span>추천/감상하기</span>
+              <span>지금, 음악과 연결되기</span>
               <Icon name="arrow" />
             </button>
           </div>
@@ -1480,6 +1091,7 @@ export default function HooMusicCommunity({
             <h2 ref={titleRef} tabIndex={-1} className={styles.playerTitle}>
               MUSIC <span>PICK</span>
             </h2>
+            <p>좋은 음악이, 좋은 사람을 만듭니다.</p>
           </header>
 
           <aside className={styles.playlist} aria-label="추천곡 목록">
@@ -1529,7 +1141,7 @@ export default function HooMusicCommunity({
                   onClick={openComposer}
                 >
                   <Icon name="plus" />
-                  <span>곡 추가</span>
+                  <span>곡 남기기</span>
                 </button>
               </div>
             </div>
@@ -1579,19 +1191,8 @@ export default function HooMusicCommunity({
                   ))}
                 </div>
               ) : visiblePicks.length ? (
-                <div className={styles.dateGroups}>
-                  {groupedVisiblePicks.map((group) => (
-                    <section
-                      key={group.key}
-                      className={styles.dateGroup}
-                      aria-label={`${group.label} 추천곡`}
-                    >
-                      <div className={styles.dateDivider}>
-                        <span>{group.label}</span>
-                      </div>
-
-                      <ul className={styles.trackList}>
-                        {group.picks.map((pick) => {
+                <ul className={styles.trackList}>
+                  {visiblePicks.map((pick) => {
                     const chosen = selected?.id === pick.id;
                     const playing = chosen && playback.playing;
                     return (
@@ -1599,7 +1200,6 @@ export default function HooMusicCommunity({
                         key={pick.id}
                         className={styles.trackRow}
                         data-selected={chosen}
-                        data-menu-open={menuPickId === pick.id}
                       >
                         <button
                           type="button"
@@ -1641,102 +1241,14 @@ export default function HooMusicCommunity({
                         >
                           {chosen ? (
                             <Equalizer playing={playing} />
-                          ) : pick.canManage ? (
-                            <span
-                              className={styles.trackMenuWrap}
-                              data-music-track-menu
-                            >
-                              <button
-                                type="button"
-                                className={styles.trackMenuButton}
-                                aria-label={`${pick.title} 관리 메뉴`}
-                                aria-expanded={menuPickId === pick.id}
-                                onClick={(event) => {
-                                  if (menuPickId === pick.id) {
-                                    setMenuPickId(null);
-                                    setMenuPosition(null);
-                                    return;
-                                  }
-
-                                  const rect = event.currentTarget.getBoundingClientRect();
-                                  const menuWidth = 92;
-                                  const menuHeight = 82;
-                                  const gap = 9;
-                                  const viewportPadding = 8;
-                                  const maxLeft = Math.max(
-                                    viewportPadding,
-                                    window.innerWidth - menuWidth - viewportPadding,
-                                  );
-                                  const left = Math.min(
-                                    maxLeft,
-                                    Math.max(viewportPadding, rect.right - menuWidth),
-                                  );
-                                  const aboveTop = rect.top - menuHeight - gap;
-                                  const placement =
-                                    aboveTop >= viewportPadding ? "above" : "below";
-                                  const top =
-                                    placement === "above"
-                                      ? aboveTop
-                                      : Math.min(
-                                          window.innerHeight - menuHeight - viewportPadding,
-                                          rect.bottom + gap,
-                                        );
-
-                                  setMenuPosition({
-                                    pickId: pick.id,
-                                    left,
-                                    top,
-                                    placement,
-                                  });
-                                  setMenuPickId(pick.id);
-                                }}
-                              >
-                                <span aria-hidden="true">⋮</span>
-                              </button>
-                              {menuPickId === pick.id &&
-                                menuPosition?.pickId === pick.id &&
-                                typeof document !== "undefined" &&
-                                createPortal(
-                                  <span
-                                    className={`${styles.trackMenu} ${styles.trackMenuPortal}`}
-                                    data-placement={menuPosition.placement}
-                                    data-music-track-menu
-                                    role="menu"
-                                    aria-label={`${pick.title} 관리`}
-                                    style={{
-                                      left: menuPosition.left,
-                                      top: menuPosition.top,
-                                    }}
-                                  >
-                                    <button
-                                      type="button"
-                                      role="menuitem"
-                                      onClick={() => beginEdit(pick)}
-                                    >
-                                      수정
-                                    </button>
-                                    <button
-                                      type="button"
-                                      role="menuitem"
-                                      className={styles.trackMenuDelete}
-                                      disabled={deletingPickId === pick.id}
-                                      onClick={() => void removePick(pick)}
-                                    >
-                                      {deletingPickId === pick.id ? "삭제 중…" : "삭제"}
-                                    </button>
-                                  </span>,
-                                  document.body,
-                                )}
-                            </span>
-                          ) : null}
+                          ) : (
+                            <span className={styles.trackDots}>···</span>
+                          )}
                         </span>
                       </li>
-                          );
-                        })}
-                      </ul>
-                    </section>
-                  ))}
-                </div>
+                    );
+                  })}
+                </ul>
               ) : (
                 !loadError && (
                   <div className={styles.emptyState}>
@@ -1922,19 +1434,8 @@ export default function HooMusicCommunity({
         <Composer
           nickname={nickname}
           isLoggedIn={isLoggedIn}
-          mode="create"
           onClose={() => setComposerOpen(false)}
           onSaved={saved}
-        />
-      )}
-      {editingPick && (
-        <Composer
-          nickname={nickname}
-          isLoggedIn={isLoggedIn}
-          mode="edit"
-          pick={editingPick}
-          onClose={() => setEditingPick(null)}
-          onSaved={updated}
         />
       )}
     </section>
