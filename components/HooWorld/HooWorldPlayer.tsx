@@ -185,6 +185,15 @@ type HooWorldPlayerProps = {
    * 목도리 / 모자 / 안경 / 가방 등의 장신구 방식으로 사용한다.
    */
   accessoryIds?: HooWorldAccessoryId[];
+
+  /* 로컬 침낭 취침 UI용. 원격 캐릭터에는 전달하지 않는다. */
+  sleepElapsedSeconds?: number;
+
+  /* 빙결 누적 10분으로 발병한 감기. 행동 status와 별도로 유지한다. */
+  hasCold?: boolean;
+
+  /* 감기 발병 직후 로컬 캐릭터에 잠깐 보여 주는 안내 문구. */
+  showColdNotice?: boolean;
 } & Record<string, unknown>;
 
 export default function HooWorldPlayer({
@@ -194,12 +203,52 @@ export default function HooWorldPlayer({
   characterSlot = 4,
   isAdmin = false,
   accessoryIds = [],
+  sleepElapsedSeconds,
+  hasCold = false,
+  showColdNotice = false,
 }: HooWorldPlayerProps) {
   const isFocusing =
     status === "focusing";
 
   const isDancing =
     status === "dancing";
+
+  const isResting =
+    status === "resting" ||
+    status === "frozen_resting";
+
+  const isFrozen =
+    status === "frozen" ||
+    status === "frozen_resting";
+
+  const isCold =
+    hasCold === true;
+
+  const safeSleepElapsedSeconds =
+    typeof sleepElapsedSeconds ===
+      "number" &&
+    Number.isFinite(
+      sleepElapsedSeconds,
+    )
+      ? Math.max(
+          0,
+          Math.floor(
+            sleepElapsedSeconds,
+          ),
+        )
+      : null;
+
+  const sleepElapsedLabel =
+    safeSleepElapsedSeconds !==
+      null
+      ? `${Math.floor(
+          safeSleepElapsedSeconds /
+            60,
+        )}:${String(
+          safeSleepElapsedSeconds %
+            60,
+        ).padStart(2, "0")}`
+      : null;
 
   const characterImagePath =
     isFocusing &&
@@ -230,6 +279,70 @@ export default function HooWorldPlayer({
             transform:
               translate3d(0, 2px, 0)
               rotate(-0.6deg);
+          }
+        }
+
+        @keyframes hoo-world-resting-breathe {
+          0%,
+          100% {
+            transform:
+              translate3d(0, 7px, 0)
+              rotate(0deg)
+              scale(0.94);
+          }
+
+          50% {
+            transform:
+              translate3d(0, 5px, 0)
+              rotate(0deg)
+              scale(0.97);
+          }
+        }
+
+        @keyframes hoo-world-frozen-shiver {
+          0%,
+          100% {
+            transform:
+              translate3d(-1px, 0, 0)
+              rotate(-0.7deg);
+          }
+
+          50% {
+            transform:
+              translate3d(1px, -1px, 0)
+              rotate(0.7deg);
+          }
+        }
+
+        @keyframes hoo-world-frozen-resting {
+          0%,
+          100% {
+            transform:
+              translate3d(-1px, 7px, 0)
+              rotate(-0.5deg)
+              scale(0.94);
+          }
+
+          50% {
+            transform:
+              translate3d(1px, 5px, 0)
+              rotate(0.5deg)
+              scale(0.97);
+          }
+        }
+
+        @keyframes hoo-world-cold-drip {
+          0%,
+          100% {
+            transform:
+              translate3d(-50%, 0, 0)
+              scaleY(0.96);
+          }
+
+          50% {
+            transform:
+              translate3d(-50%, 2px, 0)
+              scaleY(1.04);
           }
         }
 
@@ -264,9 +377,11 @@ export default function HooWorldPlayer({
       <div className="relative flex h-[230px] w-[190px] items-end justify-center">
         <div
           className={`pointer-events-none absolute left-1/2 -translate-x-1/2 rounded-[50%] bg-[#1f291f]/18 blur-[2px] transition-all duration-200 ${
-            isFocusing
-              ? "bottom-[8px] h-[16px] w-[112px]"
-              : "bottom-[10px] h-[14px] w-[62px]"
+            isResting
+              ? "hidden"
+              : isFocusing
+                ? "bottom-[8px] h-[16px] w-[112px]"
+                : "bottom-[10px] h-[14px] w-[62px]"
           }`}
         />
 
@@ -279,6 +394,9 @@ export default function HooWorldPlayer({
             }
             focusing={isFocusing}
             dancing={isDancing}
+            resting={isResting}
+            frozen={isFrozen}
+            cold={isCold}
           />
         </div>
       </div>
@@ -290,10 +408,29 @@ export default function HooWorldPlayer({
       <div className="mt-1 text-[10px] font-bold tracking-[0.05em] text-white/65 drop-shadow-[0_1px_2px_rgba(20,30,20,0.32)]">
         {isFocusing
           ? "집중 중"
-          : isDancing
-            ? "신나는 중"
-            : "쉬는 중"}
+          : isFrozen
+            ? "빙결 중"
+            : isResting
+              ? "자는 중"
+              : isCold
+                ? "감기 중"
+                : isDancing
+                  ? "신나는 중"
+                  : "쉬는 중"}
       </div>
+
+      {showColdNotice ? (
+        <div className="mt-1.5 whitespace-nowrap rounded-full border border-[#ffb7b7]/45 bg-[#4a1f24]/88 px-3 py-1 text-[10px] font-black text-[#ffe4e4] shadow-[0_3px_9px_rgba(45,15,20,0.28)] backdrop-blur-sm">
+          감기에 걸렸습니다!
+        </div>
+      ) : null}
+
+      {isResting &&
+      sleepElapsedLabel ? (
+        <div className="mt-1.5 whitespace-nowrap rounded-full border border-[#d7e8c9]/30 bg-[#182018]/78 px-2.5 py-1 text-[9px] font-black tabular-nums text-[#e6f2dc] shadow-[0_3px_8px_rgba(20,30,20,0.20)] backdrop-blur-sm">
+          수면 유지 {sleepElapsedLabel}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -306,6 +443,9 @@ type CharacterBodyProps = {
   characterImagePath: string;
   focusing?: boolean;
   dancing?: boolean;
+  resting?: boolean;
+  frozen?: boolean;
+  cold?: boolean;
 };
 
 function CharacterBody({
@@ -314,6 +454,9 @@ function CharacterBody({
   characterImagePath,
   focusing = false,
   dancing = false,
+  resting = false,
+  frozen = false,
+  cold = false,
 }: CharacterBodyProps) {
   /*
    * HOO 마스코트는 좌/우 방향만 실제 시각 방향으로 사용한다.
@@ -343,11 +486,17 @@ function CharacterBody({
       : 1;
 
   const characterMotionAnimation =
-    dancing
-      ? "hoo-world-dance-sway 0.92s ease-in-out infinite"
-      : focusing
-        ? "hoo-world-focus-bob 1.25s ease-in-out infinite"
-        : undefined;
+    frozen && resting
+      ? "hoo-world-frozen-resting 0.24s steps(2, end) infinite"
+      : frozen
+        ? "hoo-world-frozen-shiver 0.22s steps(2, end) infinite"
+        : resting
+          ? "hoo-world-resting-breathe 2.2s ease-in-out infinite"
+          : dancing
+            ? "hoo-world-dance-sway 0.92s ease-in-out infinite"
+            : focusing
+              ? "hoo-world-focus-bob 1.25s ease-in-out infinite"
+              : undefined;
 
   return (
     <div
@@ -370,7 +519,66 @@ function CharacterBody({
           ? "true"
           : "false"
       }
+      data-hoo-world-resting={
+        resting
+          ? "true"
+          : "false"
+      }
+      data-hoo-world-frozen={
+        frozen
+          ? "true"
+          : "false"
+      }
+      data-hoo-world-cold={
+        cold
+          ? "true"
+          : "false"
+      }
     >
+      {frozen ? (
+        <>
+          <div className="pointer-events-none absolute -inset-x-[10px] -inset-y-[8px] rounded-[48%] bg-cyan-100/10 blur-[5px]" />
+          <span className="pointer-events-none absolute -left-[7px] top-[24%] text-[11px] text-cyan-100/90 drop-shadow-[0_0_4px_rgba(207,250,254,0.9)]">❄</span>
+          <span className="pointer-events-none absolute -right-[5px] top-[43%] text-[9px] text-cyan-50/85 drop-shadow-[0_0_3px_rgba(207,250,254,0.8)]">❄</span>
+          <span className="pointer-events-none absolute bottom-[10%] left-[12%] h-[5px] w-[28%] rotate-[-7deg] rounded-full bg-cyan-100/40 blur-[0.5px]" />
+          <span className="pointer-events-none absolute bottom-[8%] right-[8%] h-[4px] w-[24%] rotate-[8deg] rounded-full bg-cyan-50/35 blur-[0.5px]" />
+        </>
+      ) : null}
+
+      {cold ? (
+        <>
+          {horizontalFacing === "right" ? (
+            <>
+              <span className="pointer-events-none absolute left-[24%] top-[45%] z-20 h-[12px] w-[20px] rounded-full bg-rose-500/35 blur-[1px]" />
+              <span className="pointer-events-none absolute right-[16%] top-[45%] z-20 h-[12px] w-[20px] rounded-full bg-rose-500/35 blur-[1px]" />
+              <span
+                className="pointer-events-none absolute left-[54%] top-[54%] z-30 h-[27px] w-[5px] origin-top rounded-full bg-sky-100/90 shadow-[0_0_4px_rgba(224,247,255,0.8)]"
+                style={{
+                  animation:
+                    "hoo-world-cold-drip 1.8s ease-in-out infinite",
+                }}
+              >
+                <span className="absolute -bottom-[5px] left-1/2 h-[9px] w-[9px] -translate-x-1/2 rounded-full bg-sky-100/95" />
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="pointer-events-none absolute left-[16%] top-[45%] z-20 h-[12px] w-[20px] rounded-full bg-rose-500/35 blur-[1px]" />
+              <span className="pointer-events-none absolute right-[24%] top-[45%] z-20 h-[12px] w-[20px] rounded-full bg-rose-500/35 blur-[1px]" />
+              <span
+                className="pointer-events-none absolute left-[46%] top-[54%] z-30 h-[27px] w-[5px] origin-top rounded-full bg-sky-100/90 shadow-[0_0_4px_rgba(224,247,255,0.8)]"
+                style={{
+                  animation:
+                    "hoo-world-cold-drip 1.8s ease-in-out infinite",
+                }}
+              >
+                <span className="absolute -bottom-[5px] left-1/2 h-[9px] w-[9px] -translate-x-1/2 rounded-full bg-sky-100/95" />
+              </span>
+            </>
+          )}
+        </>
+      ) : null}
+
       <div
         data-hoo-player-sprite-motion="true"
         className="pointer-events-none absolute inset-0 origin-[50%_78%] will-change-transform"
@@ -379,6 +587,15 @@ function CharacterBody({
             "translate3d(0, 0, 0) rotate(0deg)",
           animation:
             characterMotionAnimation,
+          /*
+           * 침낭 취침 중에는 캐릭터 하단 30%를 숨겨
+           * 아래쪽 몸이 침낭 안에 포근하게 들어가 있는 것처럼 보이게 한다.
+           * 상단 70%는 그대로 보여 얼굴/상체 표정은 유지한다.
+           */
+          clipPath:
+            resting
+              ? "inset(0 0 30% 0)"
+              : undefined,
         }}
       >
         <div className="absolute bottom-0 left-1/2 h-[132px] w-[154px] origin-bottom -translate-x-1/2 scale-[0.7]">
@@ -391,6 +608,12 @@ function CharacterBody({
             style={{
               transform:
                 `scaleX(${mirrorX})`,
+              filter:
+                frozen
+                  ? "drop-shadow(0 0 4px rgba(207,250,254,0.8)) saturate(0.78) brightness(1.08)"
+                  : cold
+                    ? "drop-shadow(0 0 2px rgba(244,63,94,0.16)) saturate(1.04)"
+                    : undefined,
             }}
           />
 

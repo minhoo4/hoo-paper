@@ -105,6 +105,38 @@ type HooWorldDistributionDraft = {
   height: string;
 };
 
+/*
+ * 한번 제작한 주문 아이템은 프리셋으로 축적한다.
+ * 주문품은 이 프리셋을 사용하더라도 반드시 기존 배송 RPC를 통해 전달하며,
+ * 장작 랜덤 배치 경로와는 연결하지 않는다.
+ */
+const HOO_WORLD_ITEM_PRESETS = {
+  tornSleepingBag: {
+    id:
+      "torn_sleeping_bag",
+    emoji:
+      "🛏️",
+    category:
+      "캠핑",
+    description:
+      "낡고 찢어진 공용 침낭 · 배송 전용 · 이동 가능",
+    searchKeywords:
+      "찢어진 침낭 sleeping bag 캠핑 숙박",
+    itemType:
+      "torn_sleeping_bag",
+    itemName:
+      "찢어진 침낭",
+    itemImageUrl:
+      "",
+    width:
+      "132",
+    height:
+      "78",
+    productionHooCoin:
+      20,
+  },
+} as const;
+
 
 type HooWorldAdminCharacterFacing =
   | "left"
@@ -700,6 +732,22 @@ export default function AdminPage() {
     useState<HooWorldDistributionDraft | null>(
       null,
     );
+
+  /*
+   * 오른쪽 "배송용 아이템들" 보관함 UI 상태.
+   *
+   * 프리셋은 월드에 직접 생성하지 않고,
+   * 반드시 제작중 주문을 대상으로 기존 배송 절차에만 연결한다.
+   */
+  const [
+    hooWorldItemPresetSearch,
+    setHooWorldItemPresetSearch,
+  ] = useState("");
+
+  const [
+    hooWorldPresetTargetRequestId,
+    setHooWorldPresetTargetRequestId,
+  ] = useState("");
 
   const [
     hooWorldFoodDeliveryId,
@@ -2657,6 +2705,10 @@ export default function AdminPage() {
       "",
     );
 
+    setHooWorldPresetTargetRequestId(
+      request.id,
+    );
+
     setHooWorldDistributionDraft({
       requestId:
         request.id,
@@ -2692,8 +2744,61 @@ export default function AdminPage() {
     });
   }
 
-  async function distributeHooWorldItemRequest() {
+  function openHooWorldPresetDistribution(
+    request: HooWorldItemRequest,
+    preset: (typeof HOO_WORLD_ITEM_PRESETS)[keyof typeof HOO_WORLD_ITEM_PRESETS],
+  ) {
+    if (
+      request.status !==
+      "making"
+    ) {
+      return;
+    }
+
+    setHooWorldItemRequestActionMessage(
+      "",
+    );
+
+    setHooWorldPresetTargetRequestId(
+      request.id,
+    );
+
+    setHooWorldDistributionDraft({
+      requestId:
+        request.id,
+
+      itemType:
+        preset.itemType,
+
+      itemName:
+        preset.itemName,
+
+      itemImageUrl:
+        preset.itemImageUrl,
+
+      /*
+       * 프리셋은 아이템 사양만 재사용한다.
+       * 실제 제작비는 주문자가 제시한 금액을 초기값으로 두고
+       * 관리자가 배송 직전에 다시 확인/수정한다.
+       */
+      productionHooCoin:
+        String(
+          request.offeredHooCoin,
+        ),
+
+      width:
+        preset.width,
+
+      height:
+        preset.height,
+    });
+  }
+
+  async function distributeHooWorldItemRequest(
+    directDraft?: HooWorldDistributionDraft,
+  ) {
     const draft =
+      directDraft ??
       hooWorldDistributionDraft;
 
     if (
@@ -2868,10 +2973,25 @@ export default function AdminPage() {
                 ),
 
               collision_bottom_ratio:
-                0.18,
+                itemType ===
+                  "torn_sleeping_bag"
+                  ? 0.14
+                  : 0.18,
 
               z_index:
                 14,
+
+              ...(
+                itemType ===
+                  "torn_sleeping_bag"
+                  ? {
+                      interaction_type:
+                        "torn_sleeping_bag",
+                      preset_id:
+                        "torn_sleeping_bag_v1",
+                    }
+                  : {}
+              ),
             },
           },
         );
@@ -5941,6 +6061,7 @@ export default function AdminPage() {
         {/* 후월드 제작 요청 실시간 감시 */}
         <section
           style={{
+            position: "relative",
             marginBottom: 32,
             padding: 24,
             border:
@@ -6037,6 +6158,20 @@ export default function AdminPage() {
             </div>
           </div>
 
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 18,
+              flexWrap: "wrap",
+            }}
+          >
+            <div
+              style={{
+                flex: "1 1 720px",
+                minWidth: 0,
+              }}
+            >
           <div
             style={{
               display: "flex",
@@ -7085,6 +7220,615 @@ export default function AdminPage() {
               ) : null}
             </div>
           )}
+            </div>
+
+            {(() => {
+              const makingRequests =
+                hooWorldItemRequests.filter(
+                  (request) =>
+                    request.status ===
+                    "making",
+                );
+
+              const selectedTargetRequestId =
+                makingRequests.some(
+                  (request) =>
+                    request.id ===
+                    hooWorldPresetTargetRequestId,
+                )
+                  ? hooWorldPresetTargetRequestId
+                  : makingRequests[0]?.id ||
+                    "";
+
+              const normalizedSearch =
+                hooWorldItemPresetSearch
+                  .trim()
+                  .toLocaleLowerCase(
+                    "ko-KR",
+                  );
+
+              const visiblePresets =
+                Object.values(
+                  HOO_WORLD_ITEM_PRESETS,
+                ).filter(
+                  (preset) => {
+                    if (
+                      !normalizedSearch
+                    ) {
+                      return true;
+                    }
+
+                    return [
+                      preset.itemName,
+                      preset.itemType,
+                      preset.category,
+                      preset.description,
+                      preset.searchKeywords,
+                    ]
+                      .join(" ")
+                      .toLocaleLowerCase(
+                        "ko-KR",
+                      )
+                      .includes(
+                        normalizedSearch,
+                      );
+                  },
+                );
+
+              return (
+                <aside
+                  style={{
+                    position:
+                      "absolute",
+                    left:
+                      "calc(100% + 18px)",
+                    top:
+                      0,
+                    width:
+                      520,
+                    padding:
+                      22,
+                    border:
+                      "1px solid #343434",
+                    borderRadius:
+                      14,
+                    background:
+                      "#090909",
+                    boxShadow:
+                      "0 10px 30px rgba(0,0,0,0.18)",
+                    zIndex:
+                      20,
+                  }}
+                >
+                  <div
+                    style={{
+                      display:
+                        "flex",
+                      alignItems:
+                        "flex-start",
+                      justifyContent:
+                        "space-between",
+                      gap: 14,
+                      marginBottom:
+                        18,
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          marginBottom:
+                            5,
+                          color:
+                            "#d5a85e",
+                          fontSize:
+                            12,
+                          fontWeight:
+                            900,
+                          letterSpacing:
+                            "0.1em",
+                        }}
+                      >
+                        HOO WORLD DELIVERY ITEMS
+                      </div>
+
+                      <strong
+                        style={{
+                          display:
+                            "block",
+                          color:
+                            "#f1d39b",
+                          fontSize:
+                            20,
+                        }}
+                      >
+                        📦 배송용 아이템들
+                      </strong>
+
+                      <div
+                        style={{
+                          marginTop:
+                            5,
+                          color:
+                            "#777063",
+                          fontSize:
+                            12,
+                          lineHeight:
+                            1.65,
+                        }}
+                      >
+                        한번 제작한 주문품을 보관합니다. 모든 주문품은 배송으로만 전달됩니다.
+                      </div>
+                    </div>
+
+                    <span
+                      style={{
+                        flexShrink:
+                          0,
+                        padding:
+                          "6px 10px",
+                        border:
+                          "1px solid #574a37",
+                        borderRadius:
+                          999,
+                        background:
+                          "#17130d",
+                        color:
+                          "#c9aa74",
+                        fontSize:
+                          13,
+                        fontWeight:
+                          900,
+                      }}
+                    >
+                      {Object.keys(
+                        HOO_WORLD_ITEM_PRESETS,
+                      ).length}개
+                    </span>
+                  </div>
+
+                  <div
+                    style={{
+                      marginBottom:
+                        14,
+                      padding:
+                        14,
+                      border:
+                        "1px solid #2b2b2b",
+                      borderRadius:
+                        11,
+                      background:
+                        "#0e0e0e",
+                    }}
+                  >
+                    <div
+                      style={{
+                        marginBottom:
+                          6,
+                        color:
+                          "#817867",
+                        fontSize:
+                          11,
+                        fontWeight:
+                          900,
+                      }}
+                    >
+                      배송 대상 · 제작중 주문
+                    </div>
+
+                    <select
+                      value={
+                        selectedTargetRequestId
+                      }
+                      onChange={(event) => {
+                        setHooWorldPresetTargetRequestId(
+                          event.target.value,
+                        );
+                      }}
+                      disabled={
+                        makingRequests.length ===
+                          0 ||
+                        hooWorldItemRequestActionId !==
+                          null
+                      }
+                      style={{
+                        width:
+                          "100%",
+                        minHeight:
+                          46,
+                        padding:
+                          "0 12px",
+                        border:
+                          "1px solid #3a352d",
+                        borderRadius:
+                          8,
+                        background:
+                          "#080808",
+                        color:
+                          makingRequests.length >
+                          0
+                            ? "#e7dfd2"
+                            : "#6f6f6f",
+                        outline:
+                          "none",
+                        fontSize:
+                          13,
+                        fontWeight:
+                          800,
+                      }}
+                    >
+                      {makingRequests.length ===
+                      0 ? (
+                        <option value="">
+                          제작중 주문 없음
+                        </option>
+                      ) : (
+                        makingRequests.map(
+                          (request) => (
+                            <option
+                              key={
+                                request.id
+                              }
+                              value={
+                                request.id
+                              }
+                            >
+                              {request.nickname} · {request.requestText}
+                            </option>
+                          ),
+                        )
+                      )}
+                    </select>
+                  </div>
+
+                  <div
+                    style={{
+                      position:
+                        "relative",
+                      marginBottom:
+                        14,
+                    }}
+                  >
+                    <span
+                      style={{
+                        pointerEvents:
+                          "none",
+                        position:
+                          "absolute",
+                        left:
+                          13,
+                        top:
+                          "50%",
+                        transform:
+                          "translateY(-50%)",
+                        color:
+                          "#696969",
+                        fontSize:
+                          14,
+                      }}
+                    >
+                      🔎
+                    </span>
+
+                    <input
+                      value={
+                        hooWorldItemPresetSearch
+                      }
+                      onChange={(event) => {
+                        setHooWorldItemPresetSearch(
+                          event.target.value,
+                        );
+                      }}
+                      placeholder="아이템 검색"
+                      style={{
+                        width:
+                          "100%",
+                        minHeight:
+                          46,
+                        padding:
+                          "0 13px 0 40px",
+                        border:
+                          "1px solid #2d2d2d",
+                        borderRadius:
+                          10,
+                        background:
+                          "#050505",
+                        color:
+                          "#eeeeee",
+                        outline:
+                          "none",
+                        fontSize:
+                          13,
+                      }}
+                    />
+                  </div>
+
+                  <div
+                    style={{
+                      display:
+                        "flex",
+                      flexDirection:
+                        "column",
+                      gap: 12,
+                      maxHeight:
+                        640,
+                      overflowY:
+                        "auto",
+                      paddingRight:
+                        3,
+                    }}
+                  >
+                    {visiblePresets.length >
+                    0 ? (
+                      visiblePresets.map(
+                        (preset) => {
+                          const selected =
+                            hooWorldDistributionDraft?.itemType ===
+                            preset.itemType;
+
+                          const targetRequest =
+                            makingRequests.find(
+                              (request) =>
+                                request.id ===
+                                selectedTargetRequestId,
+                            );
+
+                          return (
+                            <div
+                              key={
+                                preset.id
+                              }
+                              style={{
+                                padding:
+                                  16,
+                                border:
+                                  selected
+                                    ? "1px solid #b78a49"
+                                    : "1px solid #292929",
+                                borderRadius:
+                                  13,
+                                background:
+                                  selected
+                                    ? "#1d170e"
+                                    : "#101010",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display:
+                                    "flex",
+                                  alignItems:
+                                    "flex-start",
+                                  gap:
+                                    13,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display:
+                                      "flex",
+                                    alignItems:
+                                      "center",
+                                    justifyContent:
+                                      "center",
+                                    width:
+                                      48,
+                                    height:
+                                      48,
+                                    flexShrink:
+                                      0,
+                                    border:
+                                      "1px solid #3a342b",
+                                    borderRadius:
+                                      11,
+                                    background:
+                                      "#17140e",
+                                    fontSize:
+                                      24,
+                                  }}
+                                >
+                                  {preset.emoji}
+                                </div>
+
+                                <div
+                                  style={{
+                                    minWidth:
+                                      0,
+                                    flex:
+                                      1,
+                                  }}
+                                >
+                                  <strong
+                                    style={{
+                                      display:
+                                        "block",
+                                      color:
+                                        "#eee2ca",
+                                      fontSize:
+                                        15,
+                                    }}
+                                  >
+                                    {preset.itemName}
+                                  </strong>
+
+                                  <div
+                                    style={{
+                                      marginTop:
+                                        3,
+                                      color:
+                                        "#766e61",
+                                      fontSize:
+                                        11,
+                                      lineHeight:
+                                        1.5,
+                                    }}
+                                  >
+                                    {preset.category} · {preset.itemType}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div
+                                style={{
+                                  marginTop:
+                                    12,
+                                  color:
+                                    "#9a9182",
+                                  fontSize:
+                                    11,
+                                  lineHeight:
+                                    1.5,
+                                }}
+                              >
+                                {preset.description}
+                              </div>
+
+                              <div
+                                style={{
+                                  display:
+                                    "flex",
+                                  alignItems:
+                                    "center",
+                                  justifyContent:
+                                    "space-between",
+                                  gap:
+                                    10,
+                                  marginTop:
+                                    13,
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    color:
+                                      "#6e6659",
+                                    fontSize:
+                                      11,
+                                    fontWeight:
+                                      800,
+                                  }}
+                                >
+                                  {preset.width} × {preset.height}
+                                </span>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (
+                                      !targetRequest
+                                    ) {
+                                      setHooWorldItemRequestActionMessage(
+                                        "먼저 제작중 주문을 선택해 주세요.",
+                                      );
+                                      return;
+                                    }
+
+                                    void distributeHooWorldItemRequest({
+                                      requestId:
+                                        targetRequest.id,
+                                      itemType:
+                                        preset.itemType,
+                                      itemName:
+                                        preset.itemName,
+                                      itemImageUrl:
+                                        preset.itemImageUrl,
+                                      productionHooCoin:
+                                        String(
+                                          preset.productionHooCoin,
+                                        ),
+                                      width:
+                                        preset.width,
+                                      height:
+                                        preset.height,
+                                    });
+                                  }}
+                                  disabled={
+                                    !targetRequest ||
+                                    hooWorldItemRequestActionId !==
+                                      null
+                                  }
+                                  style={{
+                                    minHeight:
+                                      38,
+                                    padding:
+                                      "8px 14px",
+                                    border:
+                                      "1px solid #76592f",
+                                    borderRadius:
+                                      8,
+                                    background:
+                                      targetRequest
+                                        ? "#4d3517"
+                                        : "#22201c",
+                                    color:
+                                      targetRequest
+                                        ? "#ffe0a6"
+                                        : "#716b61",
+                                    fontSize:
+                                      11,
+                                    fontWeight:
+                                      900,
+                                    cursor:
+                                      targetRequest &&
+                                      hooWorldItemRequestActionId ===
+                                        null
+                                        ? "pointer"
+                                        : "not-allowed",
+                                  }}
+                                >
+                                  {hooWorldItemRequestActionId ===
+                                  targetRequest?.id
+                                    ? "배송 중..."
+                                    : `${preset.productionHooCoin} HOO · 배송`}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        },
+                      )
+                    ) : (
+                      <div
+                        style={{
+                          padding:
+                            "30px 16px",
+                          border:
+                            "1px dashed #292929",
+                          borderRadius:
+                            10,
+                          textAlign:
+                            "center",
+                          color:
+                            "#696969",
+                          fontSize:
+                            12,
+                        }}
+                      >
+                        검색 결과가 없습니다.
+                      </div>
+                    )}
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop:
+                        15,
+                      paddingTop:
+                        13,
+                      borderTop:
+                        "1px solid #202020",
+                      color:
+                        "#655f55",
+                      fontSize:
+                        11,
+                      lineHeight:
+                        1.6,
+                    }}
+                  >
+                    주문품은 월드에 랜덤 배치되지 않습니다. 배송 대상을 선택한 뒤 아이템의 배송 버튼을 누르면 기존 HOO DELIVERY를 통해 즉시 전달됩니다.
+                  </div>
+                </aside>
+              );
+            })()}
+          </div>
+
         </section>
 
         {/* 기존 공지사항 */}

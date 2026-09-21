@@ -28,6 +28,8 @@ export type HooWorldPlayerStatus =
   | "cooking"
   | "playing_music"
   | "resting"
+  | "frozen_resting"
+  | "frozen"
   | "interacting"
   | "eating"
   | "group_eating"
@@ -49,6 +51,8 @@ export type HooWorldPlayerStatus =
 const HOO_WORLD_MOVEMENT_LOCKED_STATUS_SET =
   new Set<HooWorldPlayerStatus>([
     "focusing",
+    "resting",
+    "frozen_resting",
     "interacting",
     "eating",
     "group_eating",
@@ -145,6 +149,15 @@ export type HooWorldPresencePlayer = {
    * ISO 문자열로 보관해 새 입장자도 남은 시간을 판단한다.
    */
   foodEffectEndsAt?: string | null;
+
+  /*
+   * 감기 상태.
+   *
+   * 행동 status와 독립적으로 유지한다.
+   * 예: frozen + cold, resting + cold처럼 다른 상태와 동시에 존재할 수 있다.
+   * 기존 Presence 세션과의 호환을 위해 optional로 둔다.
+   */
+  cold?: boolean;
 };
 
 
@@ -782,6 +795,13 @@ const fieldIdRef =
     );
 
   /*
+   * 감기는 행동 status와 별개로 지속되는 상태다.
+   * 빙결이 끝나도 감기는 남아 있어야 하므로 별도 ref로 관리한다.
+   */
+  const coldRef =
+    useRef(false);
+
+  /*
    * 프로필 조회가 순간적으로 실패해도 상대 화면의 스킨이
    * user-4 기본값으로 튀지 않도록 마지막 정상 값을 보관한다.
    */
@@ -1405,6 +1425,9 @@ function scheduleReconnect() {
 
         foodEffectEndsAt:
           foodEffectEndsAtRef.current,
+
+        cold:
+          coldRef.current,
       };
     }
 
@@ -2570,6 +2593,9 @@ movementChannel.on(
 
           foodEffectEndsAt:
             foodEffectEndsAtRef.current,
+
+          cold:
+            coldRef.current,
         };
 
       try {
@@ -2821,6 +2847,9 @@ movementChannel.on(
 
         foodEffectEndsAt:
           foodEffectEndsAtRef.current,
+
+        cold:
+          coldRef.current,
       };
 
     return await trackPresencePayloadWithRetry(
@@ -2873,6 +2902,26 @@ movementChannel.on(
      * 연결 전이라도 ref에는 먼저 저장한다.
      * 이후 첫 Presence payload / 재연결 payload에서 자동으로 포함된다.
      */
+    if (
+      !enabled ||
+      !isConnected
+    ) {
+      return false;
+    }
+
+    return await refreshPresence();
+  }
+
+  /*
+   * 감기 여부를 행동 status와 독립적으로 Presence에 반영한다.
+   * 빙결/취침/이동 상태가 바뀌어도 감기 외형은 계속 유지된다.
+   */
+  async function updateCold(
+    nextCold: boolean,
+  ) {
+    coldRef.current =
+      nextCold === true;
+
     if (
       !enabled ||
       !isConnected
@@ -3154,6 +3203,9 @@ movementChannel.on(
 
         foodEffectEndsAt:
           foodEffectEndsAtRef.current,
+
+        cold:
+          coldRef.current,
       };
 
     const tracked =
@@ -3459,6 +3511,8 @@ async function updatePosition(
     updateStatus,
 
     updateFoodEffect,
+
+    updateCold,
 
     updateWorldRegion,
 

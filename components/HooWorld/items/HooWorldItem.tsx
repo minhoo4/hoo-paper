@@ -629,6 +629,14 @@ const HooWorldItem = forwardRef<
     const isNearForMoveRef =
       useRef(false);
 
+    const [
+      isLocalPlayerMovementLocked,
+      setIsLocalPlayerMovementLocked,
+    ] = useState(false);
+
+    const isLocalPlayerMovementLockedRef =
+      useRef(false);
+
     const initialPosition =
       useMemo(
         () =>
@@ -1947,6 +1955,23 @@ const HooWorldItem = forwardRef<
         const playerElement =
           getLocalPlayerElement();
 
+        const nextMovementLocked =
+          playerElement?.dataset
+            .hooWorldMovementLocked ===
+          "true";
+
+        if (
+          nextMovementLocked !==
+          isLocalPlayerMovementLockedRef.current
+        ) {
+          isLocalPlayerMovementLockedRef.current =
+            nextMovementLocked;
+
+          setIsLocalPlayerMovementLocked(
+            nextMovementLocked,
+          );
+        }
+
         const nextIsNear =
           playerElement
             ? getItemMoveDistanceScore(
@@ -2360,6 +2385,21 @@ const HooWorldItem = forwardRef<
           document.querySelector(
             "dialog[open]",
           )
+        ) {
+          return;
+        }
+
+        /*
+         * 침낭 취침(resting)처럼 캐릭터 이동이 잠긴 상태에서는
+         * X 아이템 이동모드도 새로 시작하지 않는다.
+         * 그렇지 않으면 침낭 안에서 침낭 자체를 움직여
+         * 캐릭터 이동 잠금을 우회할 수 있다.
+         */
+        if (
+          !isMoveModeRef.current &&
+          getLocalPlayerElement()?.dataset
+            .hooWorldMovementLocked ===
+            "true"
         ) {
           return;
         }
@@ -2800,7 +2840,8 @@ const HooWorldItem = forwardRef<
       >
         {children}
 
-        {movable ? (
+        {movable &&
+        !isLocalPlayerMovementLocked ? (
           <div
             data-hoo-world-move-prompt="true"
             aria-hidden={
