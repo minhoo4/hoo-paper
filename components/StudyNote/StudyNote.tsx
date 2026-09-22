@@ -115,6 +115,11 @@ type StudyTextBlock = {
    * 사용자가 직접 만든 페이지는 유지할 수 있다.
    */
   pageBreakBefore?: boolean;
+  /*
+   * 사용자가 Enter로 실제로 만든 빈 줄.
+   * 단순 페이지 filler와 구분해서 마지막 빈 줄도 저장/유지한다.
+   */
+  preserveEmpty?: boolean;
   annotation?: {
     quote: string;
     text: string;
@@ -795,7 +800,8 @@ function isPlainEmptyStudyLine(block: StudyBlock) {
     ) &&
     !block.annotation &&
     !block.brace &&
-    block.pageBreakBefore !== true
+    block.pageBreakBefore !== true &&
+    block.preserveEmpty !== true
   );
 }
 
@@ -1120,6 +1126,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
     useState(false);
   const [editorPageZoom, setEditorPageZoom] =
     useState(1);
+  const [dualPrimaryPageZoom, setDualPrimaryPageZoom] =
+    useState(1);
+  const [dualSecondaryPageZoom, setDualSecondaryPageZoom] =
+    useState(1);
   const editorViewportRef =
     useRef<HTMLElement | null>(null);
   const editorPageCanvasRef =
@@ -1152,6 +1162,32 @@ export default function StudyNote({ active }: StudyNoteProps) {
     useState(false);
   const [activeFontSize, setActiveFontSize] =
     useState(14);
+  const [isEditorFindOpen, setIsEditorFindOpen] =
+    useState(false);
+  const [isEditorReplaceOpen, setIsEditorReplaceOpen] =
+    useState(false);
+  const [editorFindQuery, setEditorFindQuery] =
+    useState("");
+  const [editorReplaceValue, setEditorReplaceValue] =
+    useState("");
+  const [editorFindCaseSensitive, setEditorFindCaseSensitive] =
+    useState(false);
+  const [editorFindWholeWord, setEditorFindWholeWord] =
+    useState(false);
+  const [editorFindCursor, setEditorFindCursor] =
+    useState(-1);
+  const [editorFindStatus, setEditorFindStatus] =
+    useState("");
+  const [editorAdvancedMenu, setEditorAdvancedMenu] =
+    useState<"paragraph" | "code" | "edit" | null>(null);
+  const [editorUtilityDialog, setEditorUtilityDialog] =
+    useState<
+      | { type: "link"; value: string }
+      | { type: "line"; value: string }
+      | { type: "quick-open"; value: string }
+      | { type: "global-search"; value: string }
+      | null
+    >(null);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [tombstones, setTombstones] = useState<StudyNoteTombstone[]>([]);
   const [hiddenCategories, setHiddenCategories] = useState<string[]>([]);
@@ -1179,9 +1215,23 @@ export default function StudyNote({ active }: StudyNoteProps) {
     useState<FocusStudyNoteSession | null>(null);
   const [isFocusStudyNotePanelOpen, setIsFocusStudyNotePanelOpen] =
     useState(false);
+  const [isDualFileMode, setIsDualFileMode] = useState(false);
+  const [dualPrimaryNoteId, setDualPrimaryNoteId] =
+    useState<string | null>(null);
+  const [dualSecondaryNoteId, setDualSecondaryNoteId] =
+    useState<string | null>(null);
+  const [pendingDualOpenNoteId, setPendingDualOpenNoteId] =
+    useState<string | null>(null);
+  const [isDualModeConfirmOpen, setIsDualModeConfirmOpen] =
+    useState(false);
+  const [isDualFilePickerOpen, setIsDualFilePickerOpen] =
+    useState(false);
+  const [dualFilePickerTarget, setDualFilePickerTarget] =
+    useState<"primary" | "secondary">("secondary");
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const editorUtilityInputRef = useRef<HTMLInputElement | null>(null);
   const lastPageEditableRef = useRef<HTMLDivElement | null>(null);
   const trashBinRef = useRef<HTMLButtonElement | null>(null);
   const selectionRangeRef = useRef<Range | null>(null);
@@ -1197,8 +1247,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const undoHistoryRef = useRef<
     Map<string, StudyNoteRecord[]>
   >(new Map());
+  const redoHistoryRef = useRef<
+    Map<string, StudyNoteRecord[]>
+  >(new Map());
   const localMutationRevisionRef = useRef(0);
   const cloudPullInProgressRef = useRef(false);
+  /* 복수파일에서 공용 편집 도구가 수정할 현재 파일 */
+  const activeEditorNoteIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let isCancelled = false;
@@ -1955,7 +2010,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
         ),
       );
 
-    const changeEditorPageZoom = (
+    const changeSingleEditorPageZoom = (
       delta: number,
     ) => {
       if (viewMode !== "editor") {
@@ -1970,6 +2025,81 @@ export default function StudyNote({ active }: StudyNoteProps) {
       );
     };
 
+    const changeDualEditorPageZoom = (
+      side: "primary" | "secondary",
+      delta: number,
+    ) => {
+      const setter =
+        side === "primary"
+          ? setDualPrimaryPageZoom
+          : setDualSecondaryPageZoom;
+
+      setter(
+        (previous) =>
+          clampEditorPageZoom(
+            previous + delta,
+          ),
+      );
+    };
+
+    const resetDualEditorPageZoom = (
+      side: "primary" | "secondary",
+    ) => {
+      if (side === "primary") {
+        setDualPrimaryPageZoom(1);
+        return;
+      }
+
+      setDualSecondaryPageZoom(1);
+    };
+
+    const getDualPaneSideFromTarget = (
+      target: EventTarget | null,
+    ): "primary" | "secondary" | null => {
+      if (!(target instanceof Element)) {
+        return null;
+      }
+
+      const pane =
+        target.closest<HTMLElement>(
+          "[data-study-dual-pane]",
+        );
+
+      const side =
+        pane?.dataset.studyDualPane;
+
+      return side === "primary" ||
+        side === "secondary"
+        ? side
+        : null;
+    };
+
+    const getActiveDualPaneSide = ():
+      | "primary"
+      | "secondary"
+      | null => {
+      const activeNoteId =
+        activeEditorNoteIdRef.current;
+
+      if (
+        activeNoteId &&
+        activeNoteId ===
+          dualPrimaryNoteId
+      ) {
+        return "primary";
+      }
+
+      if (
+        activeNoteId &&
+        activeNoteId ===
+          dualSecondaryNoteId
+      ) {
+        return "secondary";
+      }
+
+      return null;
+    };
+
     function handleZoomWheel(
       event: WheelEvent,
     ) {
@@ -1980,17 +2110,39 @@ export default function StudyNote({ active }: StudyNoteProps) {
         return;
       }
 
-      /*
-       * 사용자가 직접 요청한 확대/축소만 허용한다.
-       * 브라우저 창 크기가 변했다고 페이지 배율을 자동으로 바꾸지는 않는다.
-       */
-      event.preventDefault();
-
       if (viewMode !== "editor") {
         return;
       }
 
-      changeEditorPageZoom(
+      /*
+       * 단일파일은 기존 editorPageZoom을 그대로 사용한다.
+       * 복수파일에서는 휠 이벤트가 실제로 발생한 좌/우 pane만
+       * 확대/축소하고 반대쪽 파일의 배율은 절대 건드리지 않는다.
+       */
+      if (isDualFileMode) {
+        const side =
+          getDualPaneSideFromTarget(
+            event.target,
+          );
+
+        if (!side) {
+          return;
+        }
+
+        event.preventDefault();
+
+        changeDualEditorPageZoom(
+          side,
+          event.deltaY < 0
+            ? 0.1
+            : -0.1,
+        );
+        return;
+      }
+
+      event.preventDefault();
+
+      changeSingleEditorPageZoom(
         event.deltaY < 0
           ? 0.1
           : -0.1,
@@ -2028,18 +2180,44 @@ export default function StudyNote({ active }: StudyNoteProps) {
         return;
       }
 
-      event.preventDefault();
-
       if (viewMode !== "editor") {
         return;
       }
+
+      if (isDualFileMode) {
+        const side =
+          getActiveDualPaneSide();
+
+        if (!side) {
+          return;
+        }
+
+        event.preventDefault();
+
+        if (isZoomReset) {
+          resetDualEditorPageZoom(
+            side,
+          );
+          return;
+        }
+
+        changeDualEditorPageZoom(
+          side,
+          isZoomIn
+            ? 0.1
+            : -0.1,
+        );
+        return;
+      }
+
+      event.preventDefault();
 
       if (isZoomReset) {
         setEditorPageZoom(1);
         return;
       }
 
-      changeEditorPageZoom(
+      changeSingleEditorPageZoom(
         isZoomIn
           ? 0.1
           : -0.1,
@@ -2073,6 +2251,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }, [
     active,
     viewMode,
+    isDualFileMode,
+    dualPrimaryNoteId,
+    dualSecondaryNoteId,
   ]);
 
   useEffect(() => {
@@ -2558,7 +2739,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
   function pushUndoSnapshot(
     note: StudyNoteRecord,
+    clearRedo = true,
   ) {
+    if (clearRedo) {
+      redoHistoryRef.current.set(note.id, []);
+    }
     const currentStack =
       undoHistoryRef.current.get(
         note.id,
@@ -2597,8 +2782,38 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
   }
 
+  function getActiveEditorNote() {
+    const targetNoteId =
+      activeEditorNoteIdRef.current ??
+      selectedNote?.id ??
+      selectedNoteId;
+
+    if (!targetNoteId) {
+      return null;
+    }
+
+    return (
+      notesRef.current.find(
+        (note) => note.id === targetNoteId,
+      ) ??
+      notes.find(
+        (note) => note.id === targetNoteId,
+      ) ??
+      null
+    );
+  }
+
+  function activateEditorNote(noteId: string) {
+    activeEditorNoteIdRef.current = noteId;
+
+    if (selectedNoteId !== noteId) {
+      setSelectedNoteId(noteId);
+    }
+  }
+
   function undoSelectedNote() {
     const noteId =
+      activeEditorNoteIdRef.current ??
       selectedNote?.id ??
       selectedNoteId;
 
@@ -2655,6 +2870,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
     const previousSnapshot =
       history[snapshotIndex];
 
+    const redoStack =
+      redoHistoryRef.current.get(noteId) ?? [];
+    redoHistoryRef.current.set(
+      noteId,
+      [...redoStack, cloneStudyNote(currentNote)].slice(-100),
+    );
+
     undoHistoryRef.current.set(
       noteId,
       history.slice(
@@ -2672,6 +2894,15 @@ export default function StudyNote({ active }: StudyNoteProps) {
     const activeBlockId =
       activeEditable?.dataset
         .studyEditableId ?? null;
+
+    const activeCaretOffset = (() => {
+      if (!activeEditable || !activeBlockId) return null;
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return null;
+      const range = selection.getRangeAt(0);
+      if (!activeEditable.contains(range.endContainer)) return null;
+      return getCaretTextOffset(activeEditable, range);
+    })();
 
     if (
       activeEditable?.isContentEditable
@@ -2741,41 +2972,104 @@ export default function StudyNote({ active }: StudyNoteProps) {
     selectionRangeRef.current = null;
 
     if (restoreTarget) {
-      window.setTimeout(() => {
-        const editable =
-          document.querySelector<HTMLElement>(
-            `[data-study-editable-id="${restoreTarget.id}"]`,
-          );
+      focusTextBlockAtOffset(
+        restoreTarget.id,
+        activeCaretOffset ?? stripHtml(restoreTarget.html).length,
+      );
+    }
+  }
 
-        if (!editable) {
-          return;
-        }
+  function redoSelectedNote() {
+    const noteId =
+      activeEditorNoteIdRef.current ??
+      selectedNote?.id ??
+      selectedNoteId;
 
-        editable.innerHTML =
-          restoreTarget.html;
-        editable.focus();
+    if (!noteId) {
+      return;
+    }
 
-        const selection =
-          window.getSelection();
+    const currentNote =
+      notesRef.current.find((note) => note.id === noteId);
 
-        if (!selection) {
-          return;
-        }
+    const activeEditable =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    const activeBlockId =
+      activeEditable?.dataset.studyEditableId ?? null;
+    const activeCaretOffset = (() => {
+      if (!activeEditable || !activeBlockId) return null;
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return null;
+      const range = selection.getRangeAt(0);
+      if (!activeEditable.contains(range.endContainer)) return null;
+      return getCaretTextOffset(activeEditable, range);
+    })();
 
-        const range =
-          document.createRange();
+    const redoStack =
+      redoHistoryRef.current.get(noteId) ?? [];
 
-        range.selectNodeContents(
-          editable,
-        );
-        range.collapse(false);
+    if (!currentNote || redoStack.length === 0) {
+      return;
+    }
 
-        selection.removeAllRanges();
-        selection.addRange(range);
+    const nextSnapshot =
+      redoStack[redoStack.length - 1];
+    redoHistoryRef.current.set(
+      noteId,
+      redoStack.slice(0, -1),
+    );
 
-        selectionRangeRef.current =
-          range.cloneRange();
-      }, 0);
+    const undoStack =
+      undoHistoryRef.current.get(noteId) ?? [];
+    undoHistoryRef.current.set(
+      noteId,
+      [...undoStack, cloneStudyNote(currentNote)].slice(-100),
+    );
+
+    const restoredNote: StudyNoteRecord = {
+      ...cloneStudyNote(nextSnapshot),
+      updatedAt: new Date().toISOString(),
+      version:
+        Math.max(
+          Number(currentNote.version) || 1,
+          Number(nextSnapshot.version) || 1,
+        ) + 1,
+    };
+
+    const nextNotes =
+      notesRef.current.map((note) =>
+        note.id === noteId ? restoredNote : note,
+      );
+
+    localMutationRevisionRef.current += 1;
+    notesRef.current = nextNotes;
+    setNotes(nextNotes);
+
+    const restoreTarget =
+      restoredNote.blocks.find(
+        (block): block is StudyTextBlock =>
+          block.type === "text" && block.id === activeBlockId,
+      ) ??
+      restoredNote.blocks
+        .filter(
+          (block): block is StudyTextBlock =>
+            block.type === "text",
+        )
+        .at(-1) ?? null;
+
+    lastSelectedTextBlockIdRef.current =
+      restoreTarget?.id ?? null;
+    selectedBlockIdsRef.current =
+      restoreTarget ? [restoreTarget.id] : [];
+    selectionRangeRef.current = null;
+
+    if (restoreTarget) {
+      focusTextBlockAtOffset(
+        restoreTarget.id,
+        activeCaretOffset ?? stripHtml(restoreTarget.html).length,
+      );
     }
   }
 
@@ -2783,6 +3077,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     updater: (note: StudyNoteRecord) => StudyNoteRecord,
   ) {
     const targetNoteId =
+      activeEditorNoteIdRef.current ??
       selectedNote?.id ??
       selectedNoteId;
 
@@ -2884,6 +3179,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
       nextNote.id,
       [],
     );
+    redoHistoryRef.current.set(
+      nextNote.id,
+      [],
+    );
 
     const firstTextBlock =
       nextNote.blocks.find(
@@ -2902,6 +3201,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
     selectionRangeRef.current = null;
 
     setNotes(nextNotes);
+    activeEditorNoteIdRef.current = nextNote.id;
+    setIsDualFileMode(false);
+    setDualPrimaryNoteId(null);
+    setDualSecondaryNoteId(null);
+    setPendingDualOpenNoteId(null);
+    setIsDualModeConfirmOpen(false);
+    setIsDualFilePickerOpen(false);
     setSelectedNoteId(nextNote.id);
     setCategoryFilter(category);
     setToolTab("text");
@@ -2982,7 +3288,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     createNewNote(category, title);
   }
 
-  function openNote(noteId: string) {
+  function openSingleNote(noteId: string) {
     const targetNote =
       notesRef.current.find(
         (note) => note.id === noteId,
@@ -3083,6 +3389,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
     selectionRangeRef.current = null;
 
+    activeEditorNoteIdRef.current = noteId;
+    setIsDualFileMode(false);
+    setDualPrimaryNoteId(null);
+    setDualSecondaryNoteId(null);
+    setPendingDualOpenNoteId(null);
+    setIsDualModeConfirmOpen(false);
+    setIsDualFilePickerOpen(false);
     setSelectedNoteId(noteId);
     setViewMode("editor");
     setToolTab("text");
@@ -3187,6 +3500,126 @@ export default function StudyNote({ active }: StudyNoteProps) {
           range.cloneRange();
       });
     });
+  }
+
+  function openNote(noteId: string) {
+    const currentNotes =
+      notesRef.current.length > 0
+        ? notesRef.current
+        : notes;
+
+    if (!currentNotes.some((note) => note.id === noteId)) {
+      return;
+    }
+
+    if (isDualFileMode) {
+      const activeSide =
+        activeEditorNoteIdRef.current === dualSecondaryNoteId
+          ? "secondary"
+          : "primary";
+
+      const otherNoteId =
+        activeSide === "primary"
+          ? dualSecondaryNoteId
+          : dualPrimaryNoteId;
+
+      if (noteId === otherNoteId) {
+        window.alert("이미 반대쪽에 열려 있는 파일입니다.");
+        return;
+      }
+
+      if (activeSide === "primary") {
+        setDualPrimaryPageZoom(1);
+        setDualPrimaryNoteId(noteId);
+      } else {
+        setDualSecondaryPageZoom(1);
+        setDualSecondaryNoteId(noteId);
+      }
+
+      activateEditorNote(noteId);
+      return;
+    }
+
+    const hasAnotherFile =
+      currentNotes.some((note) => note.id !== noteId);
+
+    if (!hasAnotherFile) {
+      openSingleNote(noteId);
+      return;
+    }
+
+    setPendingDualOpenNoteId(noteId);
+    setIsDualModeConfirmOpen(true);
+  }
+
+  function startDualFileMode(noteId: string) {
+    activeEditorNoteIdRef.current = noteId;
+    setDualPrimaryPageZoom(1);
+    setDualSecondaryPageZoom(1);
+    setDualPrimaryNoteId(noteId);
+    setDualSecondaryNoteId(null);
+    setSelectedNoteId(noteId);
+    setIsDualFileMode(true);
+    setIsDualModeConfirmOpen(false);
+    setPendingDualOpenNoteId(null);
+    setDualFilePickerTarget("secondary");
+    setIsDualFilePickerOpen(true);
+    setToolTab("text");
+    setViewMode("editor");
+  }
+
+  function requestDualFileReplacement(
+    target: "primary" | "secondary",
+  ) {
+    setDualFilePickerTarget(target);
+    setIsDualFilePickerOpen(true);
+  }
+
+  function selectDualFile(noteId: string) {
+    const otherNoteId =
+      dualFilePickerTarget === "primary"
+        ? dualSecondaryNoteId
+        : dualPrimaryNoteId;
+
+    if (noteId === otherNoteId) {
+      window.alert("같은 파일을 양쪽에 동시에 열 수 없습니다.");
+      return;
+    }
+
+    if (dualFilePickerTarget === "primary") {
+      setDualPrimaryPageZoom(1);
+      setDualPrimaryNoteId(noteId);
+    } else {
+      setDualSecondaryPageZoom(1);
+      setDualSecondaryNoteId(noteId);
+    }
+
+    setIsDualFileMode(true);
+    setIsDualFilePickerOpen(false);
+    activateEditorNote(noteId);
+  }
+
+  function leaveDualFileMode() {
+    const currentNote =
+      getActiveEditorNote() ??
+      notesRef.current.find(
+        (note) => note.id === dualPrimaryNoteId,
+      );
+
+    if (currentNote) {
+      setCategoryFilter(currentNote.category);
+    }
+
+    setIsDualFileMode(false);
+    setDualPrimaryNoteId(null);
+    setDualSecondaryNoteId(null);
+    setPendingDualOpenNoteId(null);
+    setIsDualModeConfirmOpen(false);
+    setIsDualFilePickerOpen(false);
+    setSelectedNoteId(null);
+    activeEditorNoteIdRef.current = null;
+    setSearchQuery("");
+    setViewMode("category");
   }
 
   function selectSearchTextInEditable(
@@ -3475,6 +3908,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
   function openCategory(category: string) {
     setCategoryFilter(category);
+    activeEditorNoteIdRef.current = null;
+    setIsDualFileMode(false);
+    setDualPrimaryNoteId(null);
+    setDualSecondaryNoteId(null);
+    setPendingDualOpenNoteId(null);
+    setIsDualModeConfirmOpen(false);
+    setIsDualFilePickerOpen(false);
     setSelectedNoteId(null);
     setSearchQuery("");
     setViewMode("category");
@@ -3859,6 +4299,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
 
     setCategoryFilter(category);
+    activeEditorNoteIdRef.current = null;
+    setIsDualFileMode(false);
+    setDualPrimaryNoteId(null);
+    setDualSecondaryNoteId(null);
+    setPendingDualOpenNoteId(null);
+    setIsDualModeConfirmOpen(false);
+    setIsDualFilePickerOpen(false);
     setSelectedNoteId(null);
     setSearchQuery("");
     setViewMode("category");
@@ -3879,7 +4326,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
   function insertTextBlock(afterBlockId?: string) {
-    if (!selectedNote) {
+    if (!getActiveEditorNote()) {
       return;
     }
 
@@ -3900,7 +4347,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
   function appendNewPage() {
-    if (!selectedNote) {
+    if (!getActiveEditorNote()) {
       return;
     }
 
@@ -4012,46 +4459,564 @@ export default function StudyNote({ active }: StudyNoteProps) {
     currentBlockId: string,
     direction: "previous" | "next",
   ) {
-    if (!selectedNote) {
+    const currentEditable =
+      document.querySelector<HTMLElement>(
+        `[data-study-editable-id="${currentBlockId}"]`,
+      );
+
+    const editorRoot =
+      currentEditable?.closest<HTMLElement>(
+        "[data-study-editor-root]",
+      ) ?? null;
+
+    if (!currentEditable || !editorRoot) {
       return false;
     }
 
-    const activatedTextBlocks =
-      selectedNote.blocks.filter(
-        (
-          item,
-        ): item is StudyTextBlock =>
-          item.type === "text" &&
-          isEditableTextBlock(item),
-      );
+    const editables = Array.from(
+      editorRoot.querySelectorAll<HTMLElement>(
+        "[data-study-editable-id], [data-study-last-page-id]",
+      ),
+    );
 
     const currentIndex =
-      activatedTextBlocks.findIndex(
-        (item) =>
-          item.id === currentBlockId,
-      );
+      editables.indexOf(currentEditable);
 
     if (currentIndex < 0) {
       return false;
     }
 
-    const targetIndex =
-      direction === "next"
-        ? currentIndex + 1
-        : currentIndex - 1;
+    const target =
+      editables[
+        direction === "next"
+          ? currentIndex + 1
+          : currentIndex - 1
+      ];
 
-    const targetBlock =
-      activatedTextBlocks[targetIndex];
-
-    if (!targetBlock) {
+    if (!target) {
       return false;
     }
 
-    return focusTextBlock(
-      targetBlock.id,
+    return setCaretInStudyEditable(
+      target,
       direction === "next"
-        ? "start"
-        : "end",
+        ? 0
+        : getStudyEditableTextLength(target),
+    );
+  }
+
+  function getStudyEditableFromNode(
+    node: Node | null,
+    editorRoot?: HTMLElement | null,
+  ) {
+    const element =
+      node instanceof HTMLElement
+        ? node
+        : node?.parentElement ?? null;
+
+    const editable =
+      element?.closest<HTMLElement>(
+        "[data-study-editable-id]",
+      ) ?? null;
+
+    if (
+      editable &&
+      editorRoot &&
+      !editorRoot.contains(editable)
+    ) {
+      return null;
+    }
+
+    return editable;
+  }
+
+  function getStudyEditableTextLength(
+    editable: HTMLElement,
+  ) {
+    return (editable.textContent ?? "").length;
+  }
+
+  function getStudyTextOffset(
+    editable: HTMLElement,
+    node: Node | null,
+    offset: number,
+  ) {
+    if (!node || !editable.contains(node)) {
+      return 0;
+    }
+
+    try {
+      const probe = document.createRange();
+      probe.selectNodeContents(editable);
+      probe.setEnd(node, offset);
+      return probe.toString().length;
+    } catch {
+      return 0;
+    }
+  }
+
+  function resolveStudyTextPoint(
+    editable: HTMLElement,
+    requestedOffset: number,
+  ): { node: Node; offset: number } {
+    const textLength =
+      getStudyEditableTextLength(editable);
+    const targetOffset = Math.max(
+      0,
+      Math.min(textLength, requestedOffset),
+    );
+
+    const walker = document.createTreeWalker(
+      editable,
+      NodeFilter.SHOW_TEXT,
+    );
+
+    let consumed = 0;
+    let lastTextNode: Text | null = null;
+    let node = walker.nextNode();
+
+    while (node) {
+      const textNode = node as Text;
+      lastTextNode = textNode;
+      const nextConsumed =
+        consumed + textNode.data.length;
+
+      if (targetOffset <= nextConsumed) {
+        return {
+          node: textNode,
+          offset: Math.max(
+            0,
+            Math.min(
+              textNode.data.length,
+              targetOffset - consumed,
+            ),
+          ),
+        };
+      }
+
+      consumed = nextConsumed;
+      node = walker.nextNode();
+    }
+
+    if (lastTextNode) {
+      return {
+        node: lastTextNode,
+        offset: lastTextNode.data.length,
+      };
+    }
+
+    return {
+      node: editable,
+      offset: 0,
+    };
+  }
+
+  function syncStudySelectionRefs(
+    editorRoot: HTMLElement,
+    fallbackEditable?: HTMLElement | null,
+  ) {
+    const selection = window.getSelection();
+
+    if (
+      !selection ||
+      selection.rangeCount === 0
+    ) {
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    selectionRangeRef.current =
+      range.cloneRange();
+
+    const selectedIds = Array.from(
+      editorRoot.querySelectorAll<HTMLElement>(
+        "[data-study-editable-id]",
+      ),
+    )
+      .filter((editable) => {
+        try {
+          return range.intersectsNode(editable);
+        } catch {
+          return false;
+        }
+      })
+      .map(
+        (editable) =>
+          editable.dataset.studyEditableId,
+      )
+      .filter(
+        (value): value is string =>
+          Boolean(value),
+      );
+
+    selectedBlockIdsRef.current =
+      selectedIds;
+
+    const focusEditable =
+      getStudyEditableFromNode(
+        selection.focusNode,
+        editorRoot,
+      ) ?? fallbackEditable ?? null;
+
+    const focusId =
+      focusEditable?.dataset.studyEditableId;
+
+    if (focusId) {
+      lastSelectedTextBlockIdRef.current =
+        focusId;
+    } else if (selectedIds.length > 0) {
+      lastSelectedTextBlockIdRef.current =
+        selectedIds[selectedIds.length - 1];
+    }
+  }
+
+  function setCaretInStudyEditable(
+    editable: HTMLElement,
+    requestedOffset: number,
+  ) {
+    const selection = window.getSelection();
+
+    if (!selection) {
+      return false;
+    }
+
+    const point = resolveStudyTextPoint(
+      editable,
+      requestedOffset,
+    );
+    const range = document.createRange();
+
+    try {
+      range.setStart(
+        point.node,
+        point.offset,
+      );
+      range.collapse(true);
+    } catch {
+      return false;
+    }
+
+    editable.focus({ preventScroll: true });
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const editorRoot =
+      editable.closest<HTMLElement>(
+        "[data-study-editor-root]",
+      );
+
+    if (editorRoot) {
+      syncStudySelectionRefs(
+        editorRoot,
+        editable,
+      );
+    }
+
+    editable.scrollIntoView({
+      block: "nearest",
+    });
+
+    return true;
+  }
+
+  function extendStudySelectionTo(
+    editorRoot: HTMLElement,
+    editable: HTMLElement,
+    requestedOffset: number,
+  ) {
+    const selection = window.getSelection();
+
+    if (
+      !selection ||
+      selection.rangeCount === 0 ||
+      !selection.anchorNode
+    ) {
+      return false;
+    }
+
+    const point = resolveStudyTextPoint(
+      editable,
+      requestedOffset,
+    );
+
+    try {
+      if (
+        typeof selection.setBaseAndExtent ===
+        "function"
+      ) {
+        selection.setBaseAndExtent(
+          selection.anchorNode,
+          selection.anchorOffset,
+          point.node,
+          point.offset,
+        );
+      } else {
+        selection.extend(
+          point.node,
+          point.offset,
+        );
+      }
+    } catch {
+      return false;
+    }
+
+    syncStudySelectionRefs(
+      editorRoot,
+      editable,
+    );
+
+    editable.scrollIntoView({
+      block: "nearest",
+    });
+
+    return true;
+  }
+
+  function handleCrossLineNavigation(
+    event: KeyboardEvent<HTMLDivElement>,
+  ) {
+    const key = event.key;
+
+    if (
+      ![
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+        "Home",
+        "End",
+      ].includes(key)
+    ) {
+      return false;
+    }
+
+    const currentEditable =
+      event.currentTarget;
+    const editorRoot =
+      currentEditable.closest<HTMLElement>(
+        "[data-study-editor-root]",
+      );
+    const selection = window.getSelection();
+
+    if (
+      !editorRoot ||
+      !selection ||
+      selection.rangeCount === 0
+    ) {
+      return false;
+    }
+
+    const editables = Array.from(
+      editorRoot.querySelectorAll<HTMLElement>(
+        "[data-study-editable-id]",
+      ),
+    );
+
+    if (editables.length === 0) {
+      return false;
+    }
+
+    const focusEditable =
+      getStudyEditableFromNode(
+        selection.focusNode,
+        editorRoot,
+      ) ?? currentEditable;
+    const focusIndex =
+      editables.indexOf(focusEditable);
+
+    if (focusIndex < 0) {
+      return false;
+    }
+
+    const focusOffset =
+      getStudyTextOffset(
+        focusEditable,
+        selection.focusNode,
+        selection.focusOffset,
+      );
+    const focusLength =
+      getStudyEditableTextLength(
+        focusEditable,
+      );
+    const commandKey =
+      event.ctrlKey || event.metaKey;
+
+    let targetEditable:
+      | HTMLElement
+      | null = null;
+    let targetOffset = focusOffset;
+
+    if (key === "ArrowUp") {
+      targetEditable =
+        editables[focusIndex - 1] ?? null;
+
+      if (targetEditable) {
+        targetOffset =
+          commandKey && event.shiftKey
+            ? 0
+            : Math.min(
+                focusOffset,
+                getStudyEditableTextLength(
+                  targetEditable,
+                ),
+              );
+      }
+    } else if (key === "ArrowDown") {
+      targetEditable =
+        editables[focusIndex + 1] ?? null;
+
+      if (targetEditable) {
+        targetOffset =
+          commandKey && event.shiftKey
+            ? getStudyEditableTextLength(
+                targetEditable,
+              )
+            : Math.min(
+                focusOffset,
+                getStudyEditableTextLength(
+                  targetEditable,
+                ),
+              );
+      }
+    } else if (key === "ArrowLeft") {
+      const text =
+        focusEditable.textContent ?? "";
+
+      if (commandKey && focusOffset > 0) {
+        let cursor = focusOffset;
+
+        while (
+          cursor > 0 &&
+          /\s/.test(text[cursor - 1] ?? "")
+        ) {
+          cursor -= 1;
+        }
+
+        if (
+          cursor > 0 &&
+          /[\p{L}\p{N}_$]/u.test(
+            text[cursor - 1] ?? "",
+          )
+        ) {
+          while (
+            cursor > 0 &&
+            /[\p{L}\p{N}_$]/u.test(
+              text[cursor - 1] ?? "",
+            )
+          ) {
+            cursor -= 1;
+          }
+        } else if (cursor > 0) {
+          cursor -= 1;
+        }
+
+        targetEditable = focusEditable;
+        targetOffset = cursor;
+      } else if (
+        event.shiftKey &&
+        focusOffset > 0
+      ) {
+        targetEditable = focusEditable;
+        targetOffset = focusOffset - 1;
+      } else if (focusOffset === 0) {
+        targetEditable =
+          editables[focusIndex - 1] ?? null;
+        targetOffset = targetEditable
+          ? getStudyEditableTextLength(
+              targetEditable,
+            )
+          : 0;
+      }
+    } else if (key === "ArrowRight") {
+      const text =
+        focusEditable.textContent ?? "";
+
+      if (
+        commandKey &&
+        focusOffset < focusLength
+      ) {
+        let cursor = focusOffset;
+
+        while (
+          cursor < text.length &&
+          /\s/.test(text[cursor] ?? "")
+        ) {
+          cursor += 1;
+        }
+
+        if (
+          cursor < text.length &&
+          /[\p{L}\p{N}_$]/u.test(
+            text[cursor] ?? "",
+          )
+        ) {
+          while (
+            cursor < text.length &&
+            /[\p{L}\p{N}_$]/u.test(
+              text[cursor] ?? "",
+            )
+          ) {
+            cursor += 1;
+          }
+        } else if (cursor < text.length) {
+          cursor += 1;
+        }
+
+        targetEditable = focusEditable;
+        targetOffset = cursor;
+      } else if (
+        event.shiftKey &&
+        focusOffset < focusLength
+      ) {
+        targetEditable = focusEditable;
+        targetOffset = focusOffset + 1;
+      } else if (
+        focusOffset >= focusLength
+      ) {
+        targetEditable =
+          editables[focusIndex + 1] ?? null;
+        targetOffset = 0;
+      }
+    } else if (key === "Home") {
+      if (commandKey) {
+        targetEditable = editables[0];
+        targetOffset = 0;
+      } else if (event.shiftKey) {
+        targetEditable = focusEditable;
+        targetOffset = 0;
+      }
+    } else if (key === "End") {
+      if (commandKey) {
+        targetEditable =
+          editables[editables.length - 1];
+        targetOffset =
+          getStudyEditableTextLength(
+            targetEditable,
+          );
+      } else if (event.shiftKey) {
+        targetEditable = focusEditable;
+        targetOffset = focusLength;
+      }
+    }
+
+    if (!targetEditable) {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.shiftKey) {
+      return extendStudySelectionTo(
+        editorRoot,
+        targetEditable,
+        targetOffset,
+      );
+    }
+
+    return setCaretInStudyEditable(
+      targetEditable,
+      targetOffset,
     );
   }
 
@@ -4386,6 +5351,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
     if (event.key === "Enter") {
       const typingFormatSnapshot =
         captureTypingFormatSnapshot();
+      const inheritedLinePreset =
+        getEditableLinePreset(event.currentTarget);
 
       event.preventDefault();
       event.stopPropagation();
@@ -4398,35 +5365,69 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
       if (
         selection &&
-        selection.rangeCount > 0 &&
-        editable.contains(
-          selection.getRangeAt(0).startContainer,
-        )
+        selection.rangeCount > 0
       ) {
-        const caretRange = selection.getRangeAt(0);
-        const afterRange = document.createRange();
+        const sourceRange =
+          selection.getRangeAt(0);
 
-        afterRange.selectNodeContents(editable);
-        afterRange.setStart(
-          caretRange.startContainer,
-          caretRange.startOffset,
-        );
+        /*
+         * 한 줄 안에서 선택된 텍스트가 있으면 일반 에디터처럼
+         * 선택 내용을 먼저 지우고 그 위치에서 줄을 나눈다.
+         * 여러 줄 선택은 상위 selection 처리기가 담당하므로 여기서는
+         * 현재 contentEditable 내부 선택일 때만 직접 분할한다.
+         */
+        if (
+          editable.contains(
+            sourceRange.startContainer,
+          ) &&
+          editable.contains(
+            sourceRange.endContainer,
+          )
+        ) {
+          const caretRange =
+            sourceRange.cloneRange();
 
-        const afterFragment =
-          afterRange.extractContents();
-        const afterContainer =
-          document.createElement("div");
+          if (!caretRange.collapsed) {
+            caretRange.deleteContents();
+            caretRange.collapse(true);
 
-        afterContainer.appendChild(afterFragment);
+            selection.removeAllRanges();
+            selection.addRange(caretRange);
+          }
 
-        beforeHtml = editable.innerHTML;
-        afterHtml = afterContainer.innerHTML;
+          const afterRange =
+            document.createRange();
+
+          afterRange.selectNodeContents(
+            editable,
+          );
+          afterRange.setStart(
+            caretRange.startContainer,
+            caretRange.startOffset,
+          );
+
+          const afterFragment =
+            afterRange.extractContents();
+          const afterContainer =
+            document.createElement("div");
+
+          afterContainer.appendChild(
+            afterFragment,
+          );
+
+          beforeHtml =
+            editable.innerHTML === "<br>"
+              ? ""
+              : editable.innerHTML;
+          afterHtml =
+            afterContainer.innerHTML === "<br>"
+              ? ""
+              : afterContainer.innerHTML;
+        }
       }
 
       const currentNote =
-        notesRef.current.find(
-          (note) => note.id === selectedNoteId,
-        ) ?? selectedNote;
+        getActiveEditorNote();
 
       if (!currentNote) {
         return;
@@ -4441,213 +5442,126 @@ export default function StudyNote({ active }: StudyNoteProps) {
         return;
       }
 
-      const nextExistingBlock =
-        currentNote.blocks[currentIndex + 1];
+      /*
+       * Enter는 "새 페이지" 명령이 아니다.
+       * 항상 현재 줄 바로 아래에 새 text block 하나를 삽입한다.
+       * updateSelectedNote()의 ensureAlwaysActivePageLines()가
+       * 페이지 끝의 미사용 filler를 자동으로 제거하므로,
+       * 29줄 안에서는 기존 내용이 한 줄씩 아래로 밀리기만 한다.
+       * 실제 사용 줄 수가 29줄을 넘는 순간에만 pagination 결과로
+       * 자연스럽게 다음 페이지가 생성된다.
+       */
+      const nextBlock: StudyTextBlock = {
+        ...createTextBlock(false),
+        html: afterHtml,
+        preserveEmpty: true,
+      };
 
-      const canReuseNextLine =
-        nextExistingBlock?.type === "text" &&
-        isPlainEmptyStudyLine(
-          nextExistingBlock,
-        ) &&
-        nextExistingBlock.units === 1;
-
-      let nextFocusId = "";
-      const nextLineAlreadyExists =
-        canReuseNextLine;
-
-      if (canReuseNextLine) {
-        nextFocusId = nextExistingBlock.id;
-
-        const currentMeasuredUnits = Math.max(
-          1,
-          Math.min(
-            PAGE_LINE_LIMIT,
-            Math.ceil(
-              editable.scrollHeight /
-                ROW_HEIGHT,
-            ),
+      const currentMeasuredUnits = Math.max(
+        1,
+        Math.min(
+          PAGE_LINE_LIMIT,
+          Math.ceil(
+            editable.scrollHeight /
+              ROW_HEIGHT,
           ),
-        );
+        ),
+      );
 
-        const needsStateChange =
-          beforeHtml !== block.html ||
-          afterHtml.trim().length > 0 ||
-          currentMeasuredUnits !== block.units;
+      updateSelectedNote((note) => {
+        const targetIndex =
+          note.blocks.findIndex(
+            (item) =>
+              item.id === block.id,
+          );
 
-        if (needsStateChange) {
-          updateSelectedNote((note) => ({
-            ...note,
-            blocks: note.blocks.map((item) => {
-              if (
-                item.id === block.id &&
-                item.type === "text"
-              ) {
-                return {
+        if (targetIndex < 0) {
+          return note;
+        }
+
+        const nextBlocks =
+          note.blocks.map((item) =>
+            item.id === block.id &&
+            item.type === "text"
+              ? {
                   ...item,
                   html: beforeHtml,
                   units: currentMeasuredUnits,
-                };
-              }
+                }
+              : item,
+          );
 
-              if (
-                item.id === nextExistingBlock.id &&
-                item.type === "text"
-              ) {
-                return {
-                  ...item,
-                  html: afterHtml,
-                  units: 1,
-                };
-              }
+        nextBlocks.splice(
+          targetIndex + 1,
+          0,
+          nextBlock,
+        );
 
-              return item;
-            }),
-          }));
-        }
-      } else {
-        const nextBlock: StudyTextBlock = {
-          /*
-           * 다음 활성 줄이 아예 없다는 것은 현재 페이지가 꽉 찬 상태다.
-           * Enter로 생성되는 첫 줄을 다음 페이지 시작점으로 표시한다.
-           */
-          ...createTextBlock(true),
-          html: afterHtml,
+        return {
+          ...note,
+          blocks: nextBlocks,
         };
+      });
 
-        const extraActiveLines =
-          nextExistingBlock
-            ? []
-            : Array.from(
-                {
-                  length:
-                    PAGE_LINE_LIMIT - 1,
-                },
-                () => createTextBlock(),
-              );
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          const focused = focusTextBlock(
+            nextBlock.id,
+            "start",
+          );
 
-        nextFocusId = nextBlock.id;
-
-        updateSelectedNote((note) => {
-          const targetIndex =
-            note.blocks.findIndex(
-              (item) => item.id === block.id,
-            );
-
-          if (targetIndex < 0) {
-            return note;
+          if (!focused) {
+            return;
           }
 
-          const currentMeasuredUnits = Math.max(
-            1,
-            Math.min(
-              PAGE_LINE_LIMIT,
-              Math.ceil(
-                editable.scrollHeight /
-                  ROW_HEIGHT,
-              ),
-            ),
-          );
+          if (inheritedLinePreset) {
+            applyLinePreset(inheritedLinePreset);
+          }
 
-          const nextBlocks = note.blocks.map(
-            (item) =>
-              item.id === block.id &&
-              item.type === "text"
-                ? {
-                    ...item,
-                    html: beforeHtml,
-                    units: currentMeasuredUnits,
-                  }
-                : item,
-          );
-
-          nextBlocks.splice(
-            targetIndex + 1,
-            0,
-            nextBlock,
-            ...extraActiveLines,
-          );
-
-          return {
-            ...note,
-            blocks: nextBlocks,
-          };
-        });
-      }
-
-      const focusNextLine = () => {
-        if (!nextFocusId) {
-          return;
-        }
-
-        const focused = focusTextBlock(
-          nextFocusId,
-          "start",
-        );
-
-        if (!focused) {
-          return;
-        }
-
-        restoreTypingFormatSnapshot(
-          typingFormatSnapshot,
-        );
-      };
-
-      /*
-       * 이미 화면에 존재하는 빈 줄은 즉시 포커스한다.
-       * 그래서 Enter를 빠르게 여러 번 눌러도 매번 다음 활성 줄로 이동한다.
-       * 새 줄을 실제로 삽입한 경우에만 React render 두 프레임 뒤 포커스한다.
-       */
-      if (nextLineAlreadyExists) {
-        focusNextLine();
-      } else {
-        window.requestAnimationFrame(() => {
-          window.requestAnimationFrame(
-            focusNextLine,
+          restoreTypingFormatSnapshot(
+            typingFormatSnapshot,
           );
         });
-      }
+      });
 
       return;
     }
 
-    if (
-      event.key === "ArrowUp" ||
-      event.key === "ArrowDown"
-    ) {
-      const moved =
-        focusAdjacentEditableTextBlock(
-          block.id,
-          event.key === "ArrowUp"
-            ? "previous"
-            : "next",
-        );
-
-      if (moved) {
-        event.preventDefault();
-        return;
-      }
+    /*
+     * 각 줄이 독립 contentEditable이어도 키보드 이동/선택은
+     * 하나의 연속 문서처럼 동작하게 한다.
+     *
+     * - ↑/↓ : 같은 열을 유지하며 이전/다음 줄 이동
+     * - Shift+↑/↓ : 줄 경계를 넘어 선택 확장
+     * - Ctrl/Cmd+Shift+↑/↓ : 이전 줄 시작 / 다음 줄 끝까지 확장
+     * - ←/→ : 줄 시작/끝에서 이전/다음 줄로 자연스럽게 연결
+     * - Ctrl/Cmd+Shift+Home/End : 노트 처음/끝까지 선택
+     */
+    if (handleCrossLineNavigation(event)) {
+      return;
     }
 
-    if (
-      event.key === "Backspace" &&
-      stripHtml(
-        event.currentTarget.innerHTML,
-      ).trim() === ""
-    ) {
-      /*
-       * 빈 줄 자체를 삭제하지 않는다.
-       * 줄은 항상 존재해야 하므로 Backspace는 이전 줄로 커서만 이동한다.
-       */
-      const moved =
-        focusAdjacentEditableTextBlock(
-          block.id,
-          "previous",
-        );
+    if (event.key === "Backspace" || event.key === "Delete") {
+      const selection = window.getSelection();
+      const editable = event.currentTarget;
 
-      if (moved) {
-        event.preventDefault();
-        event.stopPropagation();
+      if (selection && selection.rangeCount > 0 && selection.isCollapsed) {
+        const caretOffset = getCaretTextOffset(editable, selection.getRangeAt(0));
+        const textLength = getStudyEditableTextLength(editable);
+        const shouldMergeBackward = event.key === "Backspace" && caretOffset === 0;
+        const shouldMergeForward = event.key === "Delete" && caretOffset === textLength;
+
+        if (shouldMergeBackward || shouldMergeForward) {
+          const merged = mergeTextLineAtBoundary(
+            block.id,
+            shouldMergeBackward ? "previous" : "next",
+          );
+
+          if (merged) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }
       }
     }
   }
@@ -4663,7 +5577,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
 
     const range = selection.getRangeAt(0);
-    const editorRoot = document.querySelector("[data-study-editor-root]");
+    const editorRoot = getStudyEditorRootForRange(range);
 
     if (!editorRoot || !editorRoot.contains(range.commonAncestorContainer)) {
       return;
@@ -4684,7 +5598,51 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
     selectionRangeRef.current = range.cloneRange();
     selectedBlockIdsRef.current = selectedIds;
-    lastSelectedTextBlockIdRef.current = selectedIds[0] ?? fallbackBlockId ?? null;
+
+    const focusEditable =
+      getStudyEditableFromNode(
+        selection.focusNode,
+        editorRoot,
+      );
+    const focusBlockId =
+      focusEditable?.dataset.studyEditableId;
+
+    lastSelectedTextBlockIdRef.current =
+      focusBlockId ??
+      selectedIds[selectedIds.length - 1] ??
+      fallbackBlockId ??
+      null;
+  }
+
+  function captureLastPageSelection() {
+    const selection = window.getSelection();
+
+    if (
+      !selection ||
+      selection.rangeCount === 0
+    ) {
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const editable =
+      lastPageEditableRef.current;
+
+    if (
+      !editable ||
+      !editable.contains(
+        range.commonAncestorContainer,
+      )
+    ) {
+      return;
+    }
+
+    selectionRangeRef.current =
+      range.cloneRange();
+    selectedBlockIdsRef.current = [];
+    lastSelectedTextBlockIdRef.current = null;
+    activeEditorNoteIdRef.current =
+      selectedNoteId;
   }
 
   function restoreSelection() {
@@ -4720,7 +5678,23 @@ export default function StudyNote({ active }: StudyNoteProps) {
           `[data-study-editable-id="${block.id}"]`,
         );
 
-        return editable ? { ...block, html: editable.innerHTML } : block;
+        if (!editable) {
+          return block;
+        }
+
+        const measuredUnits = Math.max(
+          1,
+          Math.min(
+            PAGE_LINE_LIMIT,
+            Math.ceil(editable.scrollHeight / ROW_HEIGHT),
+          ),
+        );
+
+        return {
+          ...block,
+          html: editable.innerHTML,
+          units: measuredUnits,
+        };
       }),
     }));
   }
@@ -4850,9 +5824,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
       selection.getRangeAt(0);
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(range) ??
+      getActiveStudyEditorRoot();
 
     if (
       !editorRoot ||
@@ -4897,6 +5870,47 @@ export default function StudyNote({ active }: StudyNoteProps) {
       fallbackSelection.addRange(
         fallbackRange,
       );
+    }
+
+    const multiEditables = getSelectedEditableElements();
+    if (!range.collapsed && multiEditables.length > 1) {
+      const targetState = !document.queryCommandState(command);
+      const globalRange = range.cloneRange();
+      const segments = multiEditables.map((editable) => {
+        const length = getStudyEditableTextLength(editable);
+        let start = 0;
+        let end = length;
+        if (editable.contains(globalRange.startContainer)) {
+          start = getCaretTextOffset(editable, globalRange);
+        }
+        if (editable.contains(globalRange.endContainer)) {
+          try {
+            const endRange = document.createRange();
+            endRange.selectNodeContents(editable);
+            endRange.setEnd(globalRange.endContainer, globalRange.endOffset);
+            end = endRange.toString().length;
+          } catch {
+            end = length;
+          }
+        }
+        return { editable, start, end };
+      });
+
+      for (const segment of segments) {
+        segment.editable.focus();
+        selectTextOffsets(
+          segment.editable,
+          segment.start,
+          Math.max(0, segment.end - segment.start),
+        );
+        if (document.queryCommandState(command) !== targetState) {
+          document.execCommand(command, false);
+        }
+      }
+
+      syncSelectedEditableHtml();
+      syncPrimaryTextFormatState();
+      return;
     }
 
     /*
@@ -4972,9 +5986,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(range) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -5238,9 +6251,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(range) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -5504,9 +6516,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(range) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -5553,6 +6564,18 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
       selection.removeAllRanges();
       selection.addRange(range);
+    }
+
+    if (
+      range &&
+      !range.collapsed &&
+      getSelectedEditableElements().length > 1 &&
+      applyExecCommandAcrossSelectedEditables("foreColor", color)
+    ) {
+      setActiveFontColor(color);
+      setIsFontColorPaletteOpen(false);
+      syncPrimaryTextFormatState();
+      return;
     }
 
     /*
@@ -5630,9 +6653,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(range) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -5679,6 +6701,20 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
       selection.removeAllRanges();
       selection.addRange(range);
+    }
+
+    if (range && !range.collapsed && getSelectedEditableElements().length > 1) {
+      const shouldEnable = !isHighlightFormatActive;
+      const nextColor = shouldEnable ? HIGHLIGHT_COLOR : "transparent";
+      const applied = applyExecCommandAcrossSelectedEditables(
+        "hiliteColor",
+        nextColor,
+      );
+      if (!applied) {
+        applyExecCommandAcrossSelectedEditables("backColor", nextColor);
+      }
+      setIsHighlightFormatActive(shouldEnable);
+      return;
     }
 
     const currentHighlight =
@@ -5806,9 +6842,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : null;
 
     const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+      getStudyEditorRootForRange(range) ??
+      getActiveStudyEditorRoot();
 
     if (!editorRoot) {
       return;
@@ -5868,6 +6903,17 @@ export default function StudyNote({ active }: StudyNoteProps) {
     typingFontSizeRef.current =
       fontSize;
     setActiveFontSize(fontSize);
+
+    if (range && !range.collapsed && getSelectedEditableElements().length > 1) {
+      const editables = getSelectedEditableElements();
+      const applied = applyExecCommandAcrossSelectedEditables("fontSize", "7");
+      if (applied) {
+        editables.forEach((editable) => normalizeFontSizeMarkup(editable, fontSize));
+        syncSelectedEditableHtml();
+        setIsFontSizeMenuOpen(false);
+        return;
+      }
+    }
 
     document.execCommand(
       "styleWithCSS",
@@ -6208,11 +7254,30 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
   }
 
+  function getActiveEditorPageZoom() {
+    if (!isDualFileMode) {
+      return editorPageZoom;
+    }
+
+    const activeNoteId = activeEditorNoteIdRef.current;
+
+    if (
+      activeNoteId &&
+      activeNoteId === dualSecondaryNoteId
+    ) {
+      return dualSecondaryPageZoom;
+    }
+
+    return dualPrimaryPageZoom;
+  }
+
   async function insertImageForResize(
     file: File,
     alt = file.name || "붙여넣은 사진",
   ) {
-    if (!selectedNote) {
+    const activeNote = getActiveEditorNote();
+
+    if (!activeNote) {
       return;
     }
 
@@ -6280,7 +7345,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
       const editorScale =
         Math.max(
           0.01,
-          editorPageZoom,
+          getActiveEditorPageZoom(),
         );
 
       const positionYPx =
@@ -6346,7 +7411,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
        */
       setSelectedImageDeleteTarget(null);
       setResizingImageTarget({
-        noteId: selectedNote.id,
+        noteId: activeNote.id,
         blockId: imageBlock.id,
       });
 
@@ -6381,10 +7446,70 @@ export default function StudyNote({ active }: StudyNoteProps) {
     await insertImageForResize(file);
   }
 
+  function getSelectedPlainTextForClipboard() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return null;
+    }
+
+    const range = selection.getRangeAt(0);
+    const editorRoot = getStudyEditorRootForRange(range);
+    if (!editorRoot) return null;
+
+    const editables = Array.from(
+      editorRoot.querySelectorAll<HTMLElement>(
+        "[data-study-editable-id]",
+      ),
+    ).filter((editable) => {
+      try {
+        return range.intersectsNode(editable);
+      } catch {
+        return false;
+      }
+    });
+
+    if (editables.length <= 1) {
+      return null;
+    }
+
+    return editables
+      .map((editable) => {
+        const localRange = document.createRange();
+        localRange.selectNodeContents(editable);
+        if (editable.contains(range.startContainer)) {
+          localRange.setStart(range.startContainer, range.startOffset);
+        }
+        if (editable.contains(range.endContainer)) {
+          localRange.setEnd(range.endContainer, range.endOffset);
+        }
+        return localRange.toString();
+      })
+      .join("\n");
+  }
+
+  function handleEditorCopy(
+    event: ClipboardEvent<HTMLDivElement>,
+  ) {
+    const text = getSelectedPlainTextForClipboard();
+    if (text === null) return;
+    event.preventDefault();
+    event.clipboardData.setData("text/plain", text);
+  }
+
+  function handleEditorCut(
+    event: ClipboardEvent<HTMLDivElement>,
+  ) {
+    const text = getSelectedPlainTextForClipboard();
+    if (text === null) return;
+    event.preventDefault();
+    event.clipboardData.setData("text/plain", text);
+    deleteCurrentEditorSelection();
+  }
+
   async function handleEditorPaste(
     event: ClipboardEvent<HTMLDivElement>,
   ) {
-    if (!selectedNote) {
+    if (!getActiveEditorNote()) {
       return;
     }
 
@@ -6414,6 +7539,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
 
     if (!imageItem) {
+      const plainText = event.clipboardData.getData("text/plain");
+      if (plainText.includes("\n") || plainText.includes("\r")) {
+        event.preventDefault();
+        event.stopPropagation();
+        insertMultilinePlainTextAtCaret(plainText);
+      }
       return;
     }
 
@@ -7111,7 +8242,46 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
   }
 
-  function selectAllTextInCurrentPage(
+  function getStudyEditorRootForRange(
+    range: Range | null,
+  ) {
+    if (!range) {
+      return null;
+    }
+
+    const commonNode = range.commonAncestorContainer;
+    const commonElement =
+      commonNode instanceof HTMLElement
+        ? commonNode
+        : commonNode.parentElement;
+
+    return (
+      commonElement?.closest<HTMLElement>(
+        "[data-study-editor-root]",
+      ) ?? null
+    );
+  }
+
+  function getActiveStudyEditorRoot() {
+    const activeBlockId =
+      lastSelectedTextBlockIdRef.current;
+
+    if (!activeBlockId) {
+      return null;
+    }
+
+    return (
+      document
+        .querySelector<HTMLElement>(
+          `[data-study-editable-id="${activeBlockId}"]`,
+        )
+        ?.closest<HTMLElement>(
+          "[data-study-editor-root]",
+        ) ?? null
+    );
+  }
+
+  function selectAllTextInCurrentNote(
     eventTarget: EventTarget | null,
   ) {
     const target =
@@ -7119,17 +8289,18 @@ export default function StudyNote({ active }: StudyNoteProps) {
         ? eventTarget
         : null;
 
-    const pageBody =
+    const editorRoot =
       target?.closest<HTMLElement>(
-        "[data-study-page-body='true']",
-      );
+        "[data-study-editor-root]",
+      ) ??
+      getActiveStudyEditorRoot();
 
-    if (!pageBody) {
+    if (!editorRoot) {
       return false;
     }
 
     const editables = Array.from(
-      pageBody.querySelectorAll<HTMLElement>(
+      editorRoot.querySelectorAll<HTMLElement>(
         "[data-study-editable-id]",
       ),
     );
@@ -7138,26 +8309,36 @@ export default function StudyNote({ active }: StudyNoteProps) {
       return false;
     }
 
-    const firstEditable =
-      editables[0];
+    const firstEditable = editables[0];
     const lastEditable =
-      editables[
-        editables.length - 1
-      ];
-
+      editables[editables.length - 1];
+    const firstPoint =
+      resolveStudyTextPoint(
+        firstEditable,
+        0,
+      );
+    const lastPoint =
+      resolveStudyTextPoint(
+        lastEditable,
+        getStudyEditableTextLength(
+          lastEditable,
+        ),
+      );
     const range =
       document.createRange();
 
-    /*
-     * 한 줄짜리 contentEditable마다 Ctrl+A가 끊기지 않도록
-     * 현재 페이지의 첫 줄부터 마지막 줄까지 하나의 Selection으로 묶는다.
-     */
-    range.setStartBefore(
-      firstEditable,
-    );
-    range.setEndAfter(
-      lastEditable,
-    );
+    try {
+      range.setStart(
+        firstPoint.node,
+        firstPoint.offset,
+      );
+      range.setEnd(
+        lastPoint.node,
+        lastPoint.offset,
+      );
+    } catch {
+      return false;
+    }
 
     const selection =
       window.getSelection();
@@ -7169,33 +8350,28 @@ export default function StudyNote({ active }: StudyNoteProps) {
     selection.removeAllRanges();
     selection.addRange(range);
 
-    const selectedIds =
-      editables
-        .map(
-          (editable) =>
-            editable.dataset
-              .studyEditableId,
-        )
-        .filter(
-          (
-            value,
-          ): value is string =>
-            Boolean(value),
-        );
-
     selectionRangeRef.current =
       range.cloneRange();
     selectedBlockIdsRef.current =
-      selectedIds;
+      editables
+        .map(
+          (editable) =>
+            editable.dataset.studyEditableId,
+        )
+        .filter(
+          (value): value is string =>
+            Boolean(value),
+        );
     lastSelectedTextBlockIdRef.current =
-      selectedIds[0] ?? null;
+      lastEditable.dataset.studyEditableId ??
+      selectedBlockIdsRef.current.at(-1) ??
+      null;
 
     return true;
   }
 
   function deleteCurrentEditorSelection() {
-    const selection =
-      window.getSelection();
+    const selection = window.getSelection();
 
     if (
       !selection ||
@@ -7205,181 +8381,2094 @@ export default function StudyNote({ active }: StudyNoteProps) {
       return false;
     }
 
-    const range =
-      selection.getRangeAt(0);
-
-    const editorRoot =
-      document.querySelector<HTMLElement>(
-        "[data-study-editor-root]",
-      );
+    const range = selection.getRangeAt(0);
+    const editorRoot = getStudyEditorRootForRange(range);
 
     if (
       !editorRoot ||
-      !editorRoot.contains(
-        range.commonAncestorContainer,
-      )
+      !editorRoot.contains(range.commonAncestorContainer)
     ) {
       return false;
     }
 
-    const selectedEditables =
-      Array.from(
-        editorRoot.querySelectorAll<HTMLElement>(
-          "[data-study-editable-id]",
-        ),
-      ).filter((editable) => {
-        try {
-          return range.intersectsNode(
-            editable,
-          );
-        } catch {
-          return false;
-        }
-      });
+    const selectedEditables = Array.from(
+      editorRoot.querySelectorAll<HTMLElement>(
+        "[data-study-editable-id]",
+      ),
+    ).filter((editable) => {
+      try {
+        return range.intersectsNode(editable);
+      } catch {
+        return false;
+      }
+    });
 
-    if (
-      selectedEditables.length === 0
-    ) {
+    if (selectedEditables.length === 0) {
       return false;
     }
 
-    const firstEditable =
-      selectedEditables[0];
+    const firstEditable = selectedEditables[0];
+    const lastEditable = selectedEditables[selectedEditables.length - 1];
+    const firstId = firstEditable.dataset.studyEditableId;
 
-    const deletedHtmlById =
-      new Map<string, string>();
+    if (!firstId) {
+      return false;
+    }
 
-    for (
-      const editable of
-      selectedEditables
-    ) {
-      const editableId =
-        editable.dataset
-          .studyEditableId;
-
-      if (!editableId) {
-        continue;
-      }
-
-      const localRange =
-        document.createRange();
-
-      localRange.selectNodeContents(
-        editable,
-      );
-
-      if (
-        editable.contains(
-          range.startContainer,
-        )
-      ) {
-        localRange.setStart(
-          range.startContainer,
-          range.startOffset,
-        );
-      }
-
-      if (
-        editable.contains(
-          range.endContainer,
-        )
-      ) {
-        localRange.setEnd(
-          range.endContainer,
-          range.endOffset,
-        );
-      }
-
+    // 한 줄 안의 선택은 DOM 서식을 보존한 채 해당 범위만 지운다.
+    if (selectedEditables.length === 1) {
+      const localRange = range.cloneRange();
       localRange.deleteContents();
-
       const normalizedHtml =
-        editable.innerHTML === "<br>"
+        firstEditable.innerHTML === "<br>"
           ? ""
-          : editable.innerHTML;
+          : firstEditable.innerHTML;
 
-      if (
-        normalizedHtml !==
-        editable.innerHTML
-      ) {
-        editable.innerHTML =
-          normalizedHtml;
-      }
+      updateSelectedNote((note) => ({
+        ...note,
+        blocks: note.blocks.map((block) =>
+          block.type === "text" && block.id === firstId
+            ? { ...block, html: normalizedHtml, units: 1, preserveEmpty: true }
+            : block,
+        ),
+      }));
 
-      deletedHtmlById.set(
-        editableId,
-        normalizedHtml,
+      lastSelectedTextBlockIdRef.current = firstId;
+      selectedBlockIdsRef.current = [firstId];
+      focusTextBlockAtOffset(
+        firstId,
+        getCaretTextOffset(firstEditable, localRange),
       );
+      return true;
     }
 
     /*
-     * 여러 줄을 선택해도 note 업데이트는 한 번만 수행한다.
-     * 그래서 Ctrl+Z 역시 한 번에 선택 삭제 전체를 되돌린다.
+     * 여러 줄 선택 삭제는 일반 문서 편집기처럼 동작한다.
+     * 첫 줄의 선택 앞부분 + 마지막 줄의 선택 뒷부분을 한 줄로 합치고,
+     * 그 사이의 선택된 텍스트 줄은 제거한다.
      */
+    const beforeRange = document.createRange();
+    beforeRange.selectNodeContents(firstEditable);
+    if (firstEditable.contains(range.startContainer)) {
+      beforeRange.setEnd(range.startContainer, range.startOffset);
+    } else {
+      beforeRange.collapse(true);
+    }
+    const beforeBox = document.createElement("div");
+    beforeBox.appendChild(beforeRange.cloneContents());
+    const beforeHtml = beforeBox.innerHTML;
+    const beforeLength = beforeRange.toString().length;
+
+    const afterRange = document.createRange();
+    afterRange.selectNodeContents(lastEditable);
+    if (lastEditable.contains(range.endContainer)) {
+      afterRange.setStart(range.endContainer, range.endOffset);
+    } else {
+      afterRange.collapse(false);
+    }
+    const afterBox = document.createElement("div");
+    afterBox.appendChild(afterRange.cloneContents());
+    const afterHtml = afterBox.innerHTML;
+
+    const removedIds = new Set(
+      selectedEditables
+        .slice(1)
+        .map((editable) => editable.dataset.studyEditableId)
+        .filter((value): value is string => Boolean(value)),
+    );
+
     updateSelectedNote((note) => ({
       ...note,
-      blocks: note.blocks.map(
-        (block) => {
-          if (
-            block.type !== "text"
-          ) {
-            return block;
-          }
+      blocks: note.blocks
+        .filter((block) => !removedIds.has(block.id))
+        .map((block) =>
+          block.type === "text" && block.id === firstId
+            ? {
+                ...block,
+                html: `${beforeHtml}${afterHtml}`,
+                units: 1,
+                preserveEmpty: true,
+              }
+            : block,
+        ),
+    }));
 
-          const nextHtml =
-            deletedHtmlById.get(
-              block.id,
-            );
+    lastSelectedTextBlockIdRef.current = firstId;
+    selectedBlockIdsRef.current = [firstId];
+    focusTextBlockAtOffset(firstId, beforeLength);
+    return true;
+  }
 
-          if (
-            nextHtml === undefined
-          ) {
-            return block;
-          }
+  function getActiveEditableElement() {
+    const activeElement =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
 
-          return {
-            ...block,
-            html: nextHtml,
-            units: 1,
-          };
-        },
+    if (
+      activeElement?.matches(
+        "[data-study-editable-id], [data-study-last-page-id]",
+      )
+    ) {
+      return activeElement;
+    }
+
+    const blockId =
+      lastSelectedTextBlockIdRef.current;
+
+    if (!blockId) {
+      return null;
+    }
+
+    return document.querySelector<HTMLElement>(
+      `[data-study-editable-id="${blockId}"]`,
+    );
+  }
+
+  function getSelectedEditableElements() {
+    const activeEditable = getActiveEditableElement();
+    const selectedIds = Array.from(
+      new Set(selectedBlockIdsRef.current),
+    );
+
+    const elements = selectedIds
+      .map((blockId) =>
+        document.querySelector<HTMLElement>(
+          `[data-study-editable-id="${blockId}"]`,
+        ),
+      )
+      .filter(
+        (element): element is HTMLElement =>
+          Boolean(element),
+      );
+
+    if (
+      activeEditable &&
+      !elements.includes(activeEditable)
+    ) {
+      elements.push(activeEditable);
+    }
+
+    return elements;
+  }
+
+  function syncEditorCommandResult() {
+    const activeEditable =
+      getActiveEditableElement();
+
+    if (
+      activeEditable?.dataset.studyLastPageId
+    ) {
+      updateLastPageHtml(
+        activeEditable.innerHTML,
+      );
+    } else {
+      syncSelectedEditableHtml();
+    }
+
+    syncPrimaryTextFormatState();
+  }
+
+  function applyExecCommandAcrossSelectedEditables(
+    command: string,
+    value?: string,
+    desiredToggleState?: boolean,
+  ) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      return false;
+    }
+
+    const globalRange = selection.getRangeAt(0).cloneRange();
+    const editables = getSelectedEditableElements();
+    if (editables.length <= 1) return false;
+
+    const segments = editables.map((editable) => {
+      const length = getStudyEditableTextLength(editable);
+      let start = 0;
+      let end = length;
+
+      if (editable.contains(globalRange.startContainer)) {
+        const startProbe = document.createRange();
+        startProbe.selectNodeContents(editable);
+        startProbe.setEnd(globalRange.startContainer, globalRange.startOffset);
+        start = startProbe.toString().length;
+      }
+      if (editable.contains(globalRange.endContainer)) {
+        const endProbe = document.createRange();
+        endProbe.selectNodeContents(editable);
+        endProbe.setEnd(globalRange.endContainer, globalRange.endOffset);
+        end = endProbe.toString().length;
+      }
+      return { editable, start, end };
+    });
+
+    for (const { editable, start, end } of segments) {
+      editable.focus();
+      selectTextOffsets(editable, start, Math.max(0, end - start));
+      if (desiredToggleState === undefined) {
+        document.execCommand(command, false, value);
+      } else if (document.queryCommandState(command) !== desiredToggleState) {
+        document.execCommand(command, false, value);
+      }
+    }
+
+    selectedBlockIdsRef.current = editables
+      .map((editable) => editable.dataset.studyEditableId)
+      .filter((value): value is string => Boolean(value));
+    lastSelectedTextBlockIdRef.current = selectedBlockIdsRef.current.at(-1) ?? null;
+    syncSelectedEditableHtml();
+    return true;
+  }
+
+  function runEditorCommand(
+    command: string,
+    value?: string,
+  ) {
+    const activeEditable =
+      getActiveEditableElement();
+
+    if (!activeEditable) {
+      return false;
+    }
+
+    activeEditable.focus();
+    restoreSelection();
+
+    if (applyExecCommandAcrossSelectedEditables(command, value)) {
+      syncPrimaryTextFormatState();
+      return true;
+    }
+
+    let applied = false;
+
+    try {
+      applied = document.execCommand(
+        command,
+        false,
+        value,
+      );
+    } catch (error) {
+      console.warn(
+        `텍스트 명령 실행 실패: ${command}`,
+        error,
+      );
+      return false;
+    }
+
+    syncEditorCommandResult();
+    return applied;
+  }
+
+  function unwrapElement(element: HTMLElement) {
+    const parent = element.parentNode;
+    if (!parent) {
+      return;
+    }
+
+    while (element.firstChild) {
+      parent.insertBefore(
+        element.firstChild,
+        element,
+      );
+    }
+
+    parent.removeChild(element);
+  }
+
+  function applyLinePreset(
+    preset:
+      | "body"
+      | "heading1"
+      | "heading2"
+      | "heading3"
+      | "quote"
+      | "code",
+  ) {
+    const editables =
+      getSelectedEditableElements();
+
+    if (editables.length === 0) {
+      return;
+    }
+
+    for (const editable of editables) {
+      const directPreset =
+        Array.from(editable.children).find(
+          (child) =>
+            child instanceof HTMLElement &&
+            child.dataset.hooLinePreset,
+        ) as HTMLElement | undefined;
+
+      if (preset === "body") {
+        if (directPreset) {
+          unwrapElement(directPreset);
+        }
+        continue;
+      }
+
+      const wrapper =
+        directPreset ??
+        document.createElement("span");
+
+      if (!directPreset) {
+        while (editable.firstChild) {
+          wrapper.appendChild(
+            editable.firstChild,
+          );
+        }
+        editable.appendChild(wrapper);
+      }
+
+      wrapper.dataset.hooLinePreset =
+        preset;
+      wrapper.style.display = "block";
+      wrapper.style.margin = "0";
+      wrapper.style.minHeight = "1em";
+      wrapper.style.fontFamily = "";
+      wrapper.style.fontSize = "";
+      wrapper.style.fontWeight = "";
+      wrapper.style.fontStyle = "";
+      wrapper.style.letterSpacing = "";
+      wrapper.style.borderLeft = "";
+      wrapper.style.paddingLeft = "";
+      wrapper.style.paddingRight = "";
+      wrapper.style.borderRadius = "";
+      wrapper.style.background = "";
+      wrapper.style.whiteSpace = "";
+
+      if (preset === "heading1") {
+        wrapper.style.fontSize = "24px";
+        wrapper.style.fontWeight = "800";
+        wrapper.style.letterSpacing = "-0.02em";
+      } else if (preset === "heading2") {
+        wrapper.style.fontSize = "20px";
+        wrapper.style.fontWeight = "800";
+        wrapper.style.letterSpacing = "-0.015em";
+      } else if (preset === "heading3") {
+        wrapper.style.fontSize = "17px";
+        wrapper.style.fontWeight = "800";
+      } else if (preset === "quote") {
+        wrapper.style.fontStyle = "italic";
+        wrapper.style.borderLeft =
+          "3px solid rgba(214,181,34,0.85)";
+        wrapper.style.paddingLeft = "10px";
+      } else if (preset === "code") {
+        wrapper.style.fontFamily =
+          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+        wrapper.style.fontSize = "13px";
+        wrapper.style.paddingLeft = "8px";
+        wrapper.style.paddingRight = "8px";
+        wrapper.style.borderRadius = "5px";
+        wrapper.style.background =
+          "rgba(127,127,127,0.12)";
+        wrapper.style.whiteSpace = "pre-wrap";
+      }
+    }
+
+    syncEditorCommandResult();
+  }
+
+  function clearEditorFormatting() {
+    runEditorCommand("removeFormat");
+    applyLinePreset("body");
+  }
+
+  function normalizeEditorUrl(
+    rawValue: string,
+  ) {
+    const value = rawValue.trim();
+
+    if (!value) {
+      return null;
+    }
+
+    if (
+      /^(https?:|mailto:|tel:)/i.test(value)
+    ) {
+      return value;
+    }
+
+    if (/^[\w.-]+\.[a-z]{2,}(?:[/#?]|$)/i.test(value)) {
+      return `https://${value}`;
+    }
+
+    return null;
+  }
+
+  function openLinkDialog() {
+    const savedRange =
+      selectionRangeRef.current;
+    const selectionText =
+      savedRange?.toString().trim() ?? "";
+
+    if (!savedRange || !selectionText) {
+      setEditorFindStatus(
+        "링크로 만들 텍스트를 먼저 선택하세요.",
+      );
+      return;
+    }
+
+    setEditorAdvancedMenu(null);
+    setEditorUtilityDialog({
+      type: "link",
+      value: "https://",
+    });
+
+    window.setTimeout(() => {
+      editorUtilityInputRef.current?.focus();
+      editorUtilityInputRef.current?.select();
+    }, 0);
+  }
+
+  function applyPendingLink() {
+    if (
+      editorUtilityDialog?.type !== "link"
+    ) {
+      return;
+    }
+
+    const href = normalizeEditorUrl(
+      editorUtilityDialog.value,
+    );
+
+    if (!href) {
+      setEditorFindStatus(
+        "올바른 링크 주소를 입력하세요.",
+      );
+      return;
+    }
+
+    setEditorUtilityDialog(null);
+    window.setTimeout(() => {
+      runEditorCommand(
+        "createLink",
+        href,
+      );
+    }, 0);
+  }
+
+  function applyInlineCode() {
+    const range =
+      selectionRangeRef.current;
+
+    if (!range || range.collapsed) {
+      setEditorFindStatus(
+        "인라인 코드로 만들 텍스트를 먼저 선택하세요.",
+      );
+      return;
+    }
+
+    const activeEditable =
+      getActiveEditableElement();
+
+    if (!activeEditable) {
+      return;
+    }
+
+    const startElement =
+      range.startContainer instanceof HTMLElement
+        ? range.startContainer
+        : range.startContainer.parentElement;
+    const existingCode =
+      startElement?.closest<HTMLElement>(
+        "code[data-hoo-inline-code='true']",
+      );
+
+    if (
+      existingCode &&
+      activeEditable.contains(existingCode)
+    ) {
+      unwrapElement(existingCode);
+      syncEditorCommandResult();
+      return;
+    }
+
+    activeEditable.focus();
+    restoreSelection();
+
+    const code =
+      document.createElement("code");
+    code.dataset.hooInlineCode = "true";
+    code.style.fontFamily =
+      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+    code.style.padding = "0 0.22em";
+    code.style.borderRadius = "0.25em";
+    code.style.background =
+      "rgba(127,127,127,0.14)";
+
+    try {
+      code.appendChild(
+        range.extractContents(),
+      );
+      range.insertNode(code);
+
+      const nextRange =
+        document.createRange();
+      nextRange.selectNodeContents(code);
+
+      const selection =
+        window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(nextRange);
+      selectionRangeRef.current =
+        nextRange.cloneRange();
+
+      syncEditorCommandResult();
+    } catch (error) {
+      console.warn(
+        "인라인 코드 적용 실패:",
+        error,
+      );
+    }
+  }
+
+  function getActiveTextBlockIndex() {
+    const note = getActiveEditorNote();
+    const blockId =
+      lastSelectedTextBlockIdRef.current;
+
+    if (!note || !blockId) {
+      return null;
+    }
+
+    const blockIndex =
+      note.blocks.findIndex(
+        (block) =>
+          block.type === "text" &&
+          block.id === blockId,
+      );
+
+    return blockIndex >= 0
+      ? { note, blockId, blockIndex }
+      : null;
+  }
+
+  function insertTextLineAt(
+    placement: "before" | "after",
+  ) {
+    const active =
+      getActiveTextBlockIndex();
+
+    if (!active) {
+      return;
+    }
+
+    const nextBlock =
+      createTextBlock();
+
+    updateSelectedNote((note) => {
+      const nextBlocks =
+        [...note.blocks];
+      const targetIndex =
+        nextBlocks.findIndex(
+          (block) =>
+            block.id === active.blockId,
+        );
+
+      if (targetIndex < 0) {
+        return note;
+      }
+
+      nextBlocks.splice(
+        placement === "before"
+          ? targetIndex
+          : targetIndex + 1,
+        0,
+        nextBlock,
+      );
+
+      return {
+        ...note,
+        blocks: nextBlocks,
+      };
+    });
+
+    window.setTimeout(() => {
+      focusTextBlock(
+        nextBlock.id,
+        "start",
+      );
+    }, 0);
+  }
+
+  function deleteActiveTextLine() {
+    const active =
+      getActiveTextBlockIndex();
+
+    if (!active) {
+      return;
+    }
+
+    const textBlocks =
+      active.note.blocks.filter(
+        (
+          block,
+        ): block is StudyTextBlock =>
+          block.type === "text",
+      );
+
+    const currentTextIndex =
+      textBlocks.findIndex(
+        (block) =>
+          block.id === active.blockId,
+      );
+    const fallback =
+      textBlocks[currentTextIndex + 1] ??
+      textBlocks[currentTextIndex - 1] ??
+      null;
+
+    updateSelectedNote((note) => ({
+      ...note,
+      blocks: note.blocks.filter(
+        (block) =>
+          block.id !== active.blockId,
       ),
     }));
 
-    const firstId =
-      firstEditable.dataset
-        .studyEditableId;
+    if (fallback) {
+      window.setTimeout(() => {
+        focusTextBlock(
+          fallback.id,
+          "start",
+        );
+      }, 0);
+    }
+  }
 
-    if (firstId) {
+  function duplicateActiveTextLine(
+    direction: "up" | "down",
+  ) {
+    const active =
+      getActiveTextBlockIndex();
+
+    if (!active) {
+      return;
+    }
+
+    const source =
+      active.note.blocks[
+        active.blockIndex
+      ];
+
+    if (source.type !== "text") {
+      return;
+    }
+
+    const clone: StudyTextBlock = {
+      ...source,
+      id: createId(),
+      pageBreakBefore: false,
+      annotation: source.annotation
+        ? { ...source.annotation }
+        : undefined,
+    };
+
+    updateSelectedNote((note) => {
+      const nextBlocks =
+        [...note.blocks];
+      const index =
+        nextBlocks.findIndex(
+          (block) =>
+            block.id === active.blockId,
+        );
+
+      if (index < 0) {
+        return note;
+      }
+
+      nextBlocks.splice(
+        direction === "up"
+          ? index
+          : index + 1,
+        0,
+        clone,
+      );
+
+      return {
+        ...note,
+        blocks: nextBlocks,
+      };
+    });
+
+    window.setTimeout(() => {
+      focusTextBlock(clone.id, "end");
+    }, 0);
+  }
+
+  function moveActiveTextLine(
+    direction: "up" | "down",
+  ) {
+    const active =
+      getActiveTextBlockIndex();
+
+    if (!active) {
+      return;
+    }
+
+    updateSelectedNote((note) => {
+      const nextBlocks =
+        [...note.blocks];
+      const index =
+        nextBlocks.findIndex(
+          (block) =>
+            block.id === active.blockId,
+        );
+
+      if (index < 0) {
+        return note;
+      }
+
+      const step =
+        direction === "up" ? -1 : 1;
+      let swapIndex =
+        index + step;
+
+      while (
+        swapIndex >= 0 &&
+        swapIndex < nextBlocks.length &&
+        nextBlocks[swapIndex].type !== "text"
+      ) {
+        swapIndex += step;
+      }
+
+      if (
+        swapIndex < 0 ||
+        swapIndex >= nextBlocks.length
+      ) {
+        return note;
+      }
+
+      const current =
+        nextBlocks[index];
+      const target =
+        nextBlocks[swapIndex];
+
+      const currentBreak =
+        current.type === "text"
+          ? current.pageBreakBefore
+          : undefined;
+      const targetBreak =
+        target.type === "text"
+          ? target.pageBreakBefore
+          : undefined;
+
+      if (
+        current.type === "text" &&
+        target.type === "text"
+      ) {
+        nextBlocks[index] = {
+          ...target,
+          pageBreakBefore:
+            currentBreak,
+        };
+        nextBlocks[swapIndex] = {
+          ...current,
+          pageBreakBefore:
+            targetBreak,
+        };
+      }
+
+      return {
+        ...note,
+        blocks: nextBlocks,
+      };
+    });
+
+    window.setTimeout(() => {
+      focusTextBlock(
+        active.blockId,
+        "end",
+      );
+    }, 0);
+  }
+
+  function mutateEditablePrefix(
+    editable: HTMLElement,
+    mode: "comment" | "indent" | "outdent",
+  ) {
+    const walker = document.createTreeWalker(
+      editable,
+      NodeFilter.SHOW_TEXT,
+    );
+    const firstTextNode =
+      walker.nextNode() as Text | null;
+
+    if (!firstTextNode) {
+      const seed = document.createTextNode("");
+      editable.appendChild(seed);
+      return mutateEditablePrefix(
+        editable,
+        mode,
+      );
+    }
+
+    if (mode === "comment") {
+      const current = firstTextNode.data;
+      const match = current.match(/^(\s*)\/\/\s?/);
+
+      if (match) {
+        firstTextNode.data =
+          current.slice(match[0].length);
+      } else {
+        firstTextNode.data =
+          `// ${current}`;
+      }
+      return;
+    }
+
+    if (mode === "indent") {
+      firstTextNode.data =
+        `  ${firstTextNode.data}`;
+      return;
+    }
+
+    firstTextNode.data =
+      firstTextNode.data.replace(
+        /^(?:\t| {1,2})/,
+        "",
+      );
+  }
+
+  function mutateSelectedLinePrefixes(
+    mode: "comment" | "indent" | "outdent",
+  ) {
+    const editables =
+      getSelectedEditableElements();
+
+    if (editables.length === 0) {
+      return false;
+    }
+
+    editables.forEach((editable) => {
+      mutateEditablePrefix(
+        editable,
+        mode,
+      );
+    });
+
+    syncEditorCommandResult();
+
+    const activeEditable =
+      getActiveEditableElement();
+    activeEditable?.focus();
+    return true;
+  }
+
+  function toggleLineComment() {
+    mutateSelectedLinePrefixes(
+      "comment",
+    );
+  }
+
+  function formatCurrentCodeLine() {
+    const editables =
+      getSelectedEditableElements();
+
+    if (editables.length === 0) {
+      return;
+    }
+
+    editables.forEach((editable) => {
+      const walker = document.createTreeWalker(
+        editable,
+        NodeFilter.SHOW_TEXT,
+      );
+      let node = walker.nextNode();
+
+      while (node) {
+        const textNode = node as Text;
+        textNode.data = textNode.data
+          .replace(/\t/g, "  ")
+          .replace(/[ \t]+$/g, "");
+        node = walker.nextNode();
+      }
+    });
+
+    syncEditorCommandResult();
+  }
+
+  function saveStudyNotesNow() {
+    const currentNotes =
+      notesRef.current.length > 0
+        ? notesRef.current
+        : notes;
+
+    setSaveLabel("저장 중...");
+
+    void replaceNotesInIndexedDb(
+      currentNotes,
+    )
+      .then(() => {
+        setSaveLabel("로컬 저장됨");
+        if (navigator.onLine) {
+          return syncStudyNotes(
+            currentNotes,
+          );
+        }
+        return undefined;
+      })
+      .catch((error) => {
+        console.error(
+          "수동 저장 실패:",
+          error,
+        );
+        setSaveLabel("저장 실패");
+      });
+  }
+
+  function jumpToEditorLineNumber(
+    rawValue: string,
+  ) {
+    const note = getActiveEditorNote();
+    if (!note) {
+      return false;
+    }
+
+    const lineNumber = Number(rawValue);
+
+    if (
+      !Number.isFinite(lineNumber) ||
+      lineNumber < 1
+    ) {
+      setEditorFindStatus(
+        "1 이상의 줄 번호를 입력하세요.",
+      );
+      return false;
+    }
+
+    const textBlocks =
+      note.blocks.filter(
+        (
+          block,
+        ): block is StudyTextBlock =>
+          block.type === "text",
+      );
+
+    const target =
+      textBlocks[
+        Math.min(
+          textBlocks.length - 1,
+          Math.floor(lineNumber) - 1,
+        )
+      ];
+
+    if (!target) {
+      return false;
+    }
+
+    setEditorUtilityDialog(null);
+    window.setTimeout(() => {
+      focusTextBlock(
+        target.id,
+        "start",
+      );
+    }, 0);
+    return true;
+  }
+
+  function openGoToLineDialog() {
+    setEditorAdvancedMenu(null);
+    setEditorUtilityDialog({
+      type: "line",
+      value: "1",
+    });
+    window.setTimeout(() => {
+      editorUtilityInputRef.current?.focus();
+      editorUtilityInputRef.current?.select();
+    }, 0);
+  }
+
+  function openQuickOpenDialog() {
+    setEditorAdvancedMenu(null);
+    setEditorUtilityDialog({
+      type: "quick-open",
+      value: "",
+    });
+    window.setTimeout(() => {
+      editorUtilityInputRef.current?.focus();
+    }, 0);
+  }
+
+  function openGlobalSearchDialog() {
+    setEditorAdvancedMenu(null);
+    setEditorUtilityDialog({
+      type: "global-search",
+      value: editorFindQuery,
+    });
+    window.setTimeout(() => {
+      editorUtilityInputRef.current?.focus();
+      editorUtilityInputRef.current?.select();
+    }, 0);
+  }
+
+  function getQuickOpenMatches(
+    query: string,
+  ) {
+    const lowered =
+      query.trim().toLocaleLowerCase();
+
+    return [...notesRef.current]
+      .sort((first, second) =>
+        second.updatedAt.localeCompare(
+          first.updatedAt,
+        ),
+      )
+      .filter((note) =>
+        !lowered ||
+        note.title
+          .toLocaleLowerCase()
+          .includes(lowered) ||
+        note.category
+          .toLocaleLowerCase()
+          .includes(lowered),
+      )
+      .slice(0, 8);
+  }
+
+  function isEditorWordCharacter(
+    value: string | undefined,
+  ) {
+    return Boolean(
+      value &&
+      /[\p{L}\p{N}_$]/u.test(value),
+    );
+  }
+
+  function countTextMatches(
+    text: string,
+    query: string,
+    caseSensitive: boolean,
+    wholeWord = editorFindWholeWord,
+  ) {
+    if (!query) {
+      return [] as number[];
+    }
+
+    const source = caseSensitive
+      ? text
+      : text.toLocaleLowerCase();
+    const needle = caseSensitive
+      ? query
+      : query.toLocaleLowerCase();
+    const matches: number[] = [];
+    let cursor = 0;
+
+    while (cursor <= source.length - needle.length) {
+      const index = source.indexOf(
+        needle,
+        cursor,
+      );
+      if (index < 0) {
+        break;
+      }
+
+      const previous =
+        index > 0
+          ? source[index - 1]
+          : undefined;
+      const next =
+        source[
+          index + needle.length
+        ];
+      const validWholeWord =
+        !wholeWord ||
+        (!isEditorWordCharacter(previous) &&
+          !isEditorWordCharacter(next));
+
+      if (validWholeWord) {
+        matches.push(index);
+      }
+
+      cursor = index + Math.max(1, needle.length);
+    }
+
+    return matches;
+  }
+
+  type EditorFindMatch = {
+    source: "block" | "last-page";
+    blockId: string | null;
+    noteId: string;
+    offset: number;
+    length: number;
+  };
+
+  function getEditorFindMatches(
+    queryOverride?: string,
+  ) {
+    const note = getActiveEditorNote();
+    const query =
+      queryOverride ?? editorFindQuery;
+
+    if (!note || !query) {
+      return [] as EditorFindMatch[];
+    }
+
+    const matches: EditorFindMatch[] =
+      note.blocks.flatMap((block) => {
+        if (block.type !== "text") {
+          return [];
+        }
+
+        const text = stripHtml(block.html);
+        return countTextMatches(
+          text,
+          query,
+          editorFindCaseSensitive,
+        ).map((offset) => ({
+          source: "block" as const,
+          blockId: block.id,
+          noteId: note.id,
+          offset,
+          length: query.length,
+        }));
+      });
+
+    const lastPageText =
+      stripHtml(note.lastPageHtml ?? "");
+
+    countTextMatches(
+      lastPageText,
+      query,
+      editorFindCaseSensitive,
+    ).forEach((offset) => {
+      matches.push({
+        source: "last-page",
+        blockId: null,
+        noteId: note.id,
+        offset,
+        length: query.length,
+      });
+    });
+
+    return matches;
+  }
+
+  function selectTextOffsets(
+    element: HTMLElement,
+    start: number,
+    length: number,
+  ) {
+    const walker =
+      document.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT,
+      );
+    const nodes: Text[] = [];
+    let node = walker.nextNode();
+
+    while (node) {
+      nodes.push(node as Text);
+      node = walker.nextNode();
+    }
+
+    let cursor = 0;
+    let startNode: Text | null = null;
+    let endNode: Text | null = null;
+    let startOffset = 0;
+    let endOffset = 0;
+    const end = start + length;
+
+    for (const textNode of nodes) {
+      const nextCursor =
+        cursor + textNode.data.length;
+
+      if (
+        !startNode &&
+        start >= cursor &&
+        start <= nextCursor
+      ) {
+        startNode = textNode;
+        startOffset =
+          Math.min(
+            textNode.data.length,
+            start - cursor,
+          );
+      }
+
+      if (
+        !endNode &&
+        end >= cursor &&
+        end <= nextCursor
+      ) {
+        endNode = textNode;
+        endOffset =
+          Math.min(
+            textNode.data.length,
+            end - cursor,
+          );
+      }
+
+      cursor = nextCursor;
+    }
+
+    if (!startNode || !endNode) {
+      return false;
+    }
+
+    const range =
+      document.createRange();
+    range.setStart(
+      startNode,
+      startOffset,
+    );
+    range.setEnd(
+      endNode,
+      endOffset,
+    );
+
+    const selection =
+      window.getSelection();
+    if (!selection) {
+      return false;
+    }
+
+    element.focus();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    selectionRangeRef.current =
+      range.cloneRange();
+
+    const blockId =
+      element.dataset.studyEditableId;
+    if (blockId) {
       lastSelectedTextBlockIdRef.current =
-        firstId;
+        blockId;
       selectedBlockIdsRef.current = [
-        firstId,
+        blockId,
       ];
     }
 
-    firstEditable.focus();
+    element.scrollIntoView({
+      block: "center",
+      behavior: "smooth",
+    });
+    return true;
+  }
 
-    const nextSelection =
-      window.getSelection();
+  function navigateEditorFind(
+    direction: 1 | -1,
+    queryOverride?: string,
+    forceStart = false,
+  ) {
+    const matches =
+      getEditorFindMatches(queryOverride);
 
-    if (nextSelection) {
-      const nextRange =
-        document.createRange();
-
-      nextRange.selectNodeContents(
-        firstEditable,
+    if (matches.length === 0) {
+      setEditorFindCursor(-1);
+      setEditorFindStatus(
+        editorFindQuery
+          ? "일치 없음"
+          : "검색어 입력",
       );
-      nextRange.collapse(false);
-
-      nextSelection.removeAllRanges();
-      nextSelection.addRange(
-        nextRange,
-      );
-
-      selectionRangeRef.current =
-        nextRange.cloneRange();
+      return;
     }
 
+    const effectiveCursor =
+      forceStart ? -1 : editorFindCursor;
+    const nextIndex =
+      effectiveCursor < 0
+        ? direction > 0
+          ? 0
+          : matches.length - 1
+        : (
+            effectiveCursor +
+            direction +
+            matches.length
+          ) % matches.length;
+    const match = matches[nextIndex];
+    const editable =
+      match.source === "last-page"
+        ? document.querySelector<HTMLElement>(
+            `[data-study-last-page-id="${match.noteId}"]`,
+          )
+        : document.querySelector<HTMLElement>(
+            `[data-study-editable-id="${match.blockId}"]`,
+          );
+
+    if (
+      editable &&
+      selectTextOffsets(
+        editable,
+        match.offset,
+        match.length,
+      )
+    ) {
+      if (match.source === "last-page") {
+        selectedBlockIdsRef.current = [];
+        lastSelectedTextBlockIdRef.current = null;
+      }
+
+      setEditorFindCursor(nextIndex);
+      setEditorFindStatus(
+        `${nextIndex + 1} / ${matches.length}`,
+      );
+    }
+  }
+
+  function replaceCurrentEditorMatch() {
+    const range =
+      selectionRangeRef.current;
+
+    if (
+      !range ||
+      range.collapsed ||
+      !editorFindQuery
+    ) {
+      navigateEditorFind(1);
+      return;
+    }
+
+    const selected =
+      range.toString();
+    const matches =
+      editorFindCaseSensitive
+        ? selected === editorFindQuery
+        : selected.toLocaleLowerCase() ===
+          editorFindQuery.toLocaleLowerCase();
+
+    if (!matches) {
+      navigateEditorFind(1);
+      return;
+    }
+
+    runEditorCommand(
+      "insertText",
+      editorReplaceValue,
+    );
+    window.setTimeout(() => {
+      navigateEditorFind(1);
+    }, 0);
+  }
+
+  function replaceTextInsideHtml(
+    html: string,
+    query: string,
+    replacement: string,
+    caseSensitive: boolean,
+  ) {
+    const wrapper =
+      document.createElement("div");
+    wrapper.innerHTML = html;
+    const walker =
+      document.createTreeWalker(
+        wrapper,
+        NodeFilter.SHOW_TEXT,
+      );
+    const textNodes: Text[] = [];
+    let node = walker.nextNode();
+
+    while (node) {
+      textNodes.push(node as Text);
+      node = walker.nextNode();
+    }
+
+    textNodes.forEach((textNode) => {
+      const offsets = countTextMatches(
+        textNode.data,
+        query,
+        caseSensitive,
+      );
+
+      if (offsets.length === 0) {
+        return;
+      }
+
+      let nextValue = textNode.data;
+
+      for (
+        let index = offsets.length - 1;
+        index >= 0;
+        index -= 1
+      ) {
+        const offset = offsets[index];
+        nextValue =
+          nextValue.slice(0, offset) +
+          replacement +
+          nextValue.slice(
+            offset + query.length,
+          );
+      }
+
+      textNode.data = nextValue;
+    });
+
+    return wrapper.innerHTML;
+  }
+
+  function replaceAllEditorMatches() {
+    if (!editorFindQuery) {
+      return;
+    }
+
+    const activeNote =
+      getActiveEditorNote();
+    if (!activeNote) {
+      return;
+    }
+
+    let replacedCount = 0;
+    const countIn = (value: string) =>
+      countTextMatches(
+        stripHtml(value),
+        editorFindQuery,
+        editorFindCaseSensitive,
+      ).length;
+
+    updateSelectedNote((note) => ({
+      ...note,
+      blocks: note.blocks.map((block) => {
+        if (block.type !== "text") {
+          return block;
+        }
+
+        replacedCount += countIn(block.html);
+        return {
+          ...block,
+          html: replaceTextInsideHtml(
+            block.html,
+            editorFindQuery,
+            editorReplaceValue,
+            editorFindCaseSensitive,
+          ),
+        };
+      }),
+      lastPageHtml: (() => {
+        const current =
+          note.lastPageHtml ?? "";
+        replacedCount += countIn(current);
+        return replaceTextInsideHtml(
+          current,
+          editorFindQuery,
+          editorReplaceValue,
+          editorFindCaseSensitive,
+        );
+      })(),
+    }));
+
+    setEditorFindCursor(-1);
+    setEditorFindStatus(
+      `${replacedCount}개 변경`,
+    );
+  }
+
+  function openEditorFind(
+    replace = false,
+  ) {
+    const selectedText =
+      selectionRangeRef.current
+        ?.toString()
+        .trim() ?? "";
+
+    if (selectedText) {
+      setEditorFindQuery(selectedText);
+    }
+
+    setIsEditorFindOpen(true);
+    setIsEditorReplaceOpen(replace);
+    setEditorFindCursor(-1);
+    setEditorFindStatus("");
+  }
+
+  function selectNextSameWord() {
+    const selection =
+      window.getSelection();
+    const editable =
+      getActiveEditableElement();
+
+    if (!editable) {
+      return;
+    }
+
+    let word =
+      selection?.toString().trim() ?? "";
+
+    if (!word) {
+      const text =
+        editable.textContent ?? "";
+      const caretRange =
+        selection &&
+        selection.rangeCount > 0
+          ? selection.getRangeAt(0)
+          : null;
+      const prefix =
+        caretRange
+          ? caretRange.cloneRange()
+          : null;
+
+      if (prefix) {
+        prefix.selectNodeContents(
+          editable,
+        );
+        prefix.setEnd(
+          caretRange!.endContainer,
+          caretRange!.endOffset,
+        );
+        const offset =
+          prefix.toString().length;
+        const left =
+          text.slice(0, offset).match(/[\p{L}\p{N}_$]+$/u)?.[0] ?? "";
+        const right =
+          text.slice(offset).match(/^[\p{L}\p{N}_$]+/u)?.[0] ?? "";
+        word = `${left}${right}`;
+      }
+    }
+
+    if (!word) {
+      return;
+    }
+
+    setEditorFindQuery(word);
+    setIsEditorFindOpen(true);
+    setIsEditorReplaceOpen(false);
+    setEditorFindCursor(-1);
+
+    window.setTimeout(() => {
+      navigateEditorFind(
+        1,
+        word,
+        true,
+      );
+    }, 0);
+  }
+
+  function jumpToMatchingBracket() {
+    const editable =
+      getActiveEditableElement();
+    const selection =
+      window.getSelection();
+
+    if (
+      !editable ||
+      !selection ||
+      selection.rangeCount === 0
+    ) {
+      return;
+    }
+
+    const caretRange =
+      selection.getRangeAt(0);
+    const prefix =
+      caretRange.cloneRange();
+    prefix.selectNodeContents(editable);
+    prefix.setEnd(
+      caretRange.endContainer,
+      caretRange.endOffset,
+    );
+    const caretOffset =
+      prefix.toString().length;
+    const text =
+      editable.textContent ?? "";
+    const pairs: Record<string, string> = {
+      "(": ")",
+      "[": "]",
+      "{": "}",
+      ")": "(",
+      "]": "[",
+      "}": "{",
+    };
+    const candidateOffsets = [
+      caretOffset,
+      caretOffset - 1,
+    ];
+    let bracketOffset = -1;
+    let bracket = "";
+
+    for (const offset of candidateOffsets) {
+      const value = text[offset];
+      if (value && pairs[value]) {
+        bracketOffset = offset;
+        bracket = value;
+        break;
+      }
+    }
+
+    if (bracketOffset < 0) {
+      return;
+    }
+
+    const opening = "([{ ".includes(bracket)
+      ? bracket
+      : pairs[bracket];
+    const closing = pairs[opening];
+    const forward = bracket === opening;
+    let depth = 0;
+    let matchOffset = -1;
+
+    if (forward) {
+      for (
+        let index = bracketOffset;
+        index < text.length;
+        index += 1
+      ) {
+        if (text[index] === opening) depth += 1;
+        if (text[index] === closing) depth -= 1;
+        if (depth === 0) {
+          matchOffset = index;
+          break;
+        }
+      }
+    } else {
+      for (
+        let index = bracketOffset;
+        index >= 0;
+        index -= 1
+      ) {
+        if (text[index] === closing) depth += 1;
+        if (text[index] === opening) depth -= 1;
+        if (depth === 0) {
+          matchOffset = index;
+          break;
+        }
+      }
+    }
+
+    if (matchOffset >= 0) {
+      selectTextOffsets(
+        editable,
+        matchOffset,
+        1,
+      );
+    }
+  }
+
+  function getCaretTextOffset(editable: HTMLElement, range: Range) {
+    try {
+      const prefix = document.createRange();
+      prefix.selectNodeContents(editable);
+      prefix.setEnd(range.endContainer, range.endOffset);
+      return prefix.toString().length;
+    } catch {
+      return 0;
+    }
+  }
+
+  function escapePlainTextHtml(value: string) {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function getEditableLinePreset(
+    editable: HTMLElement,
+  ):
+    | "body"
+    | "heading1"
+    | "heading2"
+    | "heading3"
+    | "quote"
+    | "code"
+    | null {
+    const preset = editable.querySelector<HTMLElement>(
+      "[data-hoo-line-preset]",
+    )?.dataset.hooLinePreset;
+
+    return preset === "body" ||
+      preset === "heading1" ||
+      preset === "heading2" ||
+      preset === "heading3" ||
+      preset === "quote" ||
+      preset === "code"
+      ? preset
+      : null;
+  }
+
+  function getSelectedTextBlockIdsOrdered(
+    note: StudyNoteRecord,
+  ) {
+    const selected = new Set(
+      selectedBlockIdsRef.current,
+    );
+    const activeId =
+      lastSelectedTextBlockIdRef.current;
+
+    if (activeId) {
+      selected.add(activeId);
+    }
+
+    return note.blocks
+      .filter(
+        (block): block is StudyTextBlock =>
+          block.type === "text" &&
+          selected.has(block.id),
+      )
+      .map((block) => block.id);
+  }
+
+  function focusTextBlockAtOffset(
+    blockId: string,
+    offset: number,
+  ) {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const editable = document.querySelector<HTMLElement>(
+          `[data-study-editable-id="${blockId}"]`,
+        );
+        if (!editable) return;
+
+        editable.focus();
+        const point = resolveStudyTextPoint(
+          editable,
+          Math.max(
+            0,
+            Math.min(
+              getStudyEditableTextLength(editable),
+              offset,
+            ),
+          ),
+        );
+        const selection = window.getSelection();
+        if (!selection) return;
+        const range = document.createRange();
+        range.setStart(point.node, point.offset);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        selectionRangeRef.current = range.cloneRange();
+        lastSelectedTextBlockIdRef.current = blockId;
+        selectedBlockIdsRef.current = [blockId];
+      });
+    });
+  }
+
+  function mergeTextLineAtBoundary(
+    blockId: string,
+    direction: "previous" | "next",
+  ) {
+    const note = getActiveEditorNote();
+    if (!note) return false;
+
+    const index = note.blocks.findIndex(
+      (block) => block.id === blockId,
+    );
+    if (index < 0) return false;
+
+    const current = note.blocks[index];
+    if (current.type !== "text") return false;
+
+    const neighborIndex =
+      direction === "previous" ? index - 1 : index + 1;
+    if (
+      neighborIndex < 0 ||
+      neighborIndex >= note.blocks.length
+    ) {
+      return false;
+    }
+
+    const neighbor = note.blocks[neighborIndex];
+    if (neighbor.type !== "text") {
+      return false;
+    }
+
+    const previous =
+      direction === "previous" ? neighbor : current;
+    const next =
+      direction === "previous" ? current : neighbor;
+    const previousLength = stripHtml(previous.html).length;
+    const mergedHtml = `${previous.html ?? ""}${next.html ?? ""}`;
+
+    updateSelectedNote((source) => {
+      const blocks = [...source.blocks];
+      const previousIndex = blocks.findIndex(
+        (block) => block.id === previous.id,
+      );
+      const nextIndex = blocks.findIndex(
+        (block) => block.id === next.id,
+      );
+      if (previousIndex < 0 || nextIndex < 0) return source;
+
+      const target = blocks[previousIndex];
+      if (target.type !== "text") return source;
+
+      blocks[previousIndex] = {
+        ...target,
+        html: mergedHtml,
+        preserveEmpty: true,
+      };
+      blocks.splice(nextIndex, 1);
+
+      return { ...source, blocks };
+    });
+
+    focusTextBlockAtOffset(previous.id, previousLength);
+    return true;
+  }
+
+  function deleteSelectedTextLines() {
+    const note = getActiveEditorNote();
+    if (!note) return;
+
+    const ids = getSelectedTextBlockIdsOrdered(note);
+    if (ids.length === 0) return;
+
+    const idSet = new Set(ids);
+    const allText = note.blocks.filter(
+      (block): block is StudyTextBlock => block.type === "text",
+    );
+    const firstSelectedTextIndex = allText.findIndex(
+      (block) => idSet.has(block.id),
+    );
+    const fallbackExisting =
+      allText[firstSelectedTextIndex + ids.length] ??
+      allText[firstSelectedTextIndex - 1] ??
+      null;
+    const replacement =
+      allText.length === ids.length
+        ? { ...createTextBlock(false), preserveEmpty: true }
+        : null;
+
+    updateSelectedNote((source) => {
+      const blocks = source.blocks.filter(
+        (block) => !idSet.has(block.id),
+      );
+      if (replacement) {
+        const insertionIndex = Math.min(
+          blocks.length,
+          Math.max(0, source.blocks.findIndex((block) => block.id === ids[0])),
+        );
+        blocks.splice(insertionIndex, 0, replacement);
+      }
+      return { ...source, blocks };
+    });
+
+    const focusId = replacement?.id ?? fallbackExisting?.id;
+    selectedBlockIdsRef.current = focusId ? [focusId] : [];
+    lastSelectedTextBlockIdRef.current = focusId ?? null;
+    if (focusId) {
+      focusTextBlockAtOffset(focusId, 0);
+    }
+  }
+
+  function duplicateSelectedTextLines(
+    direction: "up" | "down",
+  ) {
+    const note = getActiveEditorNote();
+    if (!note) return;
+    const ids = getSelectedTextBlockIdsOrdered(note);
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const selectedBlocks = note.blocks.filter(
+      (block): block is StudyTextBlock =>
+        block.type === "text" && idSet.has(block.id),
+    );
+    if (selectedBlocks.length === 0) return;
+
+    const clones = selectedBlocks.map((block) => ({
+      ...block,
+      id: createId(),
+      annotation: block.annotation ? { ...block.annotation } : undefined,
+      pageBreakBefore: false,
+    }));
+
+    updateSelectedNote((source) => {
+      const blocks = [...source.blocks];
+      const indices = ids
+        .map((id) => blocks.findIndex((block) => block.id === id))
+        .filter((index) => index >= 0);
+      if (indices.length === 0) return source;
+      const insertAt =
+        direction === "up"
+          ? Math.min(...indices)
+          : Math.max(...indices) + 1;
+      blocks.splice(insertAt, 0, ...clones);
+      return { ...source, blocks };
+    });
+
+    selectedBlockIdsRef.current = clones.map((block) => block.id);
+    lastSelectedTextBlockIdRef.current = clones.at(-1)?.id ?? null;
+    if (clones[0]) focusTextBlockAtOffset(clones[0].id, 0);
+  }
+
+  function moveSelectedTextLines(
+    direction: "up" | "down",
+  ) {
+    const note = getActiveEditorNote();
+    if (!note) return;
+    const ids = getSelectedTextBlockIdsOrdered(note);
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const indices = note.blocks
+      .map((block, index) =>
+        block.type === "text" && idSet.has(block.id) ? index : -1,
+      )
+      .filter((index) => index >= 0);
+    if (indices.length === 0) return;
+    const first = Math.min(...indices);
+    const last = Math.max(...indices);
+
+    // 줄 선택 사이에 이미지가 끼어 있으면 안전을 위해 이동하지 않는다.
+    if (
+      note.blocks.slice(first, last + 1).some(
+        (block) => block.type !== "text" || !idSet.has(block.id),
+      )
+    ) {
+      setEditorFindStatus("연속된 텍스트 줄만 함께 이동할 수 있어요.");
+      return;
+    }
+
+    const swapIndex = direction === "up" ? first - 1 : last + 1;
+    if (
+      swapIndex < 0 ||
+      swapIndex >= note.blocks.length ||
+      note.blocks[swapIndex].type !== "text"
+    ) {
+      return;
+    }
+
+    updateSelectedNote((source) => {
+      const blocks = [...source.blocks];
+      const group = blocks.splice(first, last - first + 1);
+      if (direction === "up") {
+        blocks.splice(first - 1, 0, ...group);
+      } else {
+        blocks.splice(first + 1, 0, ...group);
+      }
+      return { ...source, blocks };
+    });
+
+    selectedBlockIdsRef.current = ids;
+    lastSelectedTextBlockIdRef.current = ids.at(-1) ?? null;
+    if (ids[0]) focusTextBlockAtOffset(ids[0], 0);
+  }
+
+  function toggleBlockComment() {
+    const editables = getSelectedEditableElements();
+    if (editables.length === 0) return;
+
+    const first = editables[0];
+    const last = editables[editables.length - 1];
+    const firstText = (first.textContent ?? "").trimStart();
+    const lastText = (last.textContent ?? "").trimEnd();
+    const isCommented = firstText.startsWith("/*") && lastText.endsWith("*/");
+
+    if (isCommented) {
+      const firstWalker = document.createTreeWalker(first, NodeFilter.SHOW_TEXT);
+      const firstNode = firstWalker.nextNode() as Text | null;
+      if (firstNode) firstNode.data = firstNode.data.replace(/^(\s*)\/\*\s?/, "$1");
+
+      const textNodes: Text[] = [];
+      const lastWalker = document.createTreeWalker(last, NodeFilter.SHOW_TEXT);
+      let node = lastWalker.nextNode();
+      while (node) {
+        textNodes.push(node as Text);
+        node = lastWalker.nextNode();
+      }
+      const lastNode = textNodes.at(-1);
+      if (lastNode) lastNode.data = lastNode.data.replace(/\s*\*\/(\s*)$/, "$1");
+    } else {
+      const firstWalker = document.createTreeWalker(first, NodeFilter.SHOW_TEXT);
+      const firstNode = firstWalker.nextNode() as Text | null;
+      if (firstNode) firstNode.data = `/* ${firstNode.data}`;
+      else first.appendChild(document.createTextNode("/* "));
+
+      const textNodes: Text[] = [];
+      const lastWalker = document.createTreeWalker(last, NodeFilter.SHOW_TEXT);
+      let node = lastWalker.nextNode();
+      while (node) {
+        textNodes.push(node as Text);
+        node = lastWalker.nextNode();
+      }
+      const lastNode = textNodes.at(-1);
+      if (lastNode) lastNode.data = `${lastNode.data} */`;
+      else last.appendChild(document.createTextNode(" */"));
+    }
+
+    syncEditorCommandResult();
+  }
+
+  function stepEditorFontSize(delta: -1 | 1) {
+    const current = activeFontSizeRef.current;
+    const currentIndex = FONT_SIZE_OPTIONS.reduce(
+      (best, value, index) =>
+        Math.abs(value - current) < Math.abs(FONT_SIZE_OPTIONS[best] - current)
+          ? index
+          : best,
+      0,
+    );
+    const nextIndex = Math.max(
+      0,
+      Math.min(FONT_SIZE_OPTIONS.length - 1, currentIndex + delta),
+    );
+    applyFontSize(FONT_SIZE_OPTIONS[nextIndex]);
+  }
+
+  function openSameWordBulkEdit() {
+    const selection = window.getSelection();
+    const selectedText = selection?.toString().trim() ?? "";
+    if (!selectedText) {
+      setEditorFindStatus("같은 단어를 일괄 편집하려면 먼저 단어를 선택하세요.");
+      return;
+    }
+    setEditorFindQuery(selectedText);
+    setEditorReplaceQuery("");
+    setIsEditorFindOpen(true);
+    setIsEditorReplaceOpen(true);
+    setEditorFindStatus(`“${selectedText}” 전체 변경 준비`);
+  }
+
+  function insertMultilinePlainTextAtCaret(text: string) {
+    const note = getActiveEditorNote();
+    const editable = getActiveEditableElement();
+    const blockId = editable?.dataset.studyEditableId;
+    if (!note || !editable || !blockId) return false;
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return false;
+    let range = selection.getRangeAt(0);
+
+    if (!editable.contains(range.startContainer)) {
+      return false;
+    }
+
+    if (!range.collapsed && editable.contains(range.endContainer)) {
+      range.deleteContents();
+      range.collapse(true);
+    }
+
+    const afterRange = document.createRange();
+    afterRange.selectNodeContents(editable);
+    afterRange.setStart(range.startContainer, range.startOffset);
+    const afterFragment = afterRange.extractContents();
+    const afterBox = document.createElement("div");
+    afterBox.appendChild(afterFragment);
+
+    const beforeHtml = editable.innerHTML === "<br>" ? "" : editable.innerHTML;
+    const afterHtml = afterBox.innerHTML === "<br>" ? "" : afterBox.innerHTML;
+    const lines = text.replace(/\r\n?/g, "\n").split("\n");
+    if (lines.length <= 1) return false;
+
+    const firstLine = escapePlainTextHtml(lines[0]);
+    const tailLines = lines.slice(1);
+    const insertedBlocks = tailLines.map((line, index) => ({
+      ...createTextBlock(false),
+      html:
+        index === tailLines.length - 1
+          ? `${escapePlainTextHtml(line)}${afterHtml}`
+          : escapePlainTextHtml(line),
+      preserveEmpty: true,
+    }));
+
+    updateSelectedNote((source) => {
+      const targetIndex = source.blocks.findIndex((block) => block.id === blockId);
+      if (targetIndex < 0) return source;
+      const blocks = source.blocks.map((block) =>
+        block.id === blockId && block.type === "text"
+          ? { ...block, html: `${beforeHtml}${firstLine}`, preserveEmpty: true }
+          : block,
+      );
+      blocks.splice(targetIndex + 1, 0, ...insertedBlocks);
+      return { ...source, blocks };
+    });
+
+    const target = insertedBlocks.at(-1);
+    if (target) {
+      const pastedTailLength = stripHtml(target.html).length - stripHtml(afterHtml).length;
+      focusTextBlockAtOffset(target.id, Math.max(0, pastedTailLength));
+    }
     return true;
   }
 
@@ -7389,16 +10478,267 @@ export default function StudyNote({ active }: StudyNoteProps) {
     const hasCommandKey =
       event.ctrlKey ||
       event.metaKey;
+    const key =
+      event.key.toLowerCase();
 
-    const isUndoShortcut =
-      hasCommandKey &&
-      !event.shiftKey &&
-      event.key.toLowerCase() === "z";
-
-    if (isUndoShortcut) {
+    const stopShortcut = () => {
       event.preventDefault();
       event.stopPropagation();
+    };
+
+    if (
+      hasCommandKey &&
+      !event.shiftKey &&
+      key === "s"
+    ) {
+      stopShortcut();
+      saveStudyNotesNow();
+      return;
+    }
+
+    if (
+      hasCommandKey &&
+      !event.shiftKey &&
+      key === "z"
+    ) {
+      stopShortcut();
       undoSelectedNote();
+      return;
+    }
+
+    if (
+      hasCommandKey &&
+      ((event.shiftKey && key === "z") ||
+        (!event.shiftKey && key === "y"))
+    ) {
+      stopShortcut();
+      redoSelectedNote();
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "b") {
+      stopShortcut();
+      togglePrimaryTextFormat("bold");
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "i") {
+      stopShortcut();
+      togglePrimaryTextFormat("italic");
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "u") {
+      stopShortcut();
+      togglePrimaryTextFormat("underline");
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "x") {
+      stopShortcut();
+      togglePrimaryTextFormat("strikeThrough");
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "h") {
+      stopShortcut();
+      toggleHighlightFormat();
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "k") {
+      stopShortcut();
+      openLinkDialog();
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "f") {
+      stopShortcut();
+      openEditorFind(false);
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "h") {
+      stopShortcut();
+      openEditorFind(true);
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "g") {
+      stopShortcut();
+      openGoToLineDialog();
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "f") {
+      stopShortcut();
+      openGlobalSearchDialog();
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "p") {
+      stopShortcut();
+      openQuickOpenDialog();
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "d") {
+      stopShortcut();
+      deleteSelectedTextLines();
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "l") {
+      stopShortcut();
+      openSameWordBulkEdit();
+      return;
+    }
+
+    if (event.altKey && event.shiftKey && !hasCommandKey && key === "a") {
+      stopShortcut();
+      toggleBlockComment();
+      return;
+    }
+
+    if (hasCommandKey && event.altKey && !event.shiftKey && ["1", "2", "3"].includes(key)) {
+      stopShortcut();
+      applyLinePreset(
+        key === "1" ? "heading1" : key === "2" ? "heading2" : "heading3",
+      );
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "7") {
+      stopShortcut();
+      runEditorCommand("insertOrderedList");
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "8") {
+      stopShortcut();
+      runEditorCommand("insertUnorderedList");
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && (event.key === ">" || event.key === "<")) {
+      stopShortcut();
+      stepEditorFontSize(event.key === ">" ? 1 : -1);
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "e") {
+      stopShortcut();
+      runEditorCommand("justifyCenter");
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "r") {
+      stopShortcut();
+      runEditorCommand("justifyRight");
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "j") {
+      stopShortcut();
+      runEditorCommand("justifyFull");
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "=") {
+      stopShortcut();
+      runEditorCommand("subscript");
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "=") {
+      stopShortcut();
+      runEditorCommand("superscript");
+      return;
+    }
+
+    if (hasCommandKey && event.shiftKey && key === "\\") {
+      stopShortcut();
+      jumpToMatchingBracket();
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "\\") {
+      stopShortcut();
+      clearEditorFormatting();
+      return;
+    }
+
+    if (hasCommandKey && !event.shiftKey && key === "/") {
+      stopShortcut();
+      toggleLineComment();
+      return;
+    }
+
+    if (
+      event.altKey &&
+      !hasCommandKey &&
+      !event.shiftKey &&
+      (event.key === "ArrowUp" ||
+        event.key === "ArrowDown")
+    ) {
+      stopShortcut();
+      moveSelectedTextLines(
+        event.key === "ArrowUp" ? "up" : "down",
+      );
+      return;
+    }
+
+    if (
+      event.altKey &&
+      event.shiftKey &&
+      !hasCommandKey &&
+      (event.key === "ArrowUp" ||
+        event.key === "ArrowDown")
+    ) {
+      stopShortcut();
+      duplicateSelectedTextLines(
+        event.key === "ArrowUp" ? "up" : "down",
+      );
+      return;
+    }
+
+    if (
+      event.altKey &&
+      event.shiftKey &&
+      !hasCommandKey &&
+      key === "f"
+    ) {
+      stopShortcut();
+      formatCurrentCodeLine();
+      return;
+    }
+
+    if (
+      hasCommandKey &&
+      event.shiftKey &&
+      key === "k"
+    ) {
+      stopShortcut();
+      deleteSelectedTextLines();
+      return;
+    }
+
+    if (
+      hasCommandKey &&
+      event.key === "Enter"
+    ) {
+      stopShortcut();
+      insertTextLineAt(
+        event.shiftKey ? "before" : "after",
+      );
+      return;
+    }
+
+    if (event.key === "Tab") {
+      stopShortcut();
+      mutateSelectedLinePrefixes(
+        event.shiftKey ? "outdent" : "indent",
+      );
       return;
     }
 
@@ -7409,7 +10749,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
     if (
       isSelectAllShortcut &&
-      selectAllTextInCurrentPage(
+      selectAllTextInCurrentNote(
         event.target,
       )
     ) {
@@ -7686,6 +11026,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
             brace: rawBlock.brace === true,
             pageBreakBefore:
               rawBlock.pageBreakBefore === true
+                ? true
+                : undefined,
+            preserveEmpty:
+              rawBlock.preserveEmpty === true
                 ? true
                 : undefined,
             annotation,
@@ -8381,6 +11725,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 rawBlock.pageBreakBefore === true
                   ? true
                   : undefined,
+              preserveEmpty:
+                rawBlock.preserveEmpty === true
+                  ? true
+                  : undefined,
               annotation,
             });
             continue;
@@ -8767,6 +12115,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
                 brace: block.brace,
                 pageBreakBefore:
                   block.pageBreakBefore,
+                preserveEmpty:
+                  block.preserveEmpty,
                 annotation: block.annotation,
               });
               continue;
@@ -9334,6 +12684,201 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
   }
 
+  function renderDualModeConfirmModal() {
+    if (
+      !isDualModeConfirmOpen ||
+      !pendingDualOpenNoteId
+    ) {
+      return null;
+    }
+
+    const pendingNote =
+      notesRef.current.find(
+        (note) =>
+          note.id === pendingDualOpenNoteId,
+      ) ??
+      notes.find(
+        (note) =>
+          note.id === pendingDualOpenNoteId,
+      );
+
+    if (!pendingNote) {
+      return null;
+    }
+
+    return (
+      <div
+        className="fixed inset-0 z-[13100] flex items-center justify-center bg-black/60 px-4 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label="복수파일 모드 선택"
+      >
+        <div
+          className={`w-full max-w-[420px] rounded-[18px] border p-6 shadow-[0_30px_100px_rgba(0,0,0,0.45)] ${
+            isDarkMode
+              ? "border-[#3a3d43] bg-[#17191d] text-white"
+              : "border-[#e3e3de] bg-white text-[#222]"
+          }`}
+        >
+          <p className="text-[10px] font-black tracking-[0.16em] opacity-40">
+            OPEN NOTE
+          </p>
+          <h2 className="mt-1 text-[20px] font-black">
+            복수파일을 생성하시겠습니까?
+          </h2>
+          <p className="mt-3 text-[11px] font-bold leading-5 opacity-55">
+            YES를 누르면 “{pendingNote.title}” 파일을 왼쪽에 열고,
+            오른쪽에 함께 볼 두 번째 파일을 선택합니다.
+          </p>
+
+          <div className="mt-6 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const noteId =
+                  pendingDualOpenNoteId;
+
+                setIsDualModeConfirmOpen(false);
+                setPendingDualOpenNoteId(null);
+
+                if (noteId) {
+                  openSingleNote(noteId);
+                }
+              }}
+              className={`rounded-lg px-4 py-3 text-[11px] font-black transition ${
+                isDarkMode
+                  ? "bg-white/10 hover:bg-white/15"
+                  : "bg-[#f0f0ed] hover:bg-[#e7e7e2]"
+              }`}
+            >
+              NO · 단일파일
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                startDualFileMode(
+                  pendingDualOpenNoteId,
+                )
+              }
+              className="rounded-lg bg-[#6a5410] px-4 py-3 text-[11px] font-black text-[#ffe48a] transition hover:bg-[#7a6214]"
+            >
+              YES · 복수파일
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderDualFilePickerModal() {
+    if (!isDualFilePickerOpen) {
+      return null;
+    }
+
+    const blockedNoteId =
+      dualFilePickerTarget === "primary"
+        ? dualSecondaryNoteId
+        : dualPrimaryNoteId;
+
+    const availableNotes =
+      [...notes]
+        .filter(
+          (note) =>
+            note.id !== blockedNoteId,
+        )
+        .sort((first, second) =>
+          second.updatedAt.localeCompare(
+            first.updatedAt,
+          ),
+        );
+
+    return (
+      <div
+        className="fixed inset-0 z-[13110] flex items-center justify-center bg-black/65 px-4 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label="복수파일 선택"
+      >
+        <div
+          className={`w-full max-w-[620px] rounded-[18px] border p-6 shadow-[0_30px_100px_rgba(0,0,0,0.48)] ${
+            isDarkMode
+              ? "border-[#3a3d43] bg-[#17191d] text-white"
+              : "border-[#e3e3de] bg-white text-[#222]"
+          }`}
+        >
+          <p className="text-[10px] font-black tracking-[0.16em] opacity-40">
+            MULTI FILE
+          </p>
+          <h2 className="mt-1 text-[20px] font-black">
+            {dualFilePickerTarget === "primary"
+              ? "왼쪽 파일 선택"
+              : "오른쪽 파일 선택"}
+          </h2>
+          <p className="mt-2 text-[11px] font-bold opacity-45">
+            양쪽 파일은 각각 독립적으로 스크롤하고 기존 편집 기능을 그대로 사용합니다.
+          </p>
+
+          <div className="mt-5 max-h-[430px] space-y-2 overflow-y-auto pr-1">
+            {availableNotes.map((note) => (
+              <button
+                key={note.id}
+                type="button"
+                onClick={() =>
+                  selectDualFile(note.id)
+                }
+                className={`flex w-full items-center justify-between gap-4 rounded-xl border px-4 py-4 text-left transition ${
+                  isDarkMode
+                    ? "border-white/10 bg-white/[0.035] hover:bg-white/[0.07]"
+                    : "border-black/10 bg-[#fafaf8] hover:bg-[#f4f1e8]"
+                }`}
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-[13px] font-black">
+                    {note.title}
+                  </p>
+                  <p className="mt-1 truncate text-[9px] font-bold opacity-45">
+                    {note.category} · {formatModifiedDateTime(note.updatedAt)}
+                  </p>
+                </div>
+                <span className="shrink-0 text-lg opacity-45">›</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-5 flex justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setIsDualFilePickerOpen(false);
+
+                if (
+                  !dualPrimaryNoteId ||
+                  !dualSecondaryNoteId
+                ) {
+                  const fallbackNoteId =
+                    dualPrimaryNoteId ??
+                    dualSecondaryNoteId;
+
+                  if (fallbackNoteId) {
+                    openSingleNote(fallbackNoteId);
+                  }
+                }
+              }}
+              className={`rounded-lg px-5 py-2.5 text-[11px] font-black transition ${
+                isDarkMode
+                  ? "bg-white/10 hover:bg-white/15"
+                  : "bg-[#f0f0ed] hover:bg-[#e7e7e3]"
+              }`}
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   function renderTrashBin() {
     const hasSelectedImage =
       selectedImageDeleteTarget !== null;
@@ -9407,6 +12952,14 @@ export default function StudyNote({ active }: StudyNoteProps) {
      * 카테고리 화면에서는 메인으로,
      * 메인에서는 이전 페이지(HOO)로 돌아간다.
      */
+    if (
+      viewMode === "editor" &&
+      isDualFileMode
+    ) {
+      leaveDualFileMode();
+      return;
+    }
+
     if (viewMode === "editor") {
       const currentNote =
         selectedNote ??
@@ -9922,6 +13475,665 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
   }
 
+  function renderEditorUtilityDialog() {
+    if (!editorUtilityDialog) {
+      return null;
+    }
+
+    const quickMatches =
+      editorUtilityDialog.type === "quick-open"
+        ? getQuickOpenMatches(
+            editorUtilityDialog.value,
+          )
+        : [];
+
+    const title =
+      editorUtilityDialog.type === "link"
+        ? "링크 연결"
+        : editorUtilityDialog.type === "line"
+          ? "줄로 이동"
+          : editorUtilityDialog.type === "global-search"
+            ? "전체 노트 검색"
+            : "파일 빠르게 열기";
+
+    const description =
+      editorUtilityDialog.type === "link"
+        ? "선택한 텍스트에 연결할 주소를 입력하세요."
+        : editorUtilityDialog.type === "line"
+          ? "현재 파일에서 이동할 줄 번호를 입력하세요."
+          : editorUtilityDialog.type === "global-search"
+            ? "제목·본문·주석·마지막 페이지 전체에서 검색합니다."
+            : "파일명 또는 카테고리를 입력하세요.";
+
+    const submitDialog = () => {
+      if (editorUtilityDialog.type === "link") {
+        applyPendingLink();
+        return;
+      }
+
+      if (editorUtilityDialog.type === "line") {
+        jumpToEditorLineNumber(
+          editorUtilityDialog.value,
+        );
+        return;
+      }
+
+      if (
+        editorUtilityDialog.type ===
+        "global-search"
+      ) {
+        const query =
+          editorUtilityDialog.value.trim();
+
+        if (!query) {
+          return;
+        }
+
+        setEditorUtilityDialog(null);
+        setSearchQuery(query);
+        setIsSearchOpen(true);
+        setViewMode("home");
+        window.setTimeout(() => {
+          searchInputRef.current?.focus();
+        }, 0);
+        return;
+      }
+
+      const firstMatch =
+        quickMatches[0];
+      if (firstMatch) {
+        setEditorUtilityDialog(null);
+        openSingleNote(firstMatch.id);
+      }
+    };
+
+    return (
+      <div
+        className="fixed inset-0 z-[14000] flex items-start justify-center bg-black/55 px-4 pt-[14vh] backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onMouseDown={(event) => {
+          if (
+            event.target ===
+            event.currentTarget
+          ) {
+            setEditorUtilityDialog(null);
+          }
+        }}
+      >
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            submitDialog();
+          }}
+          className={`w-full max-w-[560px] overflow-hidden rounded-[16px] border shadow-[0_30px_90px_rgba(0,0,0,0.42)] ${
+            isDarkMode
+              ? "border-[#3a3d43] bg-[#17191d] text-white"
+              : "border-[#deded9] bg-white text-[#242424]"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-current/10 px-5 py-4">
+            <div>
+              <p className="text-[14px] font-black">
+                {title}
+              </p>
+              <p className="mt-1 text-[10px] font-bold opacity-45">
+                {description}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                setEditorUtilityDialog(null)
+              }
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-current/10 text-[15px] font-black opacity-60 transition hover:opacity-100"
+              aria-label="닫기"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="p-4">
+            <input
+              ref={editorUtilityInputRef}
+              value={editorUtilityDialog.value}
+              inputMode={
+                editorUtilityDialog.type === "line"
+                  ? "numeric"
+                  : "text"
+              }
+              onChange={(event) =>
+                setEditorUtilityDialog(
+                  (previous) =>
+                    previous
+                      ? {
+                          ...previous,
+                          value:
+                            event.target.value,
+                        }
+                      : previous,
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setEditorUtilityDialog(null);
+                }
+              }}
+              placeholder={
+                editorUtilityDialog.type === "link"
+                  ? "https://example.com"
+                  : editorUtilityDialog.type === "line"
+                    ? "1"
+                    : editorUtilityDialog.type === "global-search"
+                      ? "전체 노트에서 검색"
+                      : "파일명 또는 카테고리"
+              }
+              className={`h-11 w-full rounded-[9px] border px-3 text-[12px] font-bold outline-none transition focus:border-[#d6b522] ${
+                isDarkMode
+                  ? "border-white/10 bg-white/5"
+                  : "border-black/10 bg-[#fafaf8]"
+              }`}
+            />
+
+            {editorUtilityDialog.type ===
+              "quick-open" && (
+              <div className="mt-3 max-h-[320px] space-y-1 overflow-y-auto">
+                {quickMatches.length > 0 ? (
+                  quickMatches.map((note) => (
+                    <button
+                      key={note.id}
+                      type="button"
+                      onClick={() => {
+                        setEditorUtilityDialog(null);
+                        openSingleNote(note.id);
+                      }}
+                      className={`flex w-full items-center justify-between gap-4 rounded-lg border px-3 py-3 text-left transition ${
+                        isDarkMode
+                          ? "border-white/10 bg-white/[0.03] hover:bg-white/[0.08]"
+                          : "border-black/10 bg-[#fafaf8] hover:bg-[#f3f0e7]"
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate text-[12px] font-black">
+                          {note.title}
+                        </p>
+                        <p className="mt-1 truncate text-[9px] font-bold opacity-40">
+                          {note.category} · {formatModifiedDateTime(note.updatedAt)}
+                        </p>
+                      </div>
+                      <span className="shrink-0 opacity-35">
+                        Enter
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="rounded-lg border border-dashed border-current/15 px-4 py-8 text-center text-[11px] font-bold opacity-40">
+                    일치하는 파일이 없습니다.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {editorUtilityDialog.type !==
+              "quick-open" && (
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEditorUtilityDialog(null)
+                  }
+                  className="h-9 rounded-md border border-current/10 px-4 text-[10px] font-black opacity-70"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  className="h-9 rounded-md bg-[#d6b522] px-4 text-[10px] font-black text-black transition hover:brightness-105"
+                >
+                  적용
+                </button>
+              </div>
+            )}
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  function renderEditorFindReplaceBar() {
+    if (!isEditorFindOpen) {
+      return null;
+    }
+
+    const matches = getEditorFindMatches();
+    const status =
+      editorFindStatus ||
+      (editorFindQuery
+        ? `${matches.length}개 일치`
+        : "검색어 입력");
+
+    return (
+      <div
+        className={`pointer-events-auto absolute right-1 top-[49px] z-[650] flex max-w-[calc(100vw-290px)] items-center gap-1 rounded-lg border p-1.5 shadow-xl ${
+          isDarkMode
+            ? "border-[#393c42] bg-[#17191d] text-white"
+            : "border-[#deded9] bg-white text-[#2a2a2a]"
+        }`}
+      >
+        <input
+          value={editorFindQuery}
+          onChange={(event) => {
+            setEditorFindQuery(event.target.value);
+            setEditorFindCursor(-1);
+            setEditorFindStatus("");
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              navigateEditorFind(
+                event.shiftKey ? -1 : 1,
+              );
+            }
+            if (event.key === "Escape") {
+              setIsEditorFindOpen(false);
+            }
+          }}
+          autoFocus
+          placeholder="찾기"
+          className={`h-8 w-[180px] rounded-md border px-2 text-[11px] font-bold outline-none ${
+            isDarkMode
+              ? "border-white/10 bg-white/5"
+              : "border-black/10 bg-[#fafaf8]"
+          }`}
+        />
+
+        {isEditorReplaceOpen && (
+          <input
+            value={editorReplaceValue}
+            onChange={(event) =>
+              setEditorReplaceValue(
+                event.target.value,
+              )
+            }
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                replaceCurrentEditorMatch();
+              }
+            }}
+            placeholder="바꾸기"
+            className={`h-8 w-[180px] rounded-md border px-2 text-[11px] font-bold outline-none ${
+              isDarkMode
+                ? "border-white/10 bg-white/5"
+                : "border-black/10 bg-[#fafaf8]"
+            }`}
+          />
+        )}
+
+        <button
+          type="button"
+          onClick={() =>
+            setEditorFindCaseSensitive(
+              (previous) => !previous,
+            )
+          }
+          className={`h-8 rounded-md border px-2 text-[10px] font-black ${
+            editorFindCaseSensitive
+              ? "border-[#d6b522] bg-[#3a310d] text-[#ffe66d]"
+              : isDarkMode
+                ? "border-white/10 bg-white/5"
+                : "border-black/10 bg-[#fafaf8]"
+          }`}
+          title="대소문자 구분"
+        >
+          Aa
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setEditorFindWholeWord(
+              (previous) => !previous,
+            );
+            setEditorFindCursor(-1);
+            setEditorFindStatus("");
+          }}
+          className={`h-8 rounded-md border px-2 text-[10px] font-black ${
+            editorFindWholeWord
+              ? "border-[#d6b522] bg-[#3a310d] text-[#ffe66d]"
+              : isDarkMode
+                ? "border-white/10 bg-white/5"
+                : "border-black/10 bg-[#fafaf8]"
+          }`}
+          title="단어 단위 일치"
+          aria-pressed={editorFindWholeWord}
+        >
+          W
+        </button>
+
+        <button
+          type="button"
+          onClick={() => navigateEditorFind(-1)}
+          className="h-8 min-w-8 rounded-md border border-current/10 text-[12px] font-black"
+          title="이전 결과"
+        >
+          ↑
+        </button>
+        <button
+          type="button"
+          onClick={() => navigateEditorFind(1)}
+          className="h-8 min-w-8 rounded-md border border-current/10 text-[12px] font-black"
+          title="다음 결과"
+        >
+          ↓
+        </button>
+
+        {isEditorReplaceOpen && (
+          <>
+            <button
+              type="button"
+              onClick={replaceCurrentEditorMatch}
+              className="h-8 rounded-md border border-current/10 px-2 text-[9px] font-black"
+              title="현재 항목 바꾸기"
+            >
+              변경
+            </button>
+            <button
+              type="button"
+              onClick={replaceAllEditorMatches}
+              className="h-8 rounded-md border border-current/10 px-2 text-[9px] font-black"
+              title="모두 바꾸기"
+            >
+              전체
+            </button>
+          </>
+        )}
+
+        <span className="min-w-[64px] px-1 text-center text-[9px] font-black opacity-55">
+          {status}
+        </span>
+
+        <button
+          type="button"
+          onClick={() => {
+            setIsEditorFindOpen(false);
+            setEditorFindStatus("");
+          }}
+          className="h-8 min-w-8 rounded-md border border-current/10 text-[13px] font-black"
+          title="닫기"
+        >
+          ×
+        </button>
+      </div>
+    );
+  }
+
+  function renderEditorAdvancedMenu() {
+    if (!editorAdvancedMenu) {
+      return null;
+    }
+
+    const itemClass = `flex min-h-9 w-full items-center justify-between gap-4 rounded-md px-3 py-2 text-left text-[10px] font-black transition ${
+      isDarkMode
+        ? "hover:bg-white/10"
+        : "hover:bg-black/5"
+    }`;
+    const shortcutClass =
+      "shrink-0 text-[8px] font-bold opacity-35";
+
+    const runAndClose = (
+      action: () => void,
+    ) => {
+      setEditorAdvancedMenu(null);
+      action();
+    };
+
+    return (
+      <div
+        className={`pointer-events-auto absolute left-[72px] top-[49px] z-[720] w-[310px] overflow-hidden rounded-[11px] border p-2 shadow-[0_18px_55px_rgba(0,0,0,0.28)] ${
+          isDarkMode
+            ? "border-[#393c42] bg-[#17191d] text-white"
+            : "border-[#deded9] bg-white text-[#282828]"
+        }`}
+      >
+        {editorAdvancedMenu ===
+          "paragraph" && (
+          <>
+            <p className="px-3 pb-2 pt-1 text-[9px] font-black tracking-[0.14em] opacity-35">
+              문단 스타일
+            </p>
+            {[
+              ["본문", "body"],
+              ["제목 1", "heading1"],
+              ["제목 2", "heading2"],
+              ["제목 3", "heading3"],
+              ["인용문", "quote"],
+              ["코드 줄", "code"],
+            ].map(([label, preset]) => (
+              <button
+                key={preset}
+                type="button"
+                onMouseDown={(event) =>
+                  event.preventDefault()
+                }
+                onClick={() =>
+                  runAndClose(() =>
+                    applyLinePreset(
+                      preset as
+                        | "body"
+                        | "heading1"
+                        | "heading2"
+                        | "heading3"
+                        | "quote"
+                        | "code",
+                    ),
+                  )
+                }
+                className={itemClass}
+              >
+                <span>{label}</span>
+              </button>
+            ))}
+
+            <div className="my-1 border-t border-current/10" />
+
+            <button
+              type="button"
+              onMouseDown={(event) =>
+                event.preventDefault()
+              }
+              onClick={() =>
+                runAndClose(() =>
+                  runEditorCommand(
+                    "insertUnorderedList",
+                  ),
+                )
+              }
+              className={itemClass}
+            >
+              <span>글머리표 목록</span>
+            </button>
+            <button
+              type="button"
+              onMouseDown={(event) =>
+                event.preventDefault()
+              }
+              onClick={() =>
+                runAndClose(() =>
+                  runEditorCommand(
+                    "insertOrderedList",
+                  ),
+                )
+              }
+              className={itemClass}
+            >
+              <span>번호 목록</span>
+            </button>
+
+            <div className="my-1 border-t border-current/10" />
+
+            <div className="grid grid-cols-3 gap-1">
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => runAndClose(() => runEditorCommand("justifyLeft"))}
+                className={itemClass}
+              >왼쪽</button>
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => runAndClose(() => runEditorCommand("justifyCenter"))}
+                className={itemClass}
+              >가운데</button>
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => runAndClose(() => runEditorCommand("justifyRight"))}
+                className={itemClass}
+              >오른쪽</button>
+            </div>
+
+            <div className="mt-1 grid grid-cols-2 gap-1">
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => runAndClose(() => mutateSelectedLinePrefixes("outdent"))}
+                className={itemClass}
+              >
+                <span>내어쓰기</span>
+                <span className={shortcutClass}>Shift+Tab</span>
+              </button>
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => runAndClose(() => mutateSelectedLinePrefixes("indent"))}
+                className={itemClass}
+              >
+                <span>들여쓰기</span>
+                <span className={shortcutClass}>Tab</span>
+              </button>
+            </div>
+          </>
+        )}
+
+        {editorAdvancedMenu === "code" && (
+          <>
+            <p className="px-3 pb-2 pt-1 text-[9px] font-black tracking-[0.14em] opacity-35">
+              코드 편집
+            </p>
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => runAndClose(applyInlineCode)}
+              className={itemClass}
+            >
+              <span>인라인 코드</span>
+              <span className={shortcutClass}>선택 영역</span>
+            </button>
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => runAndClose(() => applyLinePreset("code"))}
+              className={itemClass}
+            >
+              <span>현재 줄 코드 스타일</span>
+            </button>
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => runAndClose(toggleLineComment)}
+              className={itemClass}
+            >
+              <span>줄 주석 토글</span>
+              <span className={shortcutClass}>Ctrl+/</span>
+            </button>
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => runAndClose(formatCurrentCodeLine)}
+              className={itemClass}
+            >
+              <span>탭/끝 공백 정리</span>
+              <span className={shortcutClass}>Shift+Alt+F</span>
+            </button>
+            <button
+              type="button"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => runAndClose(jumpToMatchingBracket)}
+              className={itemClass}
+            >
+              <span>괄호 짝으로 이동</span>
+              <span className={shortcutClass}>Ctrl+Shift+\</span>
+            </button>
+          </>
+        )}
+
+        {editorAdvancedMenu === "edit" && (
+          <>
+            <p className="px-3 pb-2 pt-1 text-[9px] font-black tracking-[0.14em] opacity-35">
+              편집 / 이동
+            </p>
+            <div className="grid grid-cols-2 gap-1">
+              <button type="button" onClick={() => runAndClose(undoSelectedNote)} className={itemClass}>
+                <span>실행 취소</span><span className={shortcutClass}>Ctrl+Z</span>
+              </button>
+              <button type="button" onClick={() => runAndClose(redoSelectedNote)} className={itemClass}>
+                <span>다시 실행</span><span className={shortcutClass}>Ctrl+Y</span>
+              </button>
+            </div>
+            <button type="button" onClick={() => runAndClose(saveStudyNotesNow)} className={itemClass}>
+              <span>지금 저장</span><span className={shortcutClass}>Ctrl+S</span>
+            </button>
+
+            <div className="my-1 border-t border-current/10" />
+
+            <button type="button" onClick={() => runAndClose(() => openEditorFind(false))} className={itemClass}>
+              <span>현재 파일 찾기</span><span className={shortcutClass}>Ctrl+F</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(() => openEditorFind(true))} className={itemClass}>
+              <span>찾아 바꾸기</span><span className={shortcutClass}>Ctrl+H</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(openGlobalSearchDialog)} className={itemClass}>
+              <span>전체 노트 검색</span><span className={shortcutClass}>Ctrl+Shift+F</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(openQuickOpenDialog)} className={itemClass}>
+              <span>파일 빠르게 열기</span><span className={shortcutClass}>Ctrl+P</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(openGoToLineDialog)} className={itemClass}>
+              <span>줄로 이동</span><span className={shortcutClass}>Ctrl+G</span>
+            </button>
+
+            <div className="my-1 border-t border-current/10" />
+
+            <button type="button" onClick={() => runAndClose(() => insertTextLineAt("before"))} className={itemClass}>
+              <span>위에 새 줄</span><span className={shortcutClass}>Ctrl+Shift+Enter</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(() => insertTextLineAt("after"))} className={itemClass}>
+              <span>아래에 새 줄</span><span className={shortcutClass}>Ctrl+Enter</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(() => duplicateActiveTextLine("up"))} className={itemClass}>
+              <span>줄 위로 복제</span><span className={shortcutClass}>Shift+Alt+↑</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(() => duplicateActiveTextLine("down"))} className={itemClass}>
+              <span>줄 아래로 복제</span><span className={shortcutClass}>Shift+Alt+↓</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(() => moveActiveTextLine("up"))} className={itemClass}>
+              <span>줄 위로 이동</span><span className={shortcutClass}>Alt+↑</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(() => moveActiveTextLine("down"))} className={itemClass}>
+              <span>줄 아래로 이동</span><span className={shortcutClass}>Alt+↓</span>
+            </button>
+            <button type="button" onClick={() => runAndClose(deleteActiveTextLine)} className={`${itemClass} text-[#ff8295]`}>
+              <span>선택 행 삭제</span><span className={shortcutClass}>Ctrl+D · Ctrl+Shift+K</span>
+            </button>
+          </>
+        )}
+      </div>
+    );
+  }
+
   function renderCompactEditorToolbar() {
     const baseButtonClass = `flex h-8 min-w-8 shrink-0 items-center justify-center rounded-md border px-2 text-[13px] font-black transition ${
       isDarkMode
@@ -9936,6 +14148,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
     return (
       <div className="sticky top-0 z-[500] h-0 -mx-1 overflow-visible px-1">
+        {renderEditorFindReplaceBar()}
+        {renderEditorAdvancedMenu()}
         <div className="pointer-events-auto absolute left-1 right-1 top-1 flex h-[44px] min-w-0 items-center overflow-hidden">
           <button
             type="button"
@@ -10527,15 +14741,129 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
                 <button
                   type="button"
-                  onMouseDown={(event) =>
-                    event.preventDefault()
-                  }
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={addAnnotation}
                   className={baseButtonClass}
                   title="주석"
                   aria-label="주석"
                 >
                   ↗
+                </button>
+
+                <span className={`mx-1 h-5 w-px shrink-0 ${isDarkMode ? "bg-white/10" : "bg-black/10"}`} />
+
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={openLinkDialog}
+                  className={baseButtonClass}
+                  title="링크 (Ctrl+K)"
+                  aria-label="링크"
+                >
+                  🔗
+                </button>
+
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={applyInlineCode}
+                  className={baseButtonClass}
+                  title="인라인 코드"
+                  aria-label="인라인 코드"
+                >
+                  &lt;/&gt;
+                </button>
+
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={clearEditorFormatting}
+                  className={baseButtonClass}
+                  title="서식 제거 (Ctrl+\\)"
+                  aria-label="서식 제거"
+                >
+                  Tx
+                </button>
+
+                <span className={`mx-1 h-5 w-px shrink-0 ${isDarkMode ? "bg-white/10" : "bg-black/10"}`} />
+
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() =>
+                    setEditorAdvancedMenu((previous) =>
+                      previous === "paragraph" ? null : "paragraph",
+                    )
+                  }
+                  className={`${baseButtonClass} min-w-[54px] text-[10px] ${
+                    editorAdvancedMenu === "paragraph"
+                      ? "border-[#d6b522] bg-[#3a310d] text-[#ffe66d]"
+                      : ""
+                  }`}
+                  title="문단 / 목록 / 정렬"
+                  aria-expanded={editorAdvancedMenu === "paragraph"}
+                >
+                  문단 ▾
+                </button>
+
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() =>
+                    setEditorAdvancedMenu((previous) =>
+                      previous === "code" ? null : "code",
+                    )
+                  }
+                  className={`${baseButtonClass} min-w-[54px] text-[10px] ${
+                    editorAdvancedMenu === "code"
+                      ? "border-[#d6b522] bg-[#3a310d] text-[#ffe66d]"
+                      : ""
+                  }`}
+                  title="코드 편집 도구"
+                  aria-expanded={editorAdvancedMenu === "code"}
+                >
+                  코드 ▾
+                </button>
+
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() =>
+                    setEditorAdvancedMenu((previous) =>
+                      previous === "edit" ? null : "edit",
+                    )
+                  }
+                  className={`${baseButtonClass} min-w-[54px] text-[10px] ${
+                    editorAdvancedMenu === "edit"
+                      ? "border-[#d6b522] bg-[#3a310d] text-[#ffe66d]"
+                      : ""
+                  }`}
+                  title="편집 / 찾기 / 줄 도구"
+                  aria-expanded={editorAdvancedMenu === "edit"}
+                >
+                  편집 ▾
+                </button>
+
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => openEditorFind(false)}
+                  className={baseButtonClass}
+                  title="찾기 (Ctrl+F)"
+                  aria-label="찾기"
+                >
+                  ⌕
+                </button>
+
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => openEditorFind(true)}
+                  className={baseButtonClass}
+                  title="찾아 바꾸기 (Ctrl+H)"
+                  aria-label="찾아 바꾸기"
+                >
+                  ↔
                 </button>
 
               </>
@@ -10582,6 +14910,749 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
 
+  function renderDualEditorPane(
+    paneNote: StudyNoteRecord | null,
+    side: "primary" | "secondary",
+  ) {
+    if (!paneNote) {
+      return (
+        <section
+          className={`flex min-h-0 min-w-0 flex-col items-center justify-center overflow-hidden border ${
+            isDarkMode
+              ? "border-[#303238] bg-[#111316] text-white"
+              : "border-[#deded9] bg-[#f8f8f6] text-[#2a2a2a]"
+          }`}
+        >
+          <p className="text-[13px] font-black opacity-55">
+            함께 열 두 번째 파일을 선택하세요.
+          </p>
+          <button
+            type="button"
+            onClick={() =>
+              requestDualFileReplacement(side)
+            }
+            className="mt-4 rounded-lg bg-[#6a5410] px-5 py-3 text-[11px] font-black text-[#ffe48a]"
+          >
+            파일 선택
+          </button>
+        </section>
+      );
+    }
+
+    const panePages =
+      paginateBlocks(paneNote.blocks);
+
+    const panePageZoom =
+      side === "primary"
+        ? dualPrimaryPageZoom
+        : dualSecondaryPageZoom;
+
+    const activatePane = () => {
+      activateEditorNote(paneNote.id);
+    };
+
+    return (
+      <section
+        data-study-dual-pane={side}
+        className={`flex min-h-0 min-w-0 flex-col overflow-hidden border ${
+          isDarkMode
+            ? "border-[#303238] bg-[#111316] text-white"
+            : "border-[#deded9] bg-[#f8f8f6] text-[#2a2a2a]"
+        }`}
+        onPointerDownCapture={activatePane}
+        onFocusCapture={activatePane}
+        onPasteCapture={activatePane}
+      >
+        <div
+          className={`flex h-[38px] shrink-0 items-center justify-between border-b px-3 ${
+            isDarkMode
+              ? "border-[#303238] bg-[#17191d]"
+              : "border-[#deded9] bg-white"
+          }`}
+        >
+          <span className="truncate text-[10px] font-black opacity-45">
+            {side === "primary" ? "왼쪽 파일" : "오른쪽 파일"}
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              requestDualFileReplacement(side)
+            }
+            className={`rounded-md border px-3 py-1.5 text-[9px] font-black transition ${
+              isDarkMode
+                ? "border-white/10 bg-white/5 hover:bg-white/10"
+                : "border-black/10 bg-[#f4f2ec] hover:bg-[#ece8dd]"
+            }`}
+          >
+            파일 교체
+          </button>
+        </div>
+
+        <div
+          data-hoo-vertical-scroll="true"
+          className="min-h-0 flex-1 overflow-auto p-3 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          <div
+            className="origin-top-left"
+            style={{
+              zoom: panePageZoom,
+            } as CSSProperties}
+          >
+                            <div
+                              className="min-w-0 space-y-4"
+                              style={{
+                                width: PAGE_SHEET_WIDTH,
+                                minWidth: PAGE_SHEET_WIDTH,
+                                fontSize: `${PAGE_TEXT_FONT_SIZE}px`,
+                                fontVariantNumeric: "tabular-nums",
+                                fontFeatureSettings: '"tnum" 1',
+                              }}
+                            >
+                              <div
+                                className={`relative flex min-h-[76px] w-full items-center justify-center border px-7 py-4 ${
+                                  isDarkMode
+                                    ? "border-[#303238] bg-[#17191d] text-[#efefef]"
+                                    : "border-[#deded9] bg-white text-[#2a2a2a]"
+                                }`}
+                              >
+                                <div className="relative inline-block max-w-[70%]">
+                                  <span
+                                    contentEditable
+                                    suppressContentEditableWarning
+                                    ref={(element) => {
+                                      if (
+                                        !element ||
+                                        document.activeElement === element
+                                      ) {
+                                        return;
+                                      }
+          
+                                      if (
+                                        (element.textContent ?? "") !==
+                                        paneNote.title
+                                      ) {
+                                        element.textContent =
+                                          paneNote.title;
+                                      }
+                                    }}
+                                    onInput={(event) => {
+                                      const nextTitle =
+                                        (
+                                          event.currentTarget
+                                            .textContent ?? ""
+                                        )
+                                          .replace(/[\r\n]+/g, " ")
+                                          .slice(0, 80);
+          
+                                      if (
+                                        nextTitle !==
+                                        event.currentTarget.textContent
+                                      ) {
+                                        event.currentTarget.textContent =
+                                          nextTitle;
+                                      }
+          
+                                      updateSelectedNote((note) => ({
+                                        ...note,
+                                        title: nextTitle,
+                                      }));
+                                    }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter") {
+                                        event.preventDefault();
+                                      }
+                                    }}
+                                    className={`inline-block min-w-[1ch] max-w-full break-words bg-transparent text-center text-[24px] font-black leading-[1.35] outline-none ${
+                                      isDarkMode
+                                        ? "text-white"
+                                        : "text-[#2a2a2a]"
+                                    }`}
+                                    role="textbox"
+                                    aria-label="노트 제목"
+                                    data-placeholder="기록 제목"
+                                  />
+          
+                                  <span className="absolute bottom-0 left-[calc(100%+10px)] inline-flex shrink-0 flex-col items-start whitespace-nowrap leading-none opacity-45">
+                                    <span className="mb-1 text-[8px] font-black">
+                                      (최종 수정)
+                                    </span>
+                                    <span className="text-[13px] font-bold">
+                                      - {formatModifiedDateTime(paneNote.updatedAt)}
+                                    </span>
+                                  </span>
+                                </div>
+                              </div>
+          
+                              <div
+                                data-study-editor-root
+                                className="space-y-4"
+                          onPaste={handleEditorPaste}
+                          onPointerDownCapture={
+                            handleEditorPointerDownCapture
+                          }
+                          onKeyDownCapture={
+                            handleEditorKeyDownCapture
+                          }
+                        >
+                          {panePages.map((pageBlocks, pageIndex) => (
+                            <article
+                              key={`${paneNote.id}-page-${pageIndex}`}
+                              data-study-page-container="true"
+                              data-study-note-id={paneNote.id}
+                              data-study-page-index={pageIndex}
+                              className={`relative overflow-hidden border ${
+                                isDarkMode
+                                  ? "border-[#303238] bg-[#17191d] text-[#efefef]"
+                                  : "border-[#deded9] bg-[#fff] text-[#2a2a2a]"
+                              }`}
+                            >
+                              <div
+                                data-study-page-body="true"
+                                data-study-page-index={pageIndex}
+                                className="relative pl-[60px] pr-5"
+                                style={{
+                                  minHeight: PAGE_LINE_LIMIT * ROW_HEIGHT,
+                                  fontVariantNumeric: "tabular-nums",
+                                  fontFeatureSettings: '"tnum" 1',
+                                  backgroundImage: isDarkMode
+                                    ? "repeating-linear-gradient(to bottom, transparent 0, transparent 27px, rgba(255,255,255,0.075) 27px, rgba(255,255,255,0.075) 28px)"
+                                    : "repeating-linear-gradient(to bottom, transparent 0, transparent 27px, rgba(112,102,86,0.16) 27px, rgba(112,102,86,0.16) 28px)",
+                                }}
+                                onPointerDown={(event) => {
+                                  if (
+                                    event.target ===
+                                    event.currentTarget
+                                  ) {
+                                    event.preventDefault();
+                                    focusActiveTextBlockAtEnd();
+                                  }
+                                }}
+                              >
+                                <div
+                                  className={`pointer-events-none absolute bottom-0 left-0 top-0 w-[43px] border-r text-right text-[9px] font-bold opacity-35 ${
+                                    isDarkMode ? "border-[#303238]" : "border-[#e8e8e3]"
+                                  }`}
+                                >
+                                  {Array.from({ length: PAGE_LINE_LIMIT }, (_, lineIndex) => (
+                                    <div key={lineIndex} className="h-7 pr-3 leading-7">{lineIndex + 1}</div>
+                                  ))}
+                                </div>
+          
+                                {pageBlocks.map((block) => {
+                                  if (block.type === "image") {
+                                    const isResizingImage =
+                                      resizingImageTarget?.noteId ===
+                                        paneNote.id &&
+                                      resizingImageTarget.blockId ===
+                                        block.id;
+          
+                                    const isSelectedForDelete =
+                                      selectedImageDeleteTarget?.noteId ===
+                                        paneNote.id &&
+                                      selectedImageDeleteTarget.blockId ===
+                                        block.id;
+          
+                                    const isFreeImage =
+                                      block.layout === "free";
+          
+                                    const isFloatRight =
+                                      !isResizingImage &&
+                                      block.layout ===
+                                        "float-right";
+          
+                                    return (
+                                      <figure
+                                        key={block.id}
+                                        data-study-block-id={block.id}
+                                        data-study-image-figure-id={
+                                          block.id
+                                        }
+                                        className={
+                                          isFreeImage
+                                            ? "group absolute z-20 m-0 select-none p-0"
+                                            : isFloatRight
+                                              ? "group relative float-right mb-2 ml-4 select-none py-1"
+                                              : "group relative flex select-none items-start justify-start py-1"
+                                        }
+                                        style={
+                                          isFreeImage
+                                            ? {
+                                                left: `${
+                                                  block.positionXPercent ??
+                                                  7
+                                                }%`,
+                                                top: `${
+                                                  block.positionYPx ??
+                                                  0
+                                                }px`,
+                                                width: `${
+                                                  block.widthPercent ??
+                                                  65
+                                                }%`,
+                                                minHeight: 0,
+                                                userSelect:
+                                                  "none",
+                                                WebkitUserSelect:
+                                                  "none",
+                                              }
+                                            : isFloatRight
+                                              ? {
+                                                  width: `${
+                                                    block.widthPercent ??
+                                                    48
+                                                  }%`,
+                                                  minHeight: 0,
+                                                  userSelect:
+                                                    "none",
+                                                  WebkitUserSelect:
+                                                    "none",
+                                                }
+                                              : {
+                                                  minHeight:
+                                                    block.units *
+                                                    ROW_HEIGHT,
+                                                  userSelect:
+                                                    "none",
+                                                  WebkitUserSelect:
+                                                    "none",
+                                                }
+                                        }
+                                      >
+                                        <div
+                                          data-study-image-wrapper-id={
+                                            block.id
+                                          }
+                                          className="relative inline-flex max-w-full items-start justify-start rounded-[9px]"
+                                          style={{
+                                            width:
+                                              isFreeImage ||
+                                              isFloatRight
+                                                ? "100%"
+                                                : `${
+                                                    block.widthPercent ??
+                                                    65
+                                                  }%`,
+                                            boxShadow:
+                                              isResizingImage ||
+                                              isSelectedForDelete
+                                                ? "0 0 0 3px #ff4f6d"
+                                                : "none",
+                                            backgroundColor:
+                                              isResizingImage ||
+                                              isSelectedForDelete
+                                                ? "rgba(255, 79, 109, 0.06)"
+                                                : "transparent",
+                                          }}
+                                        >
+                                          <img
+                                            data-study-image-source="true"
+                                            src={block.src}
+                                            alt={block.alt}
+                                            draggable={false}
+                                            className={`pointer-events-none block h-auto w-full select-none rounded-[7px] object-contain shadow-sm ${
+                                              isDarkMode
+                                                ? "bg-white/5"
+                                                : "bg-[#f2eee6]"
+                                            }`}
+                                            style={{
+                                              userSelect: "none",
+                                              WebkitUserSelect:
+                                                "none",
+                                            }}
+                                          />
+          
+                                          <button
+                                            type="button"
+                                            aria-label={
+                                              isResizingImage
+                                                ? "사진 위치 이동"
+                                                : "사진 선택"
+                                            }
+                                            draggable={false}
+                                            onPointerDown={
+                                              isResizingImage &&
+                                              isFreeImage
+                                                ? (event) =>
+                                                    handleImageBlockMovePointerDown(
+                                                      event,
+                                                      block,
+                                                    )
+                                                : undefined
+                                            }
+                                            onClick={(event) => {
+                                              event.preventDefault();
+                                              event.stopPropagation();
+          
+                                              if (isResizingImage) {
+                                                return;
+                                              }
+          
+                                              setSelectedImageDeleteTarget(
+                                                (current) =>
+                                                  current?.noteId ===
+                                                    paneNote.id &&
+                                                  current.blockId ===
+                                                    block.id
+                                                    ? null
+                                                    : {
+                                                        kind: "image",
+                                                        noteId:
+                                                          paneNote.id,
+                                                        blockId:
+                                                          block.id,
+                                                        label:
+                                                          block.alt ||
+                                                          "사진",
+                                                      },
+                                              );
+                                            }}
+                                            className={`absolute inset-0 z-10 rounded-[9px] bg-transparent ${
+                                              isResizingImage &&
+                                              isFreeImage
+                                                ? "cursor-move"
+                                                : "cursor-pointer"
+                                            }`}
+                                            style={{
+                                              touchAction:
+                                                isResizingImage &&
+                                                isFreeImage
+                                                  ? "none"
+                                                  : undefined,
+                                            }}
+                                            title={
+                                              isResizingImage &&
+                                              isFreeImage
+                                                ? "사진을 잡아 원하는 위치로 이동하세요"
+                                                : isResizingImage
+                                                  ? "사진 밖을 클릭하거나 Enter를 누르면 크기가 확정됩니다"
+                                                  : "사진을 클릭하면 삭제 상태가 됩니다"
+                                            }
+                                          />
+          
+                                          {isResizingImage && (
+                                            <button
+                                              type="button"
+                                              aria-label="사진 크기 조절"
+                                              draggable={false}
+                                              onPointerDown={(
+                                                event,
+                                              ) =>
+                                                handleImageBlockResizePointerDown(
+                                                  event,
+                                                  block,
+                                                )
+                                              }
+                                              className="absolute -bottom-3 -right-3 z-40 flex h-7 w-7 cursor-se-resize items-center justify-center rounded-full border-2 border-white bg-[#ffca28] text-[12px] font-black text-black shadow-lg"
+                                              style={{
+                                                touchAction:
+                                                  "none",
+                                              }}
+                                              title="오른쪽 아래 모서리를 움직여 크기를 조절하세요"
+                                            >
+                                              ↘
+                                            </button>
+                                          )}
+          
+                                          {isSelectedForDelete && (
+                                            <button
+                                              type="button"
+                                              draggable={false}
+                                              onClick={(event) => {
+                                                event.preventDefault();
+                                                event.stopPropagation();
+          
+                                                deleteImageBlock(
+                                                  paneNote.id,
+                                                  block.id,
+                                                  block.alt ||
+                                                    "사진",
+                                                );
+                                              }}
+                                              className="absolute left-2 top-2 z-30 rounded-full bg-[#5f1f2a]/95 px-3 py-1 text-[9px] font-black text-[#ffd9df] shadow-lg transition hover:bg-[#7a2635]"
+                                              title="사진 삭제"
+                                            >
+                                              🗑 삭제
+                                            </button>
+                                          )}
+                                        </div>
+                                      </figure>
+                                    );
+                                  }
+          
+                                  return (
+                                    <div
+                                      key={block.id}
+                                      data-study-block-id={block.id}
+                                      className="relative"
+                                      style={{ minHeight: getBlockUnits(block) * ROW_HEIGHT }}
+                                    >
+                                      <div
+                                        ref={(element) => {
+                                          if (!element) {
+                                            return;
+                                          }
+          
+                                          /*
+                                           * 입력 중 React 재렌더링이 contentEditable의 innerHTML을
+                                           * 다시 덮어쓰면 커서가 맨 앞으로 이동하면서 새 글자가
+                                           * 왼쪽에 계속 쌓이는 현상이 생긴다.
+                                           *
+                                           * 편집 중에는 브라우저 DOM을 그대로 유지하고,
+                                           * 포커스가 없을 때만 저장된 HTML과 동기화한다.
+                                           */
+                                          if (
+                                            document.activeElement !== element &&
+                                            element.innerHTML !== block.html
+                                          ) {
+                                            element.innerHTML = block.html;
+                                          }
+                                        }}
+                                        data-study-editable-id={block.id}
+                                        contentEditable
+                                        suppressContentEditableWarning
+                                        dir="ltr"
+                                        style={
+                                          getFreeImageTextWrapStyle(
+                                            pageBlocks,
+                                            block,
+                                          )
+                                        }
+                                        onPointerDown={(event) => {
+                                          /*
+                                           * 실제 text block으로 존재하는 줄은 이미 Enter로
+                                           * 활성화된 줄이므로 클릭 이동을 허용한다.
+                                           *
+                                           * 새 페이지를 맞추기 위해 만든 큰 빈 spacer만
+                                           * 편집 줄이 아니므로 클릭 진입을 차단한다.
+                                           */
+                                          if (
+                                            !isEditableTextBlock(
+                                              block,
+                                            )
+                                          ) {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            focusActiveTextBlockAtEnd();
+                                          }
+                                        }}
+                                        onFocus={(event) => {
+                                          if (
+                                            !isEditableTextBlock(
+                                              block,
+                                            )
+                                          ) {
+                                            event.currentTarget.blur();
+          
+                                            window.setTimeout(() => {
+                                              focusActiveTextBlockAtEnd();
+                                            }, 0);
+          
+                                            return;
+                                          }
+          
+                                          lastSelectedTextBlockIdRef.current =
+                                            block.id;
+                                          selectedBlockIdsRef.current = [
+                                            block.id,
+                                          ];
+          
+                                          window.setTimeout(() => {
+                                            syncPrimaryTextFormatState();
+                                          }, 0);
+                                        }}
+                                        onMouseUp={() => {
+                                          captureSelection(
+                                            block.id,
+                                          );
+                                          syncPrimaryTextFormatState();
+                                        }}
+                                        onKeyUp={() => {
+                                          captureSelection(
+                                            block.id,
+                                          );
+                                          syncPrimaryTextFormatState();
+                                        }}
+                                        onKeyDown={(event) => handleTextKeyDown(event, block)}
+                                        onInput={(event) => {
+                                          const element = event.currentTarget;
+          
+                                          normalizeFontSizeMarkup(
+                                            element,
+                                            typingFontSizeRef.current,
+                                          );
+          
+                                          const measuredUnits = Math.max(
+                                            1,
+                                            Math.min(
+                                              PAGE_LINE_LIMIT,
+                                              Math.ceil(
+                                                element.scrollHeight /
+                                                  ROW_HEIGHT,
+                                              ),
+                                            ),
+                                          );
+          
+                                          updateBlock(
+                                            block.id,
+                                            (currentBlock) =>
+                                              currentBlock.type === "text"
+                                                ? {
+                                                    ...currentBlock,
+                                                    html: element.innerHTML,
+                                                    units: measuredUnits,
+                                                  }
+                                                : currentBlock,
+                                          );
+                                        }}
+                                        className={`min-h-7 whitespace-pre-wrap break-words text-left text-[14px] font-medium leading-7 outline-none ${
+                                          isDarkMode
+                                            ? "text-[#efefef]"
+                                            : "text-[#302b27]"
+                                        }`}
+                                      />
+          
+                                      {block.annotation && (
+                                        <div
+                                          className={`relative h-7 text-[13px] ${
+                                            isDarkMode
+                                              ? "text-[#d9d9d9]"
+                                              : "text-[#5b554c]"
+                                          }`}
+                                        >
+                                          <div
+                                            className="pointer-events-none absolute top-[4px] h-[18px]"
+                                            style={{
+                                              left: `${
+                                                block.annotation
+                                                  .anchorPercent ??
+                                                50
+                                              }%`,
+                                              width: "28px",
+                                            }}
+                                            title={
+                                              block.annotation.quote
+                                            }
+                                          >
+                                            <svg
+                                              viewBox="0 0 28 18"
+                                              className="h-[18px] w-[28px] overflow-visible"
+                                              aria-hidden="true"
+                                            >
+                                              <path
+                                                d="M4 1.5 V9.5 Q4 13 7.5 13 H19"
+                                                fill="none"
+                                                stroke="#d6a800"
+                                                strokeWidth="2.2"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                              />
+                                              <path
+                                                d="M15.5 9.8 L19.5 13 L15.5 16.2"
+                                                fill="none"
+                                                stroke="#d6a800"
+                                                strokeWidth="2.2"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                              />
+                                            </svg>
+                                          </div>
+          
+                                          <input
+                                            data-study-annotation-id={
+                                              block.id
+                                            }
+                                            value={
+                                              block.annotation.text
+                                            }
+                                            onKeyDown={(event) =>
+                                              handleAnnotationKeyDown(
+                                                event,
+                                                block,
+                                              )
+                                            }
+                                            onChange={(event) =>
+                                              updateBlock(
+                                                block.id,
+                                                (
+                                                  currentBlock,
+                                                ) =>
+                                                  currentBlock.type ===
+                                                    "text" &&
+                                                  currentBlock.annotation
+                                                    ? {
+                                                        ...currentBlock,
+                                                        annotation:
+                                                          {
+                                                            ...currentBlock.annotation,
+                                                            text: event
+                                                              .target
+                                                              .value,
+                                                          },
+                                                      }
+                                                    : currentBlock,
+                                              )
+                                            }
+                                            placeholder={
+                                              block.annotation.quote
+                                                ? `“${block.annotation.quote}” 주석 입력`
+                                                : "주석 입력"
+                                            }
+                                            className="absolute top-0 h-7 bg-transparent pr-7 font-bold outline-none placeholder:opacity-35"
+                                            style={{
+                                              left: `calc(${block.annotation.anchorPercent ?? 50}% + 30px)`,
+                                              width: `calc(100% - (${block.annotation.anchorPercent ?? 50}% + 38px))`,
+                                            }}
+                                          />
+          
+                                          <button
+                                            type="button"
+                                            onClick={() =>
+                                              updateBlock(
+                                                block.id,
+                                                (
+                                                  currentBlock,
+                                                ) => {
+                                                  if (
+                                                    currentBlock.type !==
+                                                    "text"
+                                                  ) {
+                                                    return currentBlock;
+                                                  }
+          
+                                                  const {
+                                                    annotation:
+                                                      _annotation,
+                                                    ...remainingBlock
+                                                  } = currentBlock;
+          
+                                                  return remainingBlock;
+                                                },
+                                              )
+                                            }
+                                            className="absolute right-1 top-1/2 -translate-y-1/2 text-xs font-black opacity-40"
+                                            title="주석 삭제"
+                                            aria-label="주석 삭제"
+                                          >
+                                            ×
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </article>
+                          ))}
+                              </div>
+                            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+
+
   if (viewMode === "home") {
     const folderColors = [
       ["#f8dda0", "#9a6b12"],
@@ -10596,6 +15667,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
       <section className="flex h-[100dvh] w-screen shrink-0 overflow-hidden bg-[#f4f4f1] p-0">
         {renderLoginModal()}
         {renderFocusStudyNotePanel()}
+        {renderDualModeConfirmModal()}
+        {renderDualFilePickerModal()}
 
         {renderTrashBin()}
 
@@ -10618,10 +15691,19 @@ export default function StudyNote({ active }: StudyNoteProps) {
             >
               <button
                 type="button"
-                className="text-[22px] leading-none opacity-80"
-                title="메뉴"
+                onClick={() => {
+                  window.location.href = "/";
+                }}
+                className={`flex h-9 items-center gap-2 rounded-md px-3 text-[12px] font-black transition ${
+                  isDarkMode
+                    ? "bg-[#2c2f34] text-white hover:bg-[#373a40]"
+                    : "bg-[#2d2d2d] text-white hover:bg-black"
+                }`}
+                title="후사이트로 이동"
+                aria-label="후사이트로 이동"
               >
-                ☰
+                <span aria-hidden="true">←</span>
+                <span>HOO</span>
               </button>
               <h1 className="text-[17px] font-black tracking-[-0.03em]">HOO터디 노트</h1>
             </div>
@@ -10850,6 +15932,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
       <section className="flex h-[100dvh] w-screen shrink-0 overflow-hidden bg-[#f4f4f1] p-0">
         {renderLoginModal()}
         {renderFocusStudyNotePanel()}
+        {renderDualModeConfirmModal()}
+        {renderDualFilePickerModal()}
         {renderNoteNameModal()}
         {renderTrashBin()}
 
@@ -11046,6 +16130,111 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
   }
 
+  if (
+    viewMode === "editor" &&
+    isDualFileMode
+  ) {
+    const primaryNote =
+      notes.find(
+        (note) => note.id === dualPrimaryNoteId,
+      ) ?? null;
+
+    const secondaryNote =
+      notes.find(
+        (note) => note.id === dualSecondaryNoteId,
+      ) ?? null;
+
+    return (
+      <section
+        className={`flex h-[100dvh] w-screen shrink-0 overflow-hidden p-0 ${
+          isDarkMode
+            ? "bg-[#111316] text-white"
+            : "bg-[#f4f4f1] text-[#222]"
+        }`}
+      >
+        {renderLoginModal()}
+        {renderFocusStudyNotePanel()}
+        {renderDualModeConfirmModal()}
+        {renderDualFilePickerModal()}
+        {renderEditorUtilityDialog()}
+        {renderTrashBin()}
+
+        <div
+          className={`grid h-full w-full min-h-0 grid-rows-[66px_minmax(0,1fr)] overflow-hidden border ${
+            isDarkMode
+              ? "border-[#303238] bg-[#15171a]"
+              : "border-[#e6e6e2] bg-[#fbfbfa]"
+          }`}
+        >
+          <header
+            className={`grid grid-cols-[266px_minmax(0,1fr)] border-b ${
+              isDarkMode
+                ? "border-[#303238]"
+                : "border-[#e6e6e2]"
+            }`}
+          >
+            <div
+              className={`flex items-center gap-4 border-r px-6 ${
+                isDarkMode
+                  ? "border-[#303238]"
+                  : "border-[#e6e6e2]"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={leaveDualFileMode}
+                className="text-[22px] leading-none opacity-80"
+                title="복수파일 모드 종료"
+                aria-label="복수파일 모드 종료"
+              >
+                ←
+              </button>
+
+              <h1 className="truncate text-[17px] font-black tracking-[-0.03em]">
+                HOO터디 노트
+              </h1>
+            </div>
+
+            <div className="flex min-w-0 items-center justify-between gap-4 px-5">
+              <div className="min-w-0">
+                <p className="text-[9px] font-black tracking-[0.16em] opacity-40">
+                  MULTI FILE MODE
+                </p>
+                <p className="truncate text-[14px] font-black">
+                  {primaryNote?.title ?? "왼쪽 파일"}
+                  {"  +  "}
+                  {secondaryNote?.title ?? "오른쪽 파일 선택"}
+                </p>
+              </div>
+
+              <span
+                className="shrink-0 text-[9px] font-black opacity-60"
+                title={saveLabel}
+              >
+                {saveLabel}
+              </span>
+            </div>
+          </header>
+
+          <div className="grid min-h-0 grid-cols-[266px_minmax(0,1fr)]">
+            {renderSidebar()}
+
+            <main className="flex min-h-0 min-w-0 flex-col overflow-hidden p-3">
+              <div className="relative h-[50px] shrink-0">
+                {renderCompactEditorToolbar()}
+              </div>
+
+              <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
+                {renderDualEditorPane(primaryNote, "primary")}
+                {renderDualEditorPane(secondaryNote, "secondary")}
+              </div>
+            </main>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   if (!selectedNote) {
     return (
       <section className="flex h-[100dvh] w-screen items-center justify-center bg-[#f4f4f1]">
@@ -11066,6 +16255,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
     <section className="flex h-[100dvh] w-screen shrink-0 overflow-hidden bg-[#f4f4f1] p-0">
         {renderLoginModal()}
         {renderFocusStudyNotePanel()}
+        {renderDualModeConfirmModal()}
+        {renderDualFilePickerModal()}
+        {renderEditorUtilityDialog()}
         {renderTrashBin()}
       <div
         className={`grid h-full w-full min-h-0 grid-rows-[66px_minmax(0,1fr)] overflow-hidden border ${
@@ -11830,6 +17022,23 @@ export default function StudyNote({ active }: StudyNoteProps) {
                     contentEditable
                     suppressContentEditableWarning
                     dir="ltr"
+                    onFocus={() => {
+                      activeEditorNoteIdRef.current = selectedNote.id;
+                      selectedBlockIdsRef.current = [];
+                      lastSelectedTextBlockIdRef.current = null;
+                      window.setTimeout(() => {
+                        captureLastPageSelection();
+                        syncPrimaryTextFormatState();
+                      }, 0);
+                    }}
+                    onMouseUp={() => {
+                      captureLastPageSelection();
+                      syncPrimaryTextFormatState();
+                    }}
+                    onKeyUp={() => {
+                      captureLastPageSelection();
+                      syncPrimaryTextFormatState();
+                    }}
                     onInput={(event) =>
                       updateLastPageHtml(
                         event.currentTarget.innerHTML,
