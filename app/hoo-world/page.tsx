@@ -44,10 +44,7 @@ import {
 } from "@/components/HooWorld/world/hooWorldMap";
 
 import HooWorldCampfire from "@/components/HooWorld/items/HooWorldCampfire";
-import HooWorldDeliveryGate, {
-  type HooWorldTornSleepingBagPositionPayload,
-  type HooWorldTornSleepingBagRestPayload,
-} from "@/components/HooWorld/items/HooWorldDeliveryGate";
+import HooWorldDeliveryGate from "@/components/HooWorld/items/HooWorldDeliveryGate";
 import HooWorldFirewood from "@/components/HooWorld/items/HooWorldFirewood";
 import HooWorldFoodInteractionEffect from "@/components/HooWorld/items/HooWorldFoodInteractionEffect";
 import HooWorldFoodItem from "@/components/HooWorld/items/HooWorldFoodItem";
@@ -68,6 +65,10 @@ import {
 import {
   createClient,
 } from "@/lib/supabase/client";
+import {
+  loadRecoveryRecord,
+  saveRecoveryRecord,
+} from "@/lib/recovery/hooRecoveryVault";
 
 const HOO_WORLD_ACCESSORY_SLOT_COUNT =
   10;
@@ -151,82 +152,6 @@ type HooWorldFireworksRequestPayload = {
   x: number;
   y: number;
 };
-
-type HooWorldTornSleepingBagFreezeSchedule = {
-  itemId: string;
-  localMonth: number;
-  startedAt: number;
-  triggerAt: number;
-  delayMs: number;
-};
-
-const HOO_WORLD_TORN_SLEEPING_BAG_FROZEN_DURATION_MS =
-  5 * 60 * 1000;
-
-/* 빙결 상태로 실제 노출된 누적시간이 10분이 되면 감기에 걸린다. */
-const HOO_WORLD_TORN_SLEEPING_BAG_COLD_THRESHOLD_MS =
-  10 * 60 * 1000;
-
-/* 후셰프 스튜 1개를 다 먹으면 감기 회복값 5분을 차감한다. */
-const HOO_WORLD_CAMP_STEW_COLD_RECOVERY_MS =
-  5 * 60 * 1000;
-
-const HOO_WORLD_TORN_SLEEPING_BAG_COLD_NOTICE_MS =
-  5 * 1000;
-
-const HOO_WORLD_TORN_SLEEPING_BAG_COLD_STORAGE_PREFIX =
-  "hoo-world-torn-sleeping-bag-cold:";
-
-/*
- * 빙결 중 켜진 모닥불 가까이에 있으면
- * 남은 빙결 시간이 실제 시간보다 1.8배 빠르게 감소한다.
- * HooWorldCampfire의 기존 근접 판정 반경(185px)과 맞춘다.
- */
-const HOO_WORLD_TORN_SLEEPING_BAG_CAMPFIRE_RECOVERY_MULTIPLIER =
-  1.8;
-
-const HOO_WORLD_TORN_SLEEPING_BAG_CAMPFIRE_RECOVERY_RADIUS_PX =
-  185;
-
-const HOO_WORLD_TORN_SLEEPING_BAG_FROZEN_TICK_MS =
-  200;
-
-function getTornSleepingBagFreezeDelayMs(
-  localMonth: number,
-) {
-  let minSeconds: number;
-  let maxSeconds: number;
-
-  if (
-    localMonth >= 9 &&
-    localMonth <= 11
-  ) {
-    minSeconds = 3 * 60;
-    maxSeconds = 5 * 60;
-  } else if (
-    localMonth === 12 ||
-    localMonth === 1 ||
-    localMonth === 2
-  ) {
-    minSeconds = 60;
-    maxSeconds = 2 * 60;
-  } else {
-    return null;
-  }
-
-  const randomSeconds =
-    Math.floor(
-      Math.random() *
-        (
-          maxSeconds -
-          minSeconds +
-          1
-        ),
-    ) +
-    minSeconds;
-
-  return randomSeconds * 1000;
-}
 
 const HOO_WORLD_GROUP_FOOD_MAX_PARTICIPANTS =
   4;
@@ -1551,6 +1476,67 @@ export default function HooWorldPage() {
     worldRegionId;
 
   /*
+   * 마지막 플레이어 좌표도 Supabase와 분리해 Recovery Vault에 보관한다.
+   * Presence/DB가 사라져도 같은 브라우저에서는 마지막 위치를 복구한다.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    void loadRecoveryRecord<{
+      x: number;
+      y: number;
+      worldRegionId: string;
+    }>(
+      "world-player",
+      "last-position",
+    ).then((record) => {
+      if (cancelled || !record?.value) {
+        return;
+      }
+
+      const nextX = Number(record.value.x);
+      const nextY = Number(record.value.y);
+
+      if (Number.isFinite(nextX) && Number.isFinite(nextY)) {
+        playerPositionRef.current.x = nextX;
+        playerPositionRef.current.y = nextY;
+      }
+    });
+
+    const interval = window.setInterval(() => {
+      const current = playerPositionRef.current;
+
+      void saveRecoveryRecord(
+        "world-player",
+        "last-position",
+        {
+          x: current.x,
+          y: current.y,
+          worldRegionId: worldRegionIdRef.current,
+        },
+        "hoo-world-player-position",
+      );
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+
+      const current = playerPositionRef.current;
+      void saveRecoveryRecord(
+        "world-player",
+        "last-position",
+        {
+          x: current.x,
+          y: current.y,
+          worldRegionId: worldRegionIdRef.current,
+        },
+        "hoo-world-player-position-exit",
+      );
+    };
+  }, []);
+
+  /*
    * 3단계: 운영자 DB 해금 상태를 실시간으로 구독한다.
    *
    * DB가 아직 준비되지 않았거나 일시적으로 읽기에 실패하면
@@ -1720,7 +1706,6 @@ export default function HooWorldPage() {
     status,
     updateStatus,
     updateFoodEffect,
-    updateCold,
     updateWorldRegion,
     updatePosition,
     refreshPresence,
@@ -1743,12 +1728,6 @@ export default function HooWorldPage() {
   updatePositionRef.current =
     updatePosition;
 
-  const updateColdRef =
-    useRef(updateCold);
-
-  updateColdRef.current =
-    updateCold;
-
   const updateWorldRegionRef =
     useRef(
       updateWorldRegion,
@@ -1769,444 +1748,6 @@ export default function HooWorldPage() {
 
   hooWorldStatusRef.current =
     status;
-
-  const [
-    activeTornSleepingBagItemId,
-    setActiveTornSleepingBagItemId,
-  ] = useState<string | null>(
-    null,
-  );
-
-  const activeTornSleepingBagItemIdRef =
-    useRef<string | null>(null);
-
-  activeTornSleepingBagItemIdRef.current =
-    activeTornSleepingBagItemId;
-
-  /*
-   * 현재 침낭에 연속으로 누워 있는 실제 경과시간.
-   * 계절별 빙결 예정시간과는 별개로 UI에 표시하는 수면 유지시간이다.
-   * 침낭에서 나오면 0으로 초기화한다.
-   */
-  const [
-    tornSleepingBagSleepStartedAt,
-    setTornSleepingBagSleepStartedAt,
-  ] = useState<number | null>(null);
-
-  const [
-    tornSleepingBagSleepElapsedSeconds,
-    setTornSleepingBagSleepElapsedSeconds,
-  ] = useState(0);
-
-  useEffect(() => {
-    if (
-      tornSleepingBagSleepStartedAt ===
-      null
-    ) {
-      setTornSleepingBagSleepElapsedSeconds(
-        0,
-      );
-      return;
-    }
-
-    const updateSleepElapsed = () => {
-      setTornSleepingBagSleepElapsedSeconds(
-        Math.max(
-          0,
-          Math.floor(
-            (
-              Date.now() -
-              tornSleepingBagSleepStartedAt
-            ) /
-              1000,
-          ),
-        ),
-      );
-    };
-
-    updateSleepElapsed();
-
-    const timer =
-      window.setInterval(
-        updateSleepElapsed,
-        1000,
-      );
-
-    return () => {
-      window.clearInterval(
-        timer,
-      );
-    };
-  }, [
-    tornSleepingBagSleepStartedAt,
-  ]);
-
-  /*
-   * 찢어진 침낭 빙결 예정 타이머.
-   *
-   * 후월드 시계가 아니라 각 이용자 브라우저가 읽는
-   * 컴퓨터의 로컬 날짜/시간을 기준으로 월을 결정한다.
-   * 실제 빙결 상태는 다음 단계에서 연결하고, 현재 단계에서는
-   * 예정시간과 도달 여부만 안전하게 관리한다.
-   */
-  const [
-    tornSleepingBagFreezeSchedule,
-    setTornSleepingBagFreezeSchedule,
-  ] = useState<HooWorldTornSleepingBagFreezeSchedule | null>(
-    null,
-  );
-
-  const [
-    isTornSleepingBagFreezeReady,
-    setIsTornSleepingBagFreezeReady,
-  ] = useState(false);
-
-  const tornSleepingBagFreezeTimerRef =
-    useRef<number | null>(null);
-
-  const tornSleepingBagFreezeSessionRef =
-    useRef(0);
-
-  const [
-    tornSleepingBagFrozenUntil,
-    setTornSleepingBagFrozenUntil,
-  ] = useState<number | null>(null);
-
-  const tornSleepingBagFrozenUntilRef =
-    useRef<number | null>(null);
-
-  tornSleepingBagFrozenUntilRef.current =
-    tornSleepingBagFrozenUntil;
-
-  const tornSleepingBagFrozenTimerRef =
-    useRef<number | null>(null);
-
-  /*
-   * 실제 남은 빙결 시간은 ref에서 관리한다.
-   * 모닥불 근처에서는 매 tick마다 경과시간 × 1.8 만큼 차감한다.
-   * 이렇게 하면 불가에 들어오거나 벗어나는 순간부터 속도가 즉시 바뀐다.
-   */
-  const tornSleepingBagFrozenRemainingMsRef =
-    useRef(0);
-
-  const tornSleepingBagFrozenLastTickAtRef =
-    useRef<number | null>(null);
-
-  const [
-    isTornSleepingBagCampfireRecoveryActive,
-    setIsTornSleepingBagCampfireRecoveryActive,
-  ] = useState(false);
-
-  const tornSleepingBagCampfireRecoveryActiveRef =
-    useRef(false);
-
-  /*
-   * 감기는 빙결 status와 별개의 지속 상태다.
-   * 빙결이 끝나도 치료 전까지 유지하며, 사용자별 localStorage에도 보관한다.
-   */
-  const [
-    hasTornSleepingBagCold,
-    setHasTornSleepingBagCold,
-  ] = useState(false);
-
-  const hasTornSleepingBagColdRef =
-    useRef(false);
-
-  const tornSleepingBagFrozenExposureMsRef =
-    useRef(0);
-
-  const tornSleepingBagFrozenExposureWholeSecondsRef =
-    useRef(0);
-
-  const [
-    tornSleepingBagFrozenExposureSeconds,
-    setTornSleepingBagFrozenExposureSeconds,
-  ] = useState(0);
-
-  const [
-    showTornSleepingBagColdNotice,
-    setShowTornSleepingBagColdNotice,
-  ] = useState(false);
-
-  const tornSleepingBagColdNoticeTimerRef =
-    useRef<number | null>(null);
-
-  const persistTornSleepingBagColdState =
-    useCallback((
-      exposureMs: number,
-      hasCold: boolean,
-    ) => {
-      if (
-        typeof window === "undefined"
-      ) {
-        return;
-      }
-
-      const userId =
-        currentUserIdRef.current;
-
-      if (!userId) {
-        return;
-      }
-
-      try {
-        window.localStorage.setItem(
-          `${HOO_WORLD_TORN_SLEEPING_BAG_COLD_STORAGE_PREFIX}${userId}`,
-          JSON.stringify({
-            frozenExposureMs:
-              Math.max(
-                0,
-                Math.min(
-                  HOO_WORLD_TORN_SLEEPING_BAG_COLD_THRESHOLD_MS,
-                  exposureMs,
-                ),
-              ),
-            hasCold:
-              hasCold === true,
-          }),
-        );
-      } catch {
-        /* localStorage가 막혀 있어도 월드 플레이는 계속한다. */
-      }
-    }, []);
-
-  const triggerTornSleepingBagCold =
-    useCallback(() => {
-      if (
-        hasTornSleepingBagColdRef.current
-      ) {
-        return;
-      }
-
-      hasTornSleepingBagColdRef.current =
-        true;
-
-      setHasTornSleepingBagCold(
-        true,
-      );
-
-      tornSleepingBagFrozenExposureMsRef.current =
-        HOO_WORLD_TORN_SLEEPING_BAG_COLD_THRESHOLD_MS;
-
-      tornSleepingBagFrozenExposureWholeSecondsRef.current =
-        Math.floor(
-          HOO_WORLD_TORN_SLEEPING_BAG_COLD_THRESHOLD_MS /
-            1000,
-        );
-
-      setTornSleepingBagFrozenExposureSeconds(
-        tornSleepingBagFrozenExposureWholeSecondsRef.current,
-      );
-
-      persistTornSleepingBagColdState(
-        HOO_WORLD_TORN_SLEEPING_BAG_COLD_THRESHOLD_MS,
-        true,
-      );
-
-      void updateColdRef.current(
-        true,
-      );
-
-      setShowTornSleepingBagColdNotice(
-        true,
-      );
-
-      if (
-        tornSleepingBagColdNoticeTimerRef.current !==
-        null
-      ) {
-        window.clearTimeout(
-          tornSleepingBagColdNoticeTimerRef.current,
-        );
-      }
-
-      tornSleepingBagColdNoticeTimerRef.current =
-        window.setTimeout(
-          () => {
-            tornSleepingBagColdNoticeTimerRef.current =
-              null;
-
-            setShowTornSleepingBagColdNotice(
-              false,
-            );
-          },
-          HOO_WORLD_TORN_SLEEPING_BAG_COLD_NOTICE_MS,
-        );
-    }, [
-      persistTornSleepingBagColdState,
-    ]);
-
-  useEffect(() => {
-    if (
-      !currentUserId ||
-      typeof window === "undefined"
-    ) {
-      return;
-    }
-
-    let nextExposureMs = 0;
-    let nextHasCold = false;
-
-    try {
-      const raw =
-        window.localStorage.getItem(
-          `${HOO_WORLD_TORN_SLEEPING_BAG_COLD_STORAGE_PREFIX}${currentUserId}`,
-        );
-
-      if (raw) {
-        const parsed =
-          JSON.parse(raw) as {
-            frozenExposureMs?: unknown;
-            hasCold?: unknown;
-          };
-
-        const parsedExposureMs =
-          Number(
-            parsed.frozenExposureMs,
-          );
-
-        if (
-          Number.isFinite(
-            parsedExposureMs,
-          )
-        ) {
-          nextExposureMs =
-            Math.max(
-              0,
-              Math.min(
-                HOO_WORLD_TORN_SLEEPING_BAG_COLD_THRESHOLD_MS,
-                parsedExposureMs,
-              ),
-            );
-        }
-
-        nextHasCold =
-          parsed.hasCold === true ||
-          nextExposureMs >=
-            HOO_WORLD_TORN_SLEEPING_BAG_COLD_THRESHOLD_MS;
-      }
-    } catch {
-      nextExposureMs = 0;
-      nextHasCold = false;
-    }
-
-    /*
-     * 치료 중인 감기는 10분에서 5분 등으로 내려간 상태를 그대로 복원한다.
-     * 회복값이 0이 되면 감기 상태도 함께 종료한다.
-     */
-    if (
-      nextHasCold &&
-      nextExposureMs <= 0
-    ) {
-      nextHasCold = false;
-    }
-
-    tornSleepingBagFrozenExposureMsRef.current =
-      nextExposureMs;
-
-    const nextWholeSeconds =
-      Math.floor(
-        nextExposureMs /
-          1000,
-      );
-
-    tornSleepingBagFrozenExposureWholeSecondsRef.current =
-      nextWholeSeconds;
-
-    setTornSleepingBagFrozenExposureSeconds(
-      nextWholeSeconds,
-    );
-
-    hasTornSleepingBagColdRef.current =
-      nextHasCold;
-
-    setHasTornSleepingBagCold(
-      nextHasCold,
-    );
-
-    void updateColdRef.current(
-      nextHasCold,
-    );
-  }, [currentUserId]);
-
-  /*
-   * 감기 치료 공용 함수.
-   * 감기에 걸린 뒤에는 10분의 회복값을 가지고 시작하며,
-   * 후셰프 스튜 또는 켜진 모닥불만 이 값을 줄일 수 있다.
-   * 별도의 힌트/치료 문구는 표시하지 않는다.
-   */
-  const recoverTornSleepingBagCold =
-    useCallback((recoveryMs: number) => {
-      if (
-        recoveryMs <= 0 ||
-        !hasTornSleepingBagColdRef.current
-      ) {
-        return;
-      }
-
-      const nextExposureMs =
-        Math.max(
-          0,
-          tornSleepingBagFrozenExposureMsRef.current -
-            recoveryMs,
-        );
-
-      tornSleepingBagFrozenExposureMsRef.current =
-        nextExposureMs;
-
-      const nextWholeSeconds =
-        Math.floor(
-          nextExposureMs /
-            1000,
-        );
-
-      const wholeSecondChanged =
-        nextWholeSeconds !==
-        tornSleepingBagFrozenExposureWholeSecondsRef.current;
-
-      if (wholeSecondChanged) {
-        tornSleepingBagFrozenExposureWholeSecondsRef.current =
-          nextWholeSeconds;
-
-        setTornSleepingBagFrozenExposureSeconds(
-          nextWholeSeconds,
-        );
-      }
-
-      if (nextExposureMs <= 0) {
-        hasTornSleepingBagColdRef.current =
-          false;
-
-        setHasTornSleepingBagCold(
-          false,
-        );
-
-        persistTornSleepingBagColdState(
-          0,
-          false,
-        );
-
-        void updateColdRef.current(
-          false,
-        );
-
-        return;
-      }
-
-      /*
-       * 모닥불 회복은 200ms tick이므로 localStorage에는
-       * 초 단위 값이 바뀔 때만 기록한다. 스튜처럼 큰 폭으로
-       * 줄어드는 경우에도 wholeSecondChanged가 항상 true다.
-       */
-      if (wholeSecondChanged) {
-        persistTornSleepingBagColdState(
-          nextExposureMs,
-          true,
-        );
-      }
-    }, [
-      persistTornSleepingBagColdState,
-    ]);
 
   const [
     activeFoodInteractions,
@@ -3765,6 +3306,18 @@ export default function HooWorldPage() {
     }
 
     async function loadFirewoodField() {
+      const cachedFirewood =
+        await loadRecoveryRecord<FirewoodFieldItem[]>(
+          "world-field",
+          "firewood",
+        );
+
+      if (!cancelled && Array.isArray(cachedFirewood?.value)) {
+        setFirewoodFieldItems(
+          sortFirewoodItems(cachedFirewood.value),
+        );
+      }
+
       const {
         data,
         error,
@@ -3790,8 +3343,8 @@ export default function HooWorldPage() {
       }
 
       if (error) {
-        console.error(
-          "HOO WORLD 장작 필드를 불러오지 못했습니다.",
+        console.warn(
+          "HOO WORLD 장작 서버 조회 실패: 마지막 로컬 복구본을 유지합니다.",
           error,
         );
 
@@ -3913,6 +3466,16 @@ export default function HooWorldPage() {
     supabase,
   ]);
 
+  /* 장작 필드 목록을 Recovery Vault에 계속 복제한다. */
+  useEffect(() => {
+    void saveRecoveryRecord(
+      "world-field",
+      "firewood",
+      firewoodFieldItems,
+      "hoo-world-firewood-field",
+    );
+  }, [firewoodFieldItems]);
+
   /*
    * 실시간 좌표 송출 주기를 제한한다.
    * 50ms = 초당 최대 약 20회 전송.
@@ -3955,6 +3518,26 @@ export default function HooWorldPage() {
     let cancelled = false;
 
     async function loadPlayer() {
+      const cachedPlayer =
+        await loadRecoveryRecord<{
+          userId: string;
+          email: string | null;
+          nickname: string;
+          selectedAccessoryId: string | null;
+          hooCoinBalance: number;
+        }>(
+          "world-player",
+          "current",
+        );
+
+      if (!cancelled && cachedPlayer?.value) {
+        currentUserIdRef.current = cachedPlayer.value.userId;
+        setCurrentUserId(cachedPlayer.value.userId);
+        setNickname(cachedPlayer.value.nickname);
+        setSelectedAccessoryId(cachedPlayer.value.selectedAccessoryId);
+        setHooCoinBalance(Number(cachedPlayer.value.hooCoinBalance ?? 0));
+      }
+
       try {
         const {
           data: {
@@ -3964,17 +3547,16 @@ export default function HooWorldPage() {
           await supabase.auth.getUser();
 
         if (!user) {
-          currentUserIdRef.current =
-            null;
+          if (!cachedPlayer?.value) {
+            currentUserIdRef.current = null;
+
+            if (!cancelled) {
+              setCurrentUserId(null);
+              setSelectedAccessoryId(null);
+            }
+          }
 
           if (!cancelled) {
-            setCurrentUserId(
-              null,
-            );
-            setSelectedAccessoryId(
-              null,
-            );
-
             setIsUserLoading(false);
           }
 
@@ -4023,7 +3605,7 @@ export default function HooWorldPage() {
           profileResult.data
             ?.nickname;
 
-        setNickname(
+        const resolvedNickname =
           typeof profileNickname ===
             "string" &&
             profileNickname.trim()
@@ -4031,8 +3613,7 @@ export default function HooWorldPage() {
             : user.email?.split(
                 "@",
               )[0] ??
-                "HOO",
-        );
+                "HOO";
 
         const savedAccessorySlot =
           Number(
@@ -4040,28 +3621,43 @@ export default function HooWorldPage() {
               ?.hoo_world_accessory_slot,
           );
 
-        setSelectedAccessoryId(
-          Number.isInteger(
-            savedAccessorySlot,
-          ) &&
+        const resolvedAccessoryId =
+          Number.isInteger(savedAccessorySlot) &&
           savedAccessorySlot >= 1 &&
-          savedAccessorySlot <=
-            HOO_WORLD_ACCESSORY_SLOT_COUNT
-            ? String(
-                savedAccessorySlot,
-              )
-            : null,
+          savedAccessorySlot <= HOO_WORLD_ACCESSORY_SLOT_COUNT
+            ? String(savedAccessorySlot)
+            : null;
+
+        const resolvedBalance = Number(
+          walletResult.data?.balance ?? 0,
         );
 
-        setHooCoinBalance(
-          Number(
-            walletResult.data
-              ?.balance ?? 0,
-          ),
+        setNickname(resolvedNickname);
+        setSelectedAccessoryId(resolvedAccessoryId);
+        setHooCoinBalance(resolvedBalance);
+
+        void saveRecoveryRecord(
+          "world-player",
+          "current",
+          {
+            userId: user.id,
+            email: user.email ?? null,
+            nickname: resolvedNickname,
+            selectedAccessoryId: resolvedAccessoryId,
+            hooCoinBalance: resolvedBalance,
+          },
+          "supabase-world-player",
+        );
+
+        void saveRecoveryRecord(
+          "world-wallet",
+          user.id,
+          { balance: resolvedBalance },
+          "supabase-world-wallet",
         );
       } catch (error) {
-        console.error(
-          "HOO WORLD 사용자 정보를 불러오지 못했습니다.",
+        console.warn(
+          "HOO WORLD 사용자 서버 정보 조회 실패: 로컬 복구본을 유지합니다.",
           error,
         );
       } finally {
@@ -4079,6 +3675,25 @@ export default function HooWorldPage() {
   }, [
     supabase,
   ]);
+
+  function handleHooCoinBalanceChange(nextBalance: number) {
+    const safeBalance = Number.isFinite(nextBalance)
+      ? nextBalance
+      : 0;
+
+    setHooCoinBalance(safeBalance);
+
+    const userId = currentUserIdRef.current;
+
+    if (userId) {
+      void saveRecoveryRecord(
+        "world-wallet",
+        userId,
+        { balance: safeBalance },
+        "hoo-world-balance-change",
+      );
+    }
+  }
 
   async function saveAccessorySlot(
     accessoryId: string | null,
@@ -4118,6 +3733,28 @@ export default function HooWorldPage() {
       accessoryId,
     );
 
+    const cachedPlayer =
+      await loadRecoveryRecord<{
+        userId: string;
+        email: string | null;
+        nickname: string;
+        selectedAccessoryId: string | null;
+        hooCoinBalance: number;
+      }>("world-player", "current");
+
+    void saveRecoveryRecord(
+      "world-player",
+      "current",
+      {
+        userId,
+        email: cachedPlayer?.value?.email ?? null,
+        nickname: nickname ?? cachedPlayer?.value?.nickname ?? "HOO",
+        selectedAccessoryId: accessoryId,
+        hooCoinBalance,
+      },
+      "local-world-accessory",
+    );
+
     const {
       error,
     } =
@@ -4133,15 +3770,12 @@ export default function HooWorldPage() {
         );
 
     if (error) {
-      console.error(
-        "HOO WORLD 이미지 슬롯 저장에 실패했습니다.",
+      console.warn(
+        "HOO WORLD 이미지 슬롯 서버 저장 실패: 로컬 복구본은 유지합니다.",
         error,
       );
 
-      setSelectedAccessoryId(
-        previousAccessoryId,
-      );
-
+      void previousAccessoryId;
       return;
     }
 
@@ -6332,792 +5966,6 @@ export default function HooWorldPage() {
         0;
     }, []);
 
-  const applyTornSleepingBagPlayerPosition =
-    useCallback(
-      (
-        x: number,
-        y: number,
-      ) => {
-        if (
-          typeof window ===
-          "undefined"
-        ) {
-          return;
-        }
-
-        /*
-         * 포근하게 침낭 위에 올라간 취침:
-         * 캐릭터의 바닥 닿는 기준점(발/아랫부분)이 침낭 중심으로 오도록
-         * 화면 픽셀 기준으로 살짝 위쪽으로 올린다.
-         * 이렇게 하면 캐릭터가 침낭 위에 앉듯 올라타고,
-         * 아래쪽은 침낭 중앙에 포근하게 기대는 느낌이 난다.
-         */
-        const sleepingOffsetY =
-          32 /
-          window.innerHeight *
-          100;
-
-        const safeX =
-          Math.max(
-            2,
-            Math.min(
-              98,
-              x,
-            ),
-          );
-
-        const safeY =
-          Math.max(
-            6,
-            Math.min(
-              94,
-              y -
-                sleepingOffsetY,
-            ),
-          );
-
-        playerPositionRef.current.x =
-          safeX;
-
-        playerPositionRef.current.y =
-          safeY;
-
-        const element =
-          playerElementRef.current;
-
-        if (element) {
-          const pixelX =
-            safeX /
-            100 *
-            window.innerWidth;
-
-          const pixelY =
-            safeY /
-            100 *
-            window.innerHeight;
-
-          element.style.transform =
-            `translate3d(${pixelX}px, ${pixelY}px, 0) translate(-50%, -50%)`;
-        }
-
-        lastMovementBroadcastAtRef.current =
-          0;
-
-        void updatePositionRef.current(
-          safeX,
-          safeY,
-          playerFacingRef.current,
-          false,
-          {
-            force:
-              true,
-          },
-        );
-      },
-      [],
-    );
-
-  const isLocalPlayerNearBurningCampfire =
-    useCallback(() => {
-      if (typeof document === "undefined") {
-        return false;
-      }
-
-      const playerElement =
-        playerElementRef.current;
-
-      if (!playerElement) {
-        return false;
-      }
-
-      const campfireElements =
-        document.querySelectorAll<HTMLElement>(
-          '[data-hoo-world-campfire-burning="true"]',
-        );
-
-      if (campfireElements.length === 0) {
-        return false;
-      }
-
-      const playerRect =
-        playerElement.getBoundingClientRect();
-
-      const playerGroundX =
-        playerRect.left +
-        playerRect.width / 2;
-
-      const playerGroundY =
-        playerRect.bottom;
-
-      for (const campfireElement of campfireElements) {
-        const campfireRect =
-          campfireElement.getBoundingClientRect();
-
-        const campfireCenterX =
-          campfireRect.left +
-          campfireRect.width / 2;
-
-        /*
-         * HooWorldCampfire가 플레이어 근접 판정에 쓰는
-         * 불 중심 Y 비율과 동일하게 맞춘다.
-         */
-        const campfireCenterY =
-          campfireRect.top +
-          campfireRect.height * 0.56;
-
-        const distance =
-          Math.hypot(
-            playerGroundX - campfireCenterX,
-            playerGroundY - campfireCenterY,
-          );
-
-        if (
-          distance <=
-          HOO_WORLD_TORN_SLEEPING_BAG_CAMPFIRE_RECOVERY_RADIUS_PX
-        ) {
-          return true;
-        }
-      }
-
-      return false;
-    }, []);
-
-  /*
-   * 감기는 자연회복하지 않는다.
-   * 감기 상태에서 켜진 모닥불 185px 안에 있을 때만
-   * 기존 불가 회복 배율과 같은 1.8배 속도로 회복값을 줄인다.
-   * UI 힌트나 회복 문구는 의도적으로 표시하지 않는다.
-   */
-  useEffect(() => {
-    if (!hasTornSleepingBagCold) {
-      return;
-    }
-
-    let lastTickAt =
-      Date.now();
-
-    const timer =
-      window.setInterval(
-        () => {
-          const now =
-            Date.now();
-
-          const elapsedMs =
-            Math.max(
-              0,
-              now - lastTickAt,
-            );
-
-          lastTickAt =
-            now;
-
-          if (
-            elapsedMs <= 0 ||
-            !hasTornSleepingBagColdRef.current ||
-            !isLocalPlayerNearBurningCampfire()
-          ) {
-            return;
-          }
-
-          recoverTornSleepingBagCold(
-            elapsedMs *
-              HOO_WORLD_TORN_SLEEPING_BAG_CAMPFIRE_RECOVERY_MULTIPLIER,
-          );
-        },
-        HOO_WORLD_TORN_SLEEPING_BAG_FROZEN_TICK_MS,
-      );
-
-    return () => {
-      window.clearInterval(
-        timer,
-      );
-    };
-  }, [
-    hasTornSleepingBagCold,
-    isLocalPlayerNearBurningCampfire,
-    recoverTornSleepingBagCold,
-  ]);
-
-  const finishTornSleepingBagFrozenState =
-    useCallback(() => {
-      if (
-        tornSleepingBagFrozenTimerRef.current !==
-        null
-      ) {
-        window.clearInterval(
-          tornSleepingBagFrozenTimerRef.current,
-        );
-
-        tornSleepingBagFrozenTimerRef.current =
-          null;
-      }
-
-      tornSleepingBagFrozenRemainingMsRef.current =
-        0;
-
-      tornSleepingBagFrozenLastTickAtRef.current =
-        null;
-
-      tornSleepingBagCampfireRecoveryActiveRef.current =
-        false;
-
-      setIsTornSleepingBagCampfireRecoveryActive(
-        false,
-      );
-
-      setTornSleepingBagFrozenUntil(
-        null,
-      );
-
-      tornSleepingBagFrozenUntilRef.current =
-        null;
-
-      setIsTornSleepingBagFreezeReady(
-        false,
-      );
-
-      if (
-        hooWorldStatusRef.current ===
-        "frozen_resting"
-      ) {
-        hooWorldStatusRef.current =
-          "resting";
-
-        void updateStatus(
-          "resting",
-        );
-      } else if (
-        hooWorldStatusRef.current ===
-        "frozen"
-      ) {
-        hooWorldStatusRef.current =
-          "idle";
-
-        void updateStatus(
-          "idle",
-        );
-      }
-    }, [updateStatus]);
-
-  const startTornSleepingBagFrozenState =
-    useCallback(() => {
-      if (
-        tornSleepingBagFrozenTimerRef.current !==
-        null
-      ) {
-        window.clearInterval(
-          tornSleepingBagFrozenTimerRef.current,
-        );
-      }
-
-      const startedAt =
-        Date.now();
-
-      const isNearBurningCampfire =
-        isLocalPlayerNearBurningCampfire();
-
-      const initialMultiplier =
-        isNearBurningCampfire
-          ? HOO_WORLD_TORN_SLEEPING_BAG_CAMPFIRE_RECOVERY_MULTIPLIER
-          : 1;
-
-      tornSleepingBagFrozenRemainingMsRef.current =
-        HOO_WORLD_TORN_SLEEPING_BAG_FROZEN_DURATION_MS;
-
-      tornSleepingBagFrozenLastTickAtRef.current =
-        startedAt;
-
-      tornSleepingBagCampfireRecoveryActiveRef.current =
-        isNearBurningCampfire;
-
-      setIsTornSleepingBagCampfireRecoveryActive(
-        isNearBurningCampfire,
-      );
-
-      const estimatedFrozenUntil =
-        startedAt +
-        HOO_WORLD_TORN_SLEEPING_BAG_FROZEN_DURATION_MS /
-          initialMultiplier;
-
-      setTornSleepingBagFrozenUntil(
-        estimatedFrozenUntil,
-      );
-
-      tornSleepingBagFrozenUntilRef.current =
-        estimatedFrozenUntil;
-
-      hooWorldStatusRef.current =
-        "frozen_resting";
-
-      void updateStatus(
-        "frozen_resting",
-      );
-
-      tornSleepingBagFrozenTimerRef.current =
-        window.setInterval(
-          () => {
-            const now =
-              Date.now();
-
-            const lastTickAt =
-              tornSleepingBagFrozenLastTickAtRef.current ??
-              now;
-
-            const elapsedMs =
-              Math.max(
-                0,
-                now - lastTickAt,
-              );
-
-            tornSleepingBagFrozenLastTickAtRef.current =
-              now;
-
-            /*
-             * 감기 누적은 회복 배율이 적용된 "빙결 게이지"가 아니라
-             * 실제로 캐릭터가 빙결 상태였던 현실 경과시간만 더한다.
-             * 따라서 모닥불 옆에서는 빙결이 빨리 끝나고, 결과적으로
-             * 한 번의 빙결에서 쌓이는 감기 노출시간도 자연스럽게 줄어든다.
-             */
-            if (
-              elapsedMs > 0 &&
-              !hasTornSleepingBagColdRef.current
-            ) {
-              const nextExposureMs =
-                Math.min(
-                  HOO_WORLD_TORN_SLEEPING_BAG_COLD_THRESHOLD_MS,
-                  tornSleepingBagFrozenExposureMsRef.current +
-                    elapsedMs,
-                );
-
-              tornSleepingBagFrozenExposureMsRef.current =
-                nextExposureMs;
-
-              const nextWholeSeconds =
-                Math.floor(
-                  nextExposureMs /
-                    1000,
-                );
-
-              if (
-                nextWholeSeconds !==
-                tornSleepingBagFrozenExposureWholeSecondsRef.current
-              ) {
-                tornSleepingBagFrozenExposureWholeSecondsRef.current =
-                  nextWholeSeconds;
-
-                setTornSleepingBagFrozenExposureSeconds(
-                  nextWholeSeconds,
-                );
-
-                persistTornSleepingBagColdState(
-                  nextExposureMs,
-                  false,
-                );
-              }
-
-              if (
-                nextExposureMs >=
-                HOO_WORLD_TORN_SLEEPING_BAG_COLD_THRESHOLD_MS
-              ) {
-                triggerTornSleepingBagCold();
-              }
-            }
-
-            const nextIsNearBurningCampfire =
-              isLocalPlayerNearBurningCampfire();
-
-            const multiplier =
-              nextIsNearBurningCampfire
-                ? HOO_WORLD_TORN_SLEEPING_BAG_CAMPFIRE_RECOVERY_MULTIPLIER
-                : 1;
-
-            tornSleepingBagFrozenRemainingMsRef.current =
-              Math.max(
-                0,
-                tornSleepingBagFrozenRemainingMsRef.current -
-                  elapsedMs * multiplier,
-              );
-
-            if (
-              tornSleepingBagCampfireRecoveryActiveRef.current !==
-              nextIsNearBurningCampfire
-            ) {
-              tornSleepingBagCampfireRecoveryActiveRef.current =
-                nextIsNearBurningCampfire;
-
-              setIsTornSleepingBagCampfireRecoveryActive(
-                nextIsNearBurningCampfire,
-              );
-
-              /*
-               * 현재 회복속도가 바뀐 순간부터 예상 실제 종료시각도
-               * 다시 계산한다. 같은 배율이 유지되는 동안 이 시각은 고정된다.
-               */
-              const nextEstimatedFrozenUntil =
-                now +
-                tornSleepingBagFrozenRemainingMsRef.current /
-                  multiplier;
-
-              setTornSleepingBagFrozenUntil(
-                nextEstimatedFrozenUntil,
-              );
-
-              tornSleepingBagFrozenUntilRef.current =
-                nextEstimatedFrozenUntil;
-            }
-
-            if (
-              tornSleepingBagFrozenRemainingMsRef.current <=
-              0
-            ) {
-              finishTornSleepingBagFrozenState();
-            }
-          },
-          HOO_WORLD_TORN_SLEEPING_BAG_FROZEN_TICK_MS,
-        );
-    }, [
-      finishTornSleepingBagFrozenState,
-      isLocalPlayerNearBurningCampfire,
-      persistTornSleepingBagColdState,
-      triggerTornSleepingBagCold,
-      updateStatus,
-    ]);
-
-  const clearTornSleepingBagFreezeTimer =
-    useCallback(() => {
-      tornSleepingBagFreezeSessionRef.current +=
-        1;
-
-      if (
-        tornSleepingBagFreezeTimerRef.current !==
-        null
-      ) {
-        window.clearTimeout(
-          tornSleepingBagFreezeTimerRef.current,
-        );
-
-        tornSleepingBagFreezeTimerRef.current =
-          null;
-      }
-
-      setTornSleepingBagFreezeSchedule(
-        null,
-      );
-
-      setIsTornSleepingBagFreezeReady(
-        false,
-      );
-    }, []);
-
-  const startTornSleepingBagFreezeTimer =
-    useCallback(
-      (itemId: string) => {
-        clearTornSleepingBagFreezeTimer();
-
-        /*
-         * new Date()는 이 코드를 실행 중인 브라우저/컴퓨터의
-         * 시스템 날짜와 시간대를 사용한다.
-         */
-        const localMonth =
-          new Date().getMonth() +
-          1;
-
-        const delayMs =
-          getTornSleepingBagFreezeDelayMs(
-            localMonth,
-          );
-
-        /* 3~8월에는 찢어진 침낭 빙결 타이머가 없다. */
-        if (delayMs === null) {
-          return;
-        }
-
-        const startedAt =
-          Date.now();
-
-        const triggerAt =
-          startedAt +
-          delayMs;
-
-        const sessionId =
-          tornSleepingBagFreezeSessionRef.current;
-
-        setTornSleepingBagFreezeSchedule({
-          itemId,
-          localMonth,
-          startedAt,
-          triggerAt,
-          delayMs,
-        });
-
-        tornSleepingBagFreezeTimerRef.current =
-          window.setTimeout(
-            () => {
-              tornSleepingBagFreezeTimerRef.current =
-                null;
-
-              /*
-               * 침낭을 나갔다가 다시 들어왔거나 다른 세션으로 바뀐
-               * 오래된 타이머는 절대로 발동시키지 않는다.
-               */
-              if (
-                tornSleepingBagFreezeSessionRef.current !==
-                  sessionId ||
-                activeTornSleepingBagItemIdRef.current !==
-                  itemId ||
-                hooWorldStatusRef.current !==
-                  "resting"
-              ) {
-                return;
-              }
-
-              setIsTornSleepingBagFreezeReady(
-                true,
-              );
-
-              setTornSleepingBagFreezeSchedule(
-                null,
-              );
-
-              startTornSleepingBagFrozenState();
-            },
-            delayMs,
-          );
-      },
-      [
-        clearTornSleepingBagFreezeTimer,
-        startTornSleepingBagFrozenState,
-      ],
-    );
-
-  /*
-   * 첫 5분 빙결이 끝난 뒤에도 플레이어가 찢어진 침낭에
-   * 계속 누워 있다면, 다음 계절별 랜덤 빙결 타이머를 다시 건다.
-   *
-   * 기존에는 frozen_resting -> resting 으로만 돌아가고
-   * 재무장(re-arm)을 하지 않아 한 번의 수면 세션에서
-   * 빙결 누적이 최대 5분에서 멈췄다. 그 결과 감기 기준인
-   * 누적 빙결 10분에 도달할 수 없었다.
-   */
-  useEffect(() => {
-    const activeItemId =
-      activeTornSleepingBagItemIdRef.current;
-
-    if (!activeItemId) {
-      return;
-    }
-
-    if (
-      hooWorldStatusRef.current !==
-      "resting"
-    ) {
-      return;
-    }
-
-    if (
-      tornSleepingBagFrozenRemainingMsRef.current >
-      0
-    ) {
-      return;
-    }
-
-    if (
-      tornSleepingBagFreezeTimerRef.current !==
-      null
-    ) {
-      return;
-    }
-
-    if (
-      tornSleepingBagFreezeSchedule !==
-      null
-    ) {
-      return;
-    }
-
-    startTornSleepingBagFreezeTimer(
-      activeItemId,
-    );
-  }, [
-    status,
-    tornSleepingBagFreezeSchedule,
-    startTornSleepingBagFreezeTimer,
-  ]);
-
-  useEffect(() => {
-    return () => {
-      if (
-        tornSleepingBagFreezeTimerRef.current !==
-        null
-      ) {
-        window.clearTimeout(
-          tornSleepingBagFreezeTimerRef.current,
-        );
-      }
-
-      if (
-        tornSleepingBagFrozenTimerRef.current !==
-        null
-      ) {
-        window.clearInterval(
-          tornSleepingBagFrozenTimerRef.current,
-        );
-      }
-
-      if (
-        tornSleepingBagColdNoticeTimerRef.current !==
-        null
-      ) {
-        window.clearTimeout(
-          tornSleepingBagColdNoticeTimerRef.current,
-        );
-      }
-    };
-  }, []);
-
-  const handleTornSleepingBagRestRequested =
-    useCallback(
-      async (
-        request:
-          HooWorldTornSleepingBagRestPayload,
-      ) => {
-        if (request.resting) {
-          if (
-            isControllingAdminCharacterRef.current ||
-            isHooWorldMovementLockedStatus(
-              hooWorldStatusRef.current,
-            )
-          ) {
-            return false;
-          }
-
-          stopPlayerMovementForWorldItemInteraction();
-
-          setTornSleepingBagSleepStartedAt(
-            Date.now(),
-          );
-          setTornSleepingBagSleepElapsedSeconds(
-            0,
-          );
-
-          activeTornSleepingBagItemIdRef.current =
-            request.itemId;
-
-          setActiveTornSleepingBagItemId(
-            request.itemId,
-          );
-
-          const isAlreadyFrozen =
-            tornSleepingBagFrozenRemainingMsRef.current >
-            0;
-
-          if (!isAlreadyFrozen) {
-            startTornSleepingBagFreezeTimer(
-              request.itemId,
-            );
-          }
-
-          applyTornSleepingBagPlayerPosition(
-            request.x,
-            request.y,
-          );
-
-          const nextStatus =
-            isAlreadyFrozen
-              ? "frozen_resting"
-              : "resting";
-
-          hooWorldStatusRef.current =
-            nextStatus;
-
-          await updateStatus(
-            nextStatus,
-          );
-
-          return true;
-        }
-
-        if (
-          activeTornSleepingBagItemIdRef.current !==
-          request.itemId
-        ) {
-          return false;
-        }
-
-        stopPlayerMovementForWorldItemInteraction();
-
-        clearTornSleepingBagFreezeTimer();
-
-        setTornSleepingBagSleepStartedAt(
-          null,
-        );
-        setTornSleepingBagSleepElapsedSeconds(
-          0,
-        );
-
-        activeTornSleepingBagItemIdRef.current =
-          null;
-
-        setActiveTornSleepingBagItemId(
-          null,
-        );
-
-        if (
-          hooWorldStatusRef.current ===
-            "frozen_resting"
-        ) {
-          hooWorldStatusRef.current =
-            "frozen";
-
-          await updateStatus(
-            "frozen",
-          );
-        } else if (
-          hooWorldStatusRef.current ===
-            "resting"
-        ) {
-          hooWorldStatusRef.current =
-            "idle";
-
-          await updateStatus(
-            "idle",
-          );
-        }
-
-        return true;
-      },
-      [
-        applyTornSleepingBagPlayerPosition,
-        clearTornSleepingBagFreezeTimer,
-        startTornSleepingBagFreezeTimer,
-        stopPlayerMovementForWorldItemInteraction,
-        updateStatus,
-      ],
-    );
-
-  const handleTornSleepingBagPositionChange =
-    useCallback(
-      (
-        payload:
-          HooWorldTornSleepingBagPositionPayload,
-      ) => {
-        if (
-          activeTornSleepingBagItemIdRef.current !==
-          payload.itemId
-        ) {
-          return;
-        }
-
-        applyTornSleepingBagPlayerPosition(
-          payload.x,
-          payload.y,
-        );
-      },
-      [
-        applyTornSleepingBagPlayerPosition,
-      ],
-    );
-
   /*
    * ──────────────────────────────────────────────
    * HOO WORLD 공통 음식 상호작용 엔진
@@ -7994,15 +6842,6 @@ export default function HooWorldPage() {
             "group_eating"
         ) {
           activateHooWorldFoodEffectStack();
-
-          if (
-            session.foodId ===
-            "camp_stew"
-          ) {
-            recoverTornSleepingBagCold(
-              HOO_WORLD_CAMP_STEW_COLD_RECOVERY_MS,
-            );
-          }
         }
       },
       Math.max(
@@ -9130,15 +7969,6 @@ export default function HooWorldPage() {
         );
 
         activateHooWorldFoodEffectStack();
-
-        if (
-          food.id ===
-          "camp_stew"
-        ) {
-          recoverTornSleepingBagCold(
-            HOO_WORLD_CAMP_STEW_COLD_RECOVERY_MS,
-          );
-        }
       },
       HOO_WORLD_FOOD_ACTION_DURATION_MS,
     );
@@ -10059,15 +8889,6 @@ export default function HooWorldPage() {
   onFireworksRequested={
     startHooWorldFireworksSession
   }
-  activeTornSleepingBagItemId={
-    activeTornSleepingBagItemId
-  }
-  onTornSleepingBagRestRequested={
-    handleTornSleepingBagRestRequested
-  }
-  onTornSleepingBagPositionChange={
-    handleTornSleepingBagPositionChange
-  }
 />
 
 {/* ─────────────────────────
@@ -10112,7 +8933,7 @@ export default function HooWorldPage() {
     stopPlayerMovementForWorldItemInteraction
   }
   onBalanceChange={
-    setHooCoinBalance
+    handleHooCoinBalanceChange
   }
 />
 
@@ -11590,14 +10411,7 @@ export default function HooWorldPage() {
               key={
                 remotePlayer.userId
               }
-              className={`pointer-events-none absolute left-0 top-0 will-change-transform ${
-                remotePlayer.status ===
-                  "resting" ||
-                remotePlayer.status ===
-                  "frozen_resting"
-                  ? "z-[16]"
-                  : "z-20"
-              }`}
+              className="pointer-events-none absolute left-0 top-0 z-20 will-change-transform"
               style={{
                 transform: `translate3d(${position.x}vw, ${position.y}vh, 0) translate(-50%, -50%)`,
                 transition:
@@ -11664,10 +10478,6 @@ export default function HooWorldPage() {
                       true
                     }
                     accessoryIds={[]}
-                    hasCold={
-                      remotePlayer.cold ===
-                      true
-                    }
                   />
                 </div>
               </div>
@@ -11685,58 +10495,7 @@ export default function HooWorldPage() {
           playerElementRef
         }
         data-hoo-world-local-player="true"
-        data-hoo-world-movement-locked={
-          isHooWorldMovementLockedStatus(
-            status,
-          )
-            ? "true"
-            : "false"
-        }
-        data-hoo-world-torn-sleeping-bag-freeze-ready={
-          isTornSleepingBagFreezeReady
-            ? "true"
-            : "false"
-        }
-        data-hoo-world-torn-sleeping-bag-freeze-at={
-          tornSleepingBagFreezeSchedule
-            ?.triggerAt ??
-          undefined
-        }
-        data-hoo-world-torn-sleeping-bag-local-month={
-          tornSleepingBagFreezeSchedule
-            ?.localMonth ??
-          undefined
-        }
-        data-hoo-world-frozen-until={
-          tornSleepingBagFrozenUntil ??
-          undefined
-        }
-        data-hoo-world-campfire-freeze-recovery={
-          isTornSleepingBagCampfireRecoveryActive
-            ? "true"
-            : "false"
-        }
-        data-hoo-world-freeze-recovery-multiplier={
-          isTornSleepingBagCampfireRecoveryActive
-            ? HOO_WORLD_TORN_SLEEPING_BAG_CAMPFIRE_RECOVERY_MULTIPLIER
-            : 1
-        }
-        data-hoo-world-cold={
-          hasTornSleepingBagCold
-            ? "true"
-            : "false"
-        }
-        data-hoo-world-frozen-exposure-seconds={
-          tornSleepingBagFrozenExposureSeconds
-        }
-        className={`absolute left-0 top-0 will-change-transform ${
-          status ===
-            "resting" ||
-          status ===
-            "frozen_resting"
-            ? "z-[16]"
-            : "z-30"
-        }`}
+        className="absolute left-0 top-0 z-30 will-change-transform"
         style={{
           transform:
             "translate3d(50vw, 78vh, 0) translate(-50%, -50%)",
@@ -11844,20 +10603,6 @@ export default function HooWorldPage() {
                     : 4
                 }
                 accessoryIds={[]}
-                sleepElapsedSeconds={
-                  status ===
-                    "resting" ||
-                  status ===
-                    "frozen_resting"
-                    ? tornSleepingBagSleepElapsedSeconds
-                    : undefined
-                }
-                hasCold={
-                  hasTornSleepingBagCold
-                }
-                showColdNotice={
-                  showTornSleepingBagColdNotice
-                }
               />
               </div>
             </div>

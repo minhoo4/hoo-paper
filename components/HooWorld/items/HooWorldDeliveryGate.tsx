@@ -4,7 +4,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 
@@ -13,7 +12,6 @@ import {
 } from "react-dom";
 
 import HooWorldItem from "@/components/HooWorld/items/HooWorldItem";
-import HooWorldTornSleepingBag from "@/components/HooWorld/items/HooWorldTornSleepingBag";
 import HooWorldFoodItem from "@/components/HooWorld/items/HooWorldFoodItem";
 import HooWorldFireworksItem, {
   HOO_WORLD_FIREWORKS_INTERACTION_DISTANCE_PX,
@@ -33,6 +31,10 @@ import type {
 import {
   createClient,
 } from "@/lib/supabase/client";
+import {
+  loadRecoveryRecord,
+  saveRecoveryRecord,
+} from "@/lib/recovery/hooRecoveryVault";
 
 type DeliveryRpcPayload = {
   has_delivery?: unknown;
@@ -83,13 +85,6 @@ type DeliveredFieldItem = {
    * item_type 또는 delivery metadata의 interaction_type으로 복구한다.
    */
   isFireworks: boolean;
-
-  /*
-   * 찢어진 침낭 배송 아이템.
-   * 2단계에서는 전용 시각 프리셋 + 기존 HooWorldItem 이동만 적용한다.
-   * 취침/추위 상호작용은 다음 단계에서 연결한다.
-   */
-  isTornSleepingBag: boolean;
 };
 
 export type HooWorldDeliveredFoodConsumedPayload = {
@@ -110,22 +105,6 @@ export type HooWorldDeliveredFireworksRequestedPayload = {
   y: number;
 };
 
-export type HooWorldTornSleepingBagRestPayload = {
-  itemId: string;
-  x: number;
-  y: number;
-  resting: boolean;
-};
-
-export type HooWorldTornSleepingBagPositionPayload = {
-  itemId: string;
-  x: number;
-  y: number;
-};
-
-const HOO_WORLD_TORN_SLEEPING_BAG_INTERACTION_DISTANCE_PX =
-  185;
-
 type HooWorldDeliveryGateProps = {
   playerPositionRef: MutableRefObject<{
     x: number;
@@ -145,16 +124,6 @@ type HooWorldDeliveryGateProps = {
   ) =>
     | boolean
     | Promise<boolean>;
-  activeTornSleepingBagItemId?:
-    string | null;
-  onTornSleepingBagRestRequested?: (
-    payload: HooWorldTornSleepingBagRestPayload,
-  ) =>
-    | boolean
-    | Promise<boolean>;
-  onTornSleepingBagPositionChange?: (
-    payload: HooWorldTornSleepingBagPositionPayload,
-  ) => void;
 };
 
 function getRecord(
@@ -374,14 +343,6 @@ function parseDeliveredFieldItem(
     metadataInteractionType ===
       "fireworks";
 
-  const isTornSleepingBag =
-    normalizedItemType ===
-      "torn_sleeping_bag" ||
-    metadataInteractionType ===
-      "torn_sleeping_bag" ||
-    itemName ===
-      "찢어진 침낭";
-
   return {
     itemId,
     itemType:
@@ -432,7 +393,6 @@ function parseDeliveredFieldItem(
     foodId,
     foodInteractionType,
     isFireworks,
-    isTornSleepingBag,
     isInstalled:
       row.is_installed !==
       false,
@@ -689,9 +649,6 @@ export default function HooWorldDeliveryGate({
   onFoodConsumed,
   onGroupFoodRequested,
   onFireworksRequested,
-  activeTornSleepingBagItemId = null,
-  onTornSleepingBagRestRequested,
-  onTornSleepingBagPositionChange,
 }: HooWorldDeliveryGateProps) {
   const supabase =
     useMemo(
@@ -778,33 +735,6 @@ export default function HooWorldDeliveryGate({
     null,
   );
 
-  const [
-    tornSleepingBagInteractionPending,
-    setTornSleepingBagInteractionPending,
-  ] = useState(false);
-
-  const [
-    nearbyTornSleepingBagItemId,
-    setNearbyTornSleepingBagItemId,
-  ] = useState<string | null>(
-    null,
-  );
-
-  const [
-    tornSleepingBagMonologue,
-    setTornSleepingBagMonologue,
-  ] = useState<{
-    itemId: string;
-    left: number;
-    top: number;
-  } | null>(null);
-
-  const tornSleepingBagObservedItemIdRef =
-    useRef<string | null>(null);
-
-  const tornSleepingBagMonologueTimerRef =
-    useRef<number | null>(null);
-
   /*
    * 배송 상자에서 꺼내져 실제 필드에 설치된 모든 배송 아이템.
    *
@@ -814,6 +744,20 @@ export default function HooWorldDeliveryGate({
   const refreshDeliveredFieldItems =
     useCallback(
       async () => {
+        const cachedFieldItems =
+          await loadRecoveryRecord<
+            DeliveredFieldItem[]
+          >(
+            "world-delivery",
+            "field-items",
+          );
+
+        if (Array.isArray(cachedFieldItems?.value)) {
+          setDeliveredFieldItems(
+            cachedFieldItems.value,
+          );
+        }
+
         const {
           data,
           error,
@@ -839,7 +783,7 @@ export default function HooWorldDeliveryGate({
 
         if (error) {
           console.warn(
-            "HOO WORLD 배송 필드 아이템을 불러오지 못했습니다.",
+            "HOO WORLD 배송 필드 아이템 서버 조회 실패: 로컬 복구본을 유지합니다.",
             error,
           );
 
@@ -894,8 +838,6 @@ export default function HooWorldDeliveryGate({
                   item.foodInteractionType,
                 isFireworks:
                   item.isFireworks,
-                isTornSleepingBag:
-                  item.isTornSleepingBag,
               }),
             )
             .sort(
@@ -911,15 +853,59 @@ export default function HooWorldDeliveryGate({
         setDeliveredFieldItems(
           nextItems,
         );
+
+        void saveRecoveryRecord(
+          "world-delivery",
+          "field-items",
+          nextItems,
+          "supabase-delivered-field-items",
+        );
       },
       [
         supabase,
       ],
     );
 
+  useEffect(() => {
+    void saveRecoveryRecord(
+      "world-delivery",
+      "field-items",
+      deliveredFieldItems,
+      "realtime-delivered-field-items",
+    );
+  }, [
+    deliveredFieldItems,
+  ]);
+
   const refreshDeliveryState =
     useCallback(
       async () => {
+        const cachedDeliveryState =
+          await loadRecoveryRecord<{
+            hasDelivery: boolean;
+            deliveryCount: number;
+            itemCount: number;
+            deliveryBoxes: DeliveryBox[];
+          }>(
+            "world-delivery",
+            "current-deliveries",
+          );
+
+        if (cachedDeliveryState?.value) {
+          setHasDelivery(
+            cachedDeliveryState.value.hasDelivery,
+          );
+          setDeliveryCount(
+            cachedDeliveryState.value.deliveryCount,
+          );
+          setItemCount(
+            cachedDeliveryState.value.itemCount,
+          );
+          setDeliveryBoxes(
+            cachedDeliveryState.value.deliveryBoxes,
+          );
+        }
+
         const {
           data: sessionData,
         } =
@@ -928,25 +914,13 @@ export default function HooWorldDeliveryGate({
         if (
           !sessionData.session
         ) {
-          setHasDelivery(
-            false,
-          );
-
-          setDeliveryCount(
-            0,
-          );
-
-          setItemCount(
-            0,
-          );
-
-          setDeliveryBoxes(
-            [],
-          );
-
-          setActiveDeliveryId(
-            null,
-          );
+          if (!cachedDeliveryState?.value) {
+            setHasDelivery(false);
+            setDeliveryCount(0);
+            setItemCount(0);
+            setDeliveryBoxes([]);
+            setActiveDeliveryId(null);
+          }
 
           return;
         }
@@ -961,7 +935,7 @@ export default function HooWorldDeliveryGate({
 
         if (error) {
           console.warn(
-            "HOO WORLD 공용 배송 상태를 불러오지 못했습니다.",
+            "HOO WORLD 배송 상태 서버 조회 실패: 로컬 복구본을 유지합니다.",
             error,
           );
 
@@ -1011,12 +985,33 @@ export default function HooWorldDeliveryGate({
             : 0,
         );
 
-        setItemCount(
+        const nextItemCount =
           nextHasDelivery
             ? countUnclaimedItems(
                 deliveries,
               )
-            : 0,
+            : 0;
+
+        setItemCount(
+          nextItemCount,
+        );
+
+        void saveRecoveryRecord(
+          "world-delivery",
+          "current-deliveries",
+          {
+            hasDelivery: nextHasDelivery,
+            deliveryCount:
+              nextHasDelivery
+                ? nextDeliveryBoxes.length
+                : 0,
+            itemCount: nextItemCount,
+            deliveryBoxes:
+              nextHasDelivery
+                ? nextDeliveryBoxes
+                : [],
+          },
+          "supabase-delivery-state",
         );
       },
       [
@@ -1139,8 +1134,6 @@ export default function HooWorldDeliveryGate({
                     parsed.foodInteractionType,
                   isFireworks:
                     parsed.isFireworks,
-                  isTornSleepingBag:
-                    parsed.isTornSleepingBag,
                 };
 
                 const existingIndex =
@@ -1744,295 +1737,7 @@ export default function HooWorldDeliveryGate({
   }
 
   /*
-   * 찢어진 침낭 접근 감지 + 캐릭터 머리 위 독백.
-   *
-   * 같은 침낭 범위 안에서는 한 번만 말하고,
-   * 범위를 완전히 벗어났다가 다시 들어오면 다시 출력한다.
-   */
-  useEffect(() => {
-    if (
-      typeof window ===
-      "undefined"
-    ) {
-      return;
-    }
-
-    function clearMonologueTimer() {
-      if (
-        tornSleepingBagMonologueTimerRef.current !==
-        null
-      ) {
-        window.clearTimeout(
-          tornSleepingBagMonologueTimerRef.current,
-        );
-
-        tornSleepingBagMonologueTimerRef.current =
-          null;
-      }
-    }
-
-    function refreshTornSleepingBagProximity() {
-      if (
-        activeTornSleepingBagItemId
-      ) {
-        setNearbyTornSleepingBagItemId(
-          activeTornSleepingBagItemId,
-        );
-        setTornSleepingBagMonologue(
-          null,
-        );
-        clearMonologueTimer();
-        return;
-      }
-
-      const player =
-        playerPositionRef.current;
-
-      let nearest:
-        | {
-            itemId: string;
-            distance: number;
-          }
-        | null =
-        null;
-
-      for (
-        const item of
-        deliveredFieldItems
-      ) {
-        if (
-          !item.isTornSleepingBag
-        ) {
-          continue;
-        }
-
-        const deltaX =
-          (
-            player.x -
-            item.x
-          ) /
-          100 *
-          window.innerWidth;
-
-        const deltaY =
-          (
-            player.y -
-            item.y
-          ) /
-          100 *
-          window.innerHeight;
-
-        const distance =
-          Math.hypot(
-            deltaX,
-            deltaY,
-          );
-
-        if (
-          distance >
-            HOO_WORLD_TORN_SLEEPING_BAG_INTERACTION_DISTANCE_PX ||
-          (
-            nearest &&
-            nearest.distance <=
-              distance
-          )
-        ) {
-          continue;
-        }
-
-        nearest = {
-          itemId:
-            item.itemId,
-          distance,
-        };
-      }
-
-      const nearestItemId =
-        nearest?.itemId ??
-        null;
-
-      setNearbyTornSleepingBagItemId(
-        (current) =>
-          current ===
-          nearestItemId
-            ? current
-            : nearestItemId,
-      );
-
-      if (!nearestItemId) {
-        tornSleepingBagObservedItemIdRef.current =
-          null;
-
-        setTornSleepingBagMonologue(
-          null,
-        );
-
-        clearMonologueTimer();
-        return;
-      }
-
-      const playerElement =
-        document.querySelector<HTMLElement>(
-          '[data-hoo-world-local-player="true"]',
-        );
-
-      if (!playerElement) {
-        return;
-      }
-
-      const playerRect =
-        playerElement.getBoundingClientRect();
-
-      const left =
-        playerRect.left +
-        playerRect.width /
-          2;
-
-      const top =
-        Math.max(
-          18,
-          playerRect.top -
-            10,
-        );
-
-      if (
-        tornSleepingBagObservedItemIdRef.current ===
-        nearestItemId
-      ) {
-        setTornSleepingBagMonologue(
-          (current) =>
-            current &&
-            current.itemId ===
-              nearestItemId
-              ? {
-                  ...current,
-                  left,
-                  top,
-                }
-              : current,
-        );
-        return;
-      }
-
-      tornSleepingBagObservedItemIdRef.current =
-        nearestItemId;
-
-      setTornSleepingBagMonologue({
-        itemId:
-          nearestItemId,
-        left,
-        top,
-      });
-
-      clearMonologueTimer();
-
-      tornSleepingBagMonologueTimerRef.current =
-        window.setTimeout(
-          () => {
-            setTornSleepingBagMonologue(
-              null,
-            );
-
-            tornSleepingBagMonologueTimerRef.current =
-              null;
-          },
-          4600,
-        );
-    }
-
-    refreshTornSleepingBagProximity();
-
-    const timer =
-      window.setInterval(
-        refreshTornSleepingBagProximity,
-        120,
-      );
-
-    return () => {
-      window.clearInterval(
-        timer,
-      );
-
-      clearMonologueTimer();
-    };
-  }, [
-    activeTornSleepingBagItemId,
-    deliveredFieldItems,
-    playerPositionRef,
-  ]);
-
-  /*
-   * 누군가 침낭을 옮겼을 때, 그 침낭 안에서 쉬고 있는
-   * 로컬 캐릭터도 같은 좌표를 따라가게 부모에게 알려준다.
-   */
-  useEffect(() => {
-    if (
-      !activeTornSleepingBagItemId ||
-      !onTornSleepingBagPositionChange
-    ) {
-      return;
-    }
-
-    const activeItem =
-      deliveredFieldItems.find(
-        (item) =>
-          item.itemId ===
-            activeTornSleepingBagItemId &&
-          item.isTornSleepingBag,
-      );
-
-    if (!activeItem) {
-      return;
-    }
-
-    onTornSleepingBagPositionChange({
-      itemId:
-        activeItem.itemId,
-      x:
-        activeItem.x,
-      y:
-        activeItem.y,
-    });
-  }, [
-    activeTornSleepingBagItemId,
-    deliveredFieldItems,
-    onTornSleepingBagPositionChange,
-  ]);
-
-  async function requestTornSleepingBagRest(
-    item: DeliveredFieldItem,
-    resting: boolean,
-  ) {
-    if (
-      tornSleepingBagInteractionPending ||
-      !onTornSleepingBagRestRequested
-    ) {
-      return;
-    }
-
-    setTornSleepingBagInteractionPending(
-      true,
-    );
-
-    try {
-      await onTornSleepingBagRestRequested({
-        itemId:
-          item.itemId,
-        x:
-          item.x,
-        y:
-          item.y,
-        resting,
-      });
-    } finally {
-      setTornSleepingBagInteractionPending(
-        false,
-      );
-    }
-  }
-
-  /*
-   * 배송 상자에서 꺼낸 음식 / 불꽃놀이 / 찢어진 침낭 F 상호작용.
+   * 배송 상자에서 꺼낸 음식 / 불꽃놀이 F 상호작용.
    *
    * - 가장 가까운 상호작용 아이템 1개만 선택
    * - 음식: 기존 먹기 / 단체 식사
@@ -2046,48 +1751,14 @@ export default function HooWorldDeliveryGate({
         event.code !== "KeyF" ||
         event.repeat ||
         activeDeliveryId ||
+        interactionLocked ||
+        consumingFoodItemId ||
+        activatingFireworksItemId ||
         isEditableTarget(
           event.target,
         ) ||
         typeof window ===
-          "undefined" ||
-        tornSleepingBagInteractionPending
-      ) {
-        return;
-      }
-
-      if (
-        activeTornSleepingBagItemId
-      ) {
-        const activeBag =
-          deliveredFieldItems.find(
-            (item) =>
-              item.itemId ===
-                activeTornSleepingBagItemId &&
-              item.isTornSleepingBag,
-          );
-
-        if (!activeBag) {
-          return;
-        }
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-
-        void requestTornSleepingBagRest(
-          activeBag,
-          false,
-        );
-        return;
-      }
-
-      if (
-        interactionLocked ||
-        consumingFoodItemId ||
-        activatingFireworksItemId ||
-        document.querySelector(
-          '[data-hoo-world-item-move-mode="true"]',
-        )
+          "undefined"
       ) {
         return;
       }
@@ -2118,8 +1789,7 @@ export default function HooWorldDeliveryGate({
 
         if (
           !isFood &&
-          !item.isFireworks &&
-          !item.isTornSleepingBag
+          !item.isFireworks
         ) {
           continue;
         }
@@ -2147,11 +1817,9 @@ export default function HooWorldDeliveryGate({
           );
 
         const interactionDistance =
-          item.isTornSleepingBag
-            ? HOO_WORLD_TORN_SLEEPING_BAG_INTERACTION_DISTANCE_PX
-            : item.isFireworks
-              ? HOO_WORLD_FIREWORKS_INTERACTION_DISTANCE_PX
-              : HOO_WORLD_FOOD_INTERACTION_DISTANCE_PX;
+          item.isFireworks
+            ? HOO_WORLD_FIREWORKS_INTERACTION_DISTANCE_PX
+            : HOO_WORLD_FOOD_INTERACTION_DISTANCE_PX;
 
         if (
           distance >
@@ -2177,16 +1845,6 @@ export default function HooWorldDeliveryGate({
 
       event.preventDefault();
       event.stopImmediatePropagation();
-
-      if (
-        nearest.isTornSleepingBag
-      ) {
-        void requestTornSleepingBagRest(
-          nearest,
-          true,
-        );
-        return;
-      }
 
       if (
         nearest.isFireworks
@@ -2217,13 +1875,11 @@ export default function HooWorldDeliveryGate({
     };
   }, [
     activeDeliveryId,
-    activeTornSleepingBagItemId,
     activatingFireworksItemId,
     consumingFoodItemId,
     deliveredFieldItems,
     interactionLocked,
     playerPositionRef,
-    tornSleepingBagInteractionPending,
   ]);
 
   async function claimDeliveryItem(
@@ -2365,23 +2021,13 @@ export default function HooWorldDeliveryGate({
         item.itemMetadata.interaction_type ===
           "fireworks";
 
-      const isTornSleepingBagDeliveryItem =
-        item.itemType ===
-          "torn_sleeping_bag" ||
-        item.itemMetadata.interaction_type ===
-          "torn_sleeping_bag" ||
-        claimedItemName ===
-          "찢어진 침낭";
-
       setClaimMessage(
         item.itemType ===
           "food"
           ? `${claimedItemName}을(를) 입구에 꺼냈어요. X로 옮긴 뒤 가까이에서 F로 먹을 수 있어요.`
           : isFireworksDeliveryItem
             ? `${claimedItemName}을(를) 필드에 꺼냈어요. X로 원하는 위치까지 옮긴 뒤 F로 점화할 수 있어요.`
-            : isTornSleepingBagDeliveryItem
-              ? `${claimedItemName}을(를) 필드에 꺼냈어요. 누구나 X로 원하는 위치까지 옮길 수 있어요.`
-              : `${claimedItemName}을(를) 필드에 꺼냈어요. 상자를 닫고 X로 이동할 수 있어요.`,
+            : `${claimedItemName}을(를) 필드에 꺼냈어요. 상자를 닫고 X로 이동할 수 있어요.`,
       );
 
       /*
@@ -2529,30 +2175,6 @@ export default function HooWorldDeliveryGate({
 
   return (
     <>
-      {tornSleepingBagMonologue &&
-      typeof document !==
-        "undefined"
-        ? createPortal(
-            <div
-              className="pointer-events-none fixed z-[10000] max-w-[310px] -translate-x-1/2 -translate-y-full rounded-[18px] border border-white/28 bg-[#182019]/94 px-4 py-3 text-center text-[12px] font-bold leading-[1.65] text-[#fff7df] shadow-[0_8px_24px_rgba(0,0,0,0.34)] backdrop-blur-md"
-              style={{
-                left:
-                  tornSleepingBagMonologue.left,
-                top:
-                  tornSleepingBagMonologue.top,
-                whiteSpace:
-                  "pre-line",
-              }}
-            >
-              오래된 것 같은 찢어진 침낭이야.
-              {"\n"}군데군데 바람이 들어올 것 같아.
-              {"\n"}없는 것보단 낫겠지?
-              <span className="absolute left-1/2 top-full h-0 w-0 -translate-x-1/2 border-x-[8px] border-t-[9px] border-x-transparent border-t-[#182019]/94" />
-            </div>,
-            document.body,
-          )
-        : null}
-
       {/* ─────────────────────────
           상자에서 꺼내진 실제 월드 아이템
 
@@ -2716,81 +2338,6 @@ export default function HooWorldDeliveryGate({
                     `}</style>
                   ) : null}
                 </div>
-              </HooWorldItem>
-            );
-          }
-
-          if (
-            item.isTornSleepingBag
-          ) {
-            return (
-              <HooWorldItem
-                key={
-                  item.itemId
-                }
-                itemId={
-                  item.itemId
-                }
-                itemType={
-                  "torn_sleeping_bag"
-                }
-                x={
-                  item.x
-                }
-                y={
-                  item.y
-                }
-                width={
-                  item.width
-                }
-                height={
-                  item.height
-                }
-                movable
-                collision
-                collisionBottomRatio={
-                  item.collisionBottomRatio
-                }
-                zIndex={
-                  item.zIndex
-                }
-                onPositionChange={(
-                  position,
-                ) => {
-                  setDeliveredFieldItems(
-                    (current) =>
-                      current.map(
-                        (
-                          currentItem,
-                        ) =>
-                          currentItem.itemId ===
-                          item.itemId
-                            ? {
-                                ...currentItem,
-                                x:
-                                  position.x,
-                                y:
-                                  position.y,
-                              }
-                            : currentItem,
-                      ),
-                  );
-                }}
-              >
-                <HooWorldTornSleepingBag
-                  itemName={
-                    item.itemName
-                  }
-                  isPlayerNear={
-                    nearbyTornSleepingBagItemId ===
-                      item.itemId &&
-                    !interactionLocked
-                  }
-                  isResting={
-                    activeTornSleepingBagItemId ===
-                    item.itemId
-                  }
-                />
               </HooWorldItem>
             );
           }

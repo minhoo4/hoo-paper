@@ -20,6 +20,7 @@ import {
 
 import BackgroundSettings from "@/components/BackgroundSettings";
 import StudyNoteSummary from "@/components/StudyNote/StudyNoteSummary";
+import HooRecoveryBootstrap from "@/components/HooRecoveryBootstrap";
 
 import PushNotificationButton from "./PushNotificationButton";
 
@@ -33,6 +34,10 @@ import {
 } from "@/lib/community";
 
 import { createClient } from "@/lib/supabase/client";
+import {
+  loadRecoveryRecord,
+  saveRecoveryRecord,
+} from "@/lib/recovery/hooRecoveryVault";
 
 import {
   createScheduleDates,
@@ -890,6 +895,25 @@ const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
     async function loadLoginProfile() {
       const currentSequence = ++loadSequence;
 
+      const cachedIdentity =
+        await loadRecoveryRecord<{
+          userId: string;
+          email: string | null;
+          nickname: string;
+          profileImageUrl: string | null;
+        }>(
+          "identity",
+          "current",
+        );
+
+      const cachedAvatar =
+        await loadRecoveryRecord<{
+          dataUrl: string | null;
+        }>(
+          "profile",
+          "avatar-image",
+        );
+
       try {
         const {
           data: { session },
@@ -912,9 +936,23 @@ const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
             },
           );
 
-          setIsLoggedIn(false);
-          setLoggedInNickname(null);
-          setProfileImageUrl(null);
+          if (cachedIdentity?.value?.userId) {
+            setIsLoggedIn(true);
+            setLoggedInNickname(
+              cachedIdentity.value.nickname ||
+                cachedIdentity.value.email?.split("@")[0] ||
+                "MY PROFILE",
+            );
+            setProfileImageUrl(
+              cachedAvatar?.value?.dataUrl ??
+                cachedIdentity.value.profileImageUrl ??
+                null,
+            );
+          } else {
+            setIsLoggedIn(false);
+            setLoggedInNickname(null);
+            setProfileImageUrl(null);
+          }
           return;
         }
 
@@ -942,6 +980,18 @@ const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
         );
 
         setProfileImageUrl(null);
+
+        void saveRecoveryRecord(
+          "identity",
+          "current",
+          {
+            userId: user.id,
+            email: user.email ?? null,
+            nickname: fallbackNickname,
+            profileImageUrl: null,
+          },
+          "supabase-auth",
+        );
 
         const {
           data: profile,
@@ -973,7 +1023,7 @@ const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
          */
         if (profileError) {
           console.warn(
-            "프로필 정보를 불러오지 못해 로그인 기본값을 사용합니다.",
+            "프로필 정보를 불러오지 못해 로컬 복구본/로그인 기본값을 사용합니다.",
             {
               message: profileError.message,
               code: profileError.code,
@@ -981,24 +1031,113 @@ const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
               hint: profileError.hint,
             },
           );
+
+          const cachedProfile =
+            await loadRecoveryRecord<{
+              nickname: string;
+              profileImageUrl: string | null;
+            }>(
+              "profile",
+              user.id,
+            );
+
+          if (cachedProfile?.value) {
+            setLoggedInNickname(
+              cachedProfile.value.nickname ||
+                fallbackNickname,
+            );
+            setProfileImageUrl(
+              cachedAvatar?.value?.dataUrl ??
+                cachedProfile.value.profileImageUrl ??
+                null,
+            );
+          }
+
           return;
         }
 
-        setLoggedInNickname(
+        const resolvedNickname =
           typeof profile?.nickname ===
             "string" &&
           profile.nickname.trim()
             ? profile.nickname.trim()
-            : fallbackNickname,
-        );
+            : fallbackNickname;
 
-        setProfileImageUrl(
+        const resolvedProfileImageUrl =
           typeof profile?.profile_image_url ===
             "string" &&
           profile.profile_image_url.trim()
             ? profile.profile_image_url.trim()
-            : null,
+            : null;
+
+        setLoggedInNickname(
+          resolvedNickname,
         );
+
+        setProfileImageUrl(
+          resolvedProfileImageUrl,
+        );
+
+        void saveRecoveryRecord(
+          "profile",
+          user.id,
+          {
+            nickname: resolvedNickname,
+            profileImageUrl: resolvedProfileImageUrl,
+          },
+          "supabase-profile",
+        );
+
+        void saveRecoveryRecord(
+          "identity",
+          "current",
+          {
+            userId: user.id,
+            email: user.email ?? null,
+            nickname: resolvedNickname,
+            profileImageUrl: resolvedProfileImageUrl,
+          },
+          "supabase-profile",
+        );
+
+        if (resolvedProfileImageUrl) {
+          void fetch(resolvedProfileImageUrl)
+            .then((response) =>
+              response.ok
+                ? response.blob()
+                : Promise.reject(
+                    new Error("프로필 이미지 캐시 다운로드 실패"),
+                  ),
+            )
+            .then((blob) =>
+              new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () =>
+                  resolve(
+                    typeof reader.result === "string"
+                      ? reader.result
+                      : "",
+                  );
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(blob);
+              }),
+            )
+            .then((dataUrl) => {
+              if (!dataUrl) {
+                return;
+              }
+
+              return saveRecoveryRecord(
+                "profile",
+                "avatar-image",
+                { dataUrl },
+                "supabase-profile-avatar-cache",
+              );
+            })
+            .catch(() => {
+              /* 프로필 표시 자체는 원격 캐시 실패와 무관하게 유지한다. */
+            });
+        }
       } catch (error: unknown) {
         if (
           cancelled ||
@@ -1029,6 +1168,20 @@ const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
             hint: loginError?.hint ?? "",
           },
         );
+
+        if (cachedIdentity?.value?.userId) {
+          setIsLoggedIn(true);
+          setLoggedInNickname(
+            cachedIdentity.value.nickname ||
+              cachedIdentity.value.email?.split("@")[0] ||
+              "MY PROFILE",
+          );
+          setProfileImageUrl(
+            cachedAvatar?.value?.dataUrl ??
+              cachedIdentity.value.profileImageUrl ??
+              null,
+          );
+        }
       }
     }
 
@@ -2170,13 +2323,27 @@ const [hoo2048BestScores, setHoo2048BestScores] =
 useEffect(() => {
   let cancelled = false;
 
-  const restoreDefaultBackground = () => {
-    window.localStorage.removeItem(
-      "hoo-background-url",
-    );
+  const keepLocalBackgroundFallback = async () => {
+    const cachedRecovery =
+      await loadRecoveryRecord<{
+        dataUrl: string | null;
+      }>(
+        "profile",
+        "background-image",
+      );
 
-    if (!cancelled) {
-      setBackgroundUrl(null);
+    if (cancelled) {
+      return;
+    }
+
+    if (
+      typeof cachedRecovery?.value?.dataUrl ===
+        "string" &&
+      cachedRecovery.value.dataUrl
+    ) {
+      setBackgroundUrl(
+        cachedRecovery.value.dataUrl,
+      );
     }
   };
 
@@ -2186,9 +2353,27 @@ useEffect(() => {
         "hoo-background-url",
       );
 
+    const cachedBackgroundRecovery =
+      await loadRecoveryRecord<{
+        dataUrl: string | null;
+      }>(
+        "profile",
+        "background-image",
+      );
+
+    const cachedBackgroundDataUrl =
+      typeof cachedBackgroundRecovery?.value?.dataUrl ===
+        "string"
+        ? cachedBackgroundRecovery.value.dataUrl
+        : null;
+
     if (cachedBackgroundUrl) {
       setBackgroundUrl(
         cachedBackgroundUrl,
+      );
+    } else if (cachedBackgroundDataUrl) {
+      setBackgroundUrl(
+        cachedBackgroundDataUrl,
       );
     }
 
@@ -2213,7 +2398,7 @@ useEffect(() => {
           "저장된 배경 정보를 불러오지 못해 기본 배경을 사용합니다.",
           error,
         );
-        restoreDefaultBackground();
+        await keepLocalBackgroundFallback();
         return;
       }
 
@@ -2250,7 +2435,7 @@ useEffect(() => {
           "배경 이미지 주소를 만들지 못해 기본 배경을 사용합니다.",
           signedUrlError,
         );
-        restoreDefaultBackground();
+        await keepLocalBackgroundFallback();
         return;
       }
 
@@ -2273,13 +2458,50 @@ useEffect(() => {
         setBackgroundUrl(
           latestBackgroundUrl,
         );
+
+        void fetch(latestBackgroundUrl)
+          .then((response) =>
+            response.ok
+              ? response.blob()
+              : Promise.reject(
+                  new Error("배경 이미지 캐시 다운로드 실패"),
+                ),
+          )
+          .then((blob) =>
+            new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () =>
+                resolve(
+                  typeof reader.result === "string"
+                    ? reader.result
+                    : "",
+                );
+              reader.onerror = () => reject(reader.error);
+              reader.readAsDataURL(blob);
+            }),
+          )
+          .then((dataUrl) => {
+            if (!dataUrl) {
+              return;
+            }
+
+            return saveRecoveryRecord(
+              "profile",
+              "background-image",
+              { dataUrl },
+              "supabase-background-cache",
+            );
+          })
+          .catch(() => {
+            /* 원격 캐시 실패는 화면 표시를 막지 않는다. */
+          });
       };
 
       backgroundImage.onerror = () => {
         console.warn(
           "저장된 배경 이미지가 만료되었거나 존재하지 않아 기본 배경으로 복구합니다.",
         );
-        restoreDefaultBackground();
+        void keepLocalBackgroundFallback();
       };
 
       backgroundImage.src =
@@ -2289,7 +2511,7 @@ useEffect(() => {
         "배경을 불러오는 중 문제가 발생해 기본 배경으로 복구합니다.",
         error,
       );
-      restoreDefaultBackground();
+      await keepLocalBackgroundFallback();
     }
   }
 
@@ -10649,7 +10871,54 @@ async function submitFeedback() {
     window.alert(message);
   }
 }
+const readRecoveryFileAsDataUrl = async (file: File) =>
+  await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () =>
+      resolve(
+        typeof reader.result === "string"
+          ? reader.result
+          : "",
+      );
+    reader.onerror = () =>
+      reject(
+        reader.error ??
+          new Error("파일을 로컬 복구본으로 읽지 못했습니다."),
+      );
+    reader.readAsDataURL(file);
+  });
+
 const handleBackgroundUpload = async (file: File) => {
+  /*
+   * 서버 업로드보다 먼저 원본을 Recovery Vault에 보관한다.
+   * Supabase Storage가 없어져도 현재 기기에서는 배경 원본을 복구할 수 있다.
+   */
+  try {
+    const localDataUrl =
+      await readRecoveryFileAsDataUrl(file);
+
+    if (localDataUrl) {
+      await saveRecoveryRecord(
+        "profile",
+        "background-image",
+        {
+          dataUrl: localDataUrl,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+        },
+        "local-background-upload",
+      );
+
+      setBackgroundUrl(localDataUrl);
+    }
+  } catch (localBackupError) {
+    console.warn(
+      "배경 이미지 로컬 복구본 저장을 건너뜁니다.",
+      localBackupError,
+    );
+  }
+
   try {
     const {
       data: { user },
@@ -10730,6 +10999,13 @@ setBackgroundUrl(
 const handleBackgroundReset = () => {
   window.localStorage.removeItem(
     "hoo-background-url",
+  );
+
+  void saveRecoveryRecord(
+    "profile",
+    "background-image",
+    { dataUrl: null },
+    "local-background-reset",
   );
 
   setBackgroundUrl(null);
@@ -11026,6 +11302,8 @@ return (
       backgroundAttachment: "fixed",
     }}
   >
+    <HooRecoveryBootstrap />
+
 {isSecretPinModalOpen && (
   <div className="fixed inset-0 z-[11000] flex items-center justify-center bg-black/50 px-5 backdrop-blur-sm">
     <div className="w-full max-w-sm rounded-[28px] bg-white p-7 shadow-2xl">

@@ -10404,7 +10404,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
       return;
     }
     setEditorFindQuery(selectedText);
-    setEditorReplaceQuery("");
+    setEditorReplaceValue("");
     setIsEditorFindOpen(true);
     setIsEditorReplaceOpen(true);
     setEditorFindStatus(`“${selectedText}” 전체 변경 준비`);

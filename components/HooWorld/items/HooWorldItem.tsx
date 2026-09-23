@@ -12,13 +12,13 @@ import {
   useState,
 } from "react";
 
-import type {
-  RealtimeChannel,
-} from "@supabase/supabase-js";
-
 import {
   createClient,
 } from "@/lib/supabase/client";
+import {
+  loadRecoveryRecord,
+  saveRecoveryRecord,
+} from "@/lib/recovery/hooRecoveryVault";
 
 export type HooWorldItemPosition = {
   x: number;
@@ -49,7 +49,7 @@ type HooWorldItemProps = {
   interactive?: boolean;
 
   /*
-   * DB Realtime / 이동 Broadcast로 다른 사용자의 좌표를 받았을 때
+   * Realtime으로 다른 사용자의 이동을 받았을 때
    * 부모 컴포넌트도 자기 좌표 ref/state를 맞춰야 하는 경우 사용한다.
    *
    * 가판대처럼 자체 이동 로직을 가진 아이템은
@@ -211,183 +211,6 @@ let activeKeyboardMoveItemId:
 const HOO_WORLD_ITEM_MOVE_EVENT =
   "hoo-world:item-move-mode";
 
-/*
- * 아이템 이동 중 실시간 화면 동기화용 Broadcast 이벤트.
- *
- * DB UPDATE Realtime은 최종 위치 보존 / 재접속 복원을 담당하고,
- * Broadcast는 이동하는 매 순간 다른 이용자 화면을 부드럽게 맞춘다.
- */
-const HOO_WORLD_ITEM_MOVE_BROADCAST_EVENT =
-  "item-move";
-
-const HOO_WORLD_ITEM_LOCK_BROADCAST_EVENT =
-  "item-move-lock";
-
-const HOO_WORLD_ITEM_UNLOCK_BROADCAST_EVENT =
-  "item-move-unlock";
-
-const HOO_WORLD_ITEM_MOVE_BROADCAST_INTERVAL_MS =
-  40;
-
-const HOO_WORLD_ITEM_REMOTE_LOCK_TIMEOUT_MS =
-  5200;
-
-const HOO_WORLD_ITEM_LOCK_HEARTBEAT_MS =
-  2000;
-
-const HOO_WORLD_ITEM_DB_VISUAL_GRACE_MS =
-  400;
-
-type HooWorldItemMoveBroadcastPayload = {
-  itemId: string;
-  itemType: string;
-  clientId: string;
-  x: number;
-  y: number;
-  sequence: number;
-  moving: boolean;
-};
-
-type HooWorldItemLockBroadcastPayload = {
-  itemId: string;
-  itemType: string;
-  clientId: string;
-};
-
-function getBroadcastPayloadRecord(
-  value: unknown,
-): Record<string, unknown> | null {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value)
-  ) {
-    return null;
-  }
-
-  const record =
-    value as Record<string, unknown>;
-
-  const nestedPayload =
-    record.payload;
-
-  if (
-    nestedPayload &&
-    typeof nestedPayload === "object" &&
-    !Array.isArray(nestedPayload)
-  ) {
-    return nestedPayload as Record<
-      string,
-      unknown
-    >;
-  }
-
-  return record;
-}
-
-function parseItemMoveBroadcast(
-  value: unknown,
-): HooWorldItemMoveBroadcastPayload | null {
-  const payload =
-    getBroadcastPayloadRecord(
-      value,
-    );
-
-  if (!payload) {
-    return null;
-  }
-
-  const itemId =
-    typeof payload.item_id === "string"
-      ? payload.item_id
-      : "";
-
-  const itemType =
-    typeof payload.item_type === "string"
-      ? payload.item_type
-      : "generic";
-
-  const clientId =
-    typeof payload.client_id === "string"
-      ? payload.client_id
-      : "";
-
-  const x =
-    Number(payload.x);
-
-  const y =
-    Number(payload.y);
-
-  const sequence =
-    Number(payload.sequence);
-
-  if (
-    !itemId ||
-    !clientId ||
-    !Number.isFinite(x) ||
-    !Number.isFinite(y) ||
-    !Number.isFinite(sequence)
-  ) {
-    return null;
-  }
-
-  return {
-    itemId,
-    itemType,
-    clientId,
-    x,
-    y,
-    sequence:
-      Math.max(
-        0,
-        Math.floor(sequence),
-      ),
-    moving:
-      payload.moving !== false,
-  };
-}
-
-function parseItemLockBroadcast(
-  value: unknown,
-): HooWorldItemLockBroadcastPayload | null {
-  const payload =
-    getBroadcastPayloadRecord(
-      value,
-    );
-
-  if (!payload) {
-    return null;
-  }
-
-  const itemId =
-    typeof payload.item_id === "string"
-      ? payload.item_id
-      : "";
-
-  const itemType =
-    typeof payload.item_type === "string"
-      ? payload.item_type
-      : "generic";
-
-  const clientId =
-    typeof payload.client_id === "string"
-      ? payload.client_id
-      : "";
-
-  if (
-    !itemId ||
-    !clientId
-  ) {
-    return null;
-  }
-
-  return {
-    itemId,
-    itemType,
-    clientId,
-  };
-}
-
 function assignForwardedRef<T>(
   ref: ForwardedRef<T>,
   value: T | null,
@@ -524,7 +347,7 @@ function getClosestMovableItemId() {
 
   const movableItems =
     document.querySelectorAll<HTMLElement>(
-      '[data-hoo-world-item="true"][data-hoo-world-movable="true"]:not([data-hoo-world-item-remote-locked="true"])',
+      '[data-hoo-world-item="true"][data-hoo-world-movable="true"]',
     );
 
   let closestItemId:
@@ -629,14 +452,6 @@ const HooWorldItem = forwardRef<
     const isNearForMoveRef =
       useRef(false);
 
-    const [
-      isLocalPlayerMovementLocked,
-      setIsLocalPlayerMovementLocked,
-    ] = useState(false);
-
-    const isLocalPlayerMovementLockedRef =
-      useRef(false);
-
     const initialPosition =
       useMemo(
         () =>
@@ -716,300 +531,6 @@ const HooWorldItem = forwardRef<
       );
 
     /*
-     * 같은 item channel에서 DB Realtime + Broadcast를 함께 사용한다.
-     * DB는 영구 좌표, Broadcast는 이동 중 프레임 동기화를 담당한다.
-     */
-    const itemRealtimeChannelRef =
-      useRef<RealtimeChannel | null>(
-        null,
-      );
-
-    const itemRealtimeReadyRef =
-      useRef(false);
-
-    /*
-     * 브라우저 탭 단위 이동 주체 ID.
-     * 렌더 시 랜덤값을 만들지 않고 실제 상호작용 시점에 생성해
-     * SSR/Hydration 결과에는 영향을 주지 않는다.
-     */
-    const clientInstanceIdRef =
-      useRef<string | null>(
-        null,
-      );
-
-    const localMoveSequenceRef =
-      useRef(0);
-
-    const lastMoveBroadcastAtRef =
-      useRef(0);
-
-    const remoteMoveSequenceRef =
-      useRef(
-        new Map<string, number>(),
-      );
-
-    const lastRemoteMoveAtRef =
-      useRef(0);
-
-    const forceStopLocalMoveRef =
-      useRef(false);
-
-    const remoteMoveLockRef =
-      useRef<{
-        clientId: string;
-        expiresAt: number;
-      } | null>(
-        null,
-      );
-
-    const remoteMoveLockTimerRef =
-      useRef<number | null>(
-        null,
-      );
-
-    const [
-      isRemoteMoveLocked,
-      setIsRemoteMoveLocked,
-    ] = useState(false);
-
-    const getClientInstanceId =
-      useCallback(
-        () => {
-          if (
-            clientInstanceIdRef.current
-          ) {
-            return clientInstanceIdRef.current;
-          }
-
-          const nextId =
-            typeof crypto !== "undefined" &&
-            typeof crypto.randomUUID === "function"
-              ? crypto.randomUUID()
-              : `hoo-item-${Date.now()}-${Math.random()
-                  .toString(36)
-                  .slice(2)}`;
-
-          clientInstanceIdRef.current =
-            nextId;
-
-          return nextId;
-        },
-        [],
-      );
-
-    const clearRemoteMoveLock =
-      useCallback(
-        (
-          expectedClientId?: string,
-        ) => {
-          const currentLock =
-            remoteMoveLockRef.current;
-
-          if (
-            expectedClientId &&
-            currentLock?.clientId !==
-              expectedClientId
-          ) {
-            return;
-          }
-
-          if (
-            remoteMoveLockTimerRef.current !==
-            null
-          ) {
-            window.clearTimeout(
-              remoteMoveLockTimerRef.current,
-            );
-
-            remoteMoveLockTimerRef.current =
-              null;
-          }
-
-          remoteMoveLockRef.current =
-            null;
-
-          setIsRemoteMoveLocked(
-            false,
-          );
-        },
-        [],
-      );
-
-    const markRemoteMoveLock =
-      useCallback(
-        (remoteClientId: string) => {
-          if (
-            clientInstanceIdRef.current ===
-              remoteClientId
-          ) {
-            return;
-          }
-
-          const expiresAt =
-            Date.now() +
-            HOO_WORLD_ITEM_REMOTE_LOCK_TIMEOUT_MS;
-
-          remoteMoveLockRef.current = {
-            clientId:
-              remoteClientId,
-            expiresAt,
-          };
-
-          setIsRemoteMoveLocked(
-            true,
-          );
-
-          if (
-            remoteMoveLockTimerRef.current !==
-            null
-          ) {
-            window.clearTimeout(
-              remoteMoveLockTimerRef.current,
-            );
-          }
-
-          remoteMoveLockTimerRef.current =
-            window.setTimeout(
-              () => {
-                const currentLock =
-                  remoteMoveLockRef.current;
-
-                if (
-                  !currentLock ||
-                  currentLock.clientId !==
-                    remoteClientId ||
-                  currentLock.expiresAt >
-                    Date.now()
-                ) {
-                  return;
-                }
-
-                remoteMoveLockRef.current =
-                  null;
-
-                remoteMoveLockTimerRef.current =
-                  null;
-
-                setIsRemoteMoveLocked(
-                  false,
-                );
-              },
-              HOO_WORLD_ITEM_REMOTE_LOCK_TIMEOUT_MS +
-                100,
-            );
-        },
-        [],
-      );
-
-    const broadcastItemLock =
-      useCallback(
-        (active: boolean) => {
-          const channel =
-            itemRealtimeChannelRef.current;
-
-          if (
-            !channel ||
-            !itemRealtimeReadyRef.current
-          ) {
-            return;
-          }
-
-          const clientId =
-            getClientInstanceId();
-
-          void channel.send({
-            type:
-              "broadcast",
-            event:
-              active
-                ? HOO_WORLD_ITEM_LOCK_BROADCAST_EVENT
-                : HOO_WORLD_ITEM_UNLOCK_BROADCAST_EVENT,
-            payload: {
-              item_id:
-                itemId,
-              item_type:
-                itemType,
-              client_id:
-                clientId,
-              sent_at:
-                Date.now(),
-            },
-          });
-        },
-        [
-          getClientInstanceId,
-          itemId,
-          itemType,
-        ],
-      );
-
-    const broadcastItemMove =
-      useCallback(
-        (
-          nextPosition:
-            HooWorldItemPosition,
-          moving: boolean,
-        ) => {
-          const channel =
-            itemRealtimeChannelRef.current;
-
-          if (
-            !channel ||
-            !itemRealtimeReadyRef.current
-          ) {
-            return;
-          }
-
-          const now =
-            Date.now();
-
-          if (
-            moving &&
-            now -
-              lastMoveBroadcastAtRef.current <
-              HOO_WORLD_ITEM_MOVE_BROADCAST_INTERVAL_MS
-          ) {
-            return;
-          }
-
-          lastMoveBroadcastAtRef.current =
-            now;
-
-          localMoveSequenceRef.current +=
-            1;
-
-          void channel.send({
-            type:
-              "broadcast",
-            event:
-              HOO_WORLD_ITEM_MOVE_BROADCAST_EVENT,
-            payload: {
-              item_id:
-                itemId,
-              item_type:
-                itemType,
-              client_id:
-                getClientInstanceId(),
-              x:
-                nextPosition.x,
-              y:
-                nextPosition.y,
-              sequence:
-                localMoveSequenceRef.current,
-              moving,
-              sent_at:
-                now,
-            },
-          });
-        },
-        [
-          getClientInstanceId,
-          itemId,
-          itemType,
-        ],
-      );
-
-    /*
      * HooWorldItem 공용 좌표 저장 함수.
      *
      * 부모 컴포넌트의 별도 이동 로직 없이도
@@ -1060,6 +581,26 @@ const HooWorldItem = forwardRef<
 
                 void (
                   async () => {
+                    /*
+                     * 서버보다 먼저 로컬 복구본을 갱신한다.
+                     * Supabase 장애 중 이동한 위치도 새로고침 후 복구 가능하다.
+                     */
+                    void saveRecoveryRecord(
+                      "world-item",
+                      itemId,
+                      {
+                        item_id: itemId,
+                        item_type: itemType,
+                        x: positionToSave.x,
+                        y: positionToSave.y,
+                        is_movable: movable,
+                        is_installed: isInstalled,
+                        revision:
+                          revisionRef.current + 1,
+                      } satisfies HooWorldItemRow,
+                      "local-world-item-move",
+                    );
+
                     const {
                       data,
                       error,
@@ -1077,8 +618,8 @@ const HooWorldItem = forwardRef<
                       );
 
                     if (error) {
-                      console.error(
-                        `HOO WORLD 아이템(${itemId}) 위치 저장에 실패했습니다.`,
+                      console.warn(
+                        `HOO WORLD 아이템(${itemId}) 서버 위치 저장 실패: 로컬 복구본은 유지합니다.`,
                         error,
                       );
 
@@ -1098,6 +639,13 @@ const HooWorldItem = forwardRef<
                     if (!row) {
                       return;
                     }
+
+                    void saveRecoveryRecord(
+                      "world-item",
+                      itemId,
+                      row,
+                      "supabase-world-item-move",
+                    );
 
                     const confirmedPosition =
                       normalizePosition(
@@ -1143,7 +691,9 @@ const HooWorldItem = forwardRef<
         },
         [
           itemId,
+          itemType,
           movable,
+          isInstalled,
           supabase,
         ],
       );
@@ -1229,6 +779,13 @@ const HooWorldItem = forwardRef<
         onPositionChangeRef.current?.(
           nextPosition,
         );
+
+        void saveRecoveryRecord(
+          "world-item",
+          itemId,
+          row,
+          "supabase-world-item-state",
+        );
       }
 
       /*
@@ -1239,6 +796,31 @@ const HooWorldItem = forwardRef<
        * AUTH_REQUIRED가 나는 문제도 방지한다.
        */
       async function ensureItem() {
+        const cachedItem =
+          await loadRecoveryRecord<
+            HooWorldItemRow
+          >(
+            "world-item",
+            itemId,
+          );
+
+        if (cancelled) {
+          return;
+        }
+
+        if (cachedItem?.value) {
+          const parsedCachedItem =
+            parseItemRow(
+              cachedItem.value,
+            );
+
+          if (parsedCachedItem) {
+            applyItemRow(
+              parsedCachedItem,
+            );
+          }
+        }
+
         const {
           data: sessionData,
         } =
@@ -1338,8 +920,23 @@ const HooWorldItem = forwardRef<
            * console.error 대신 warning으로 남긴다.
            */
           console.warn(
-            `HOO WORLD 아이템(${itemId}) 초기 동기화를 건너뜁니다.`,
+            `HOO WORLD 아이템(${itemId}) 초기 동기화를 건너뜁니다. 로컬 복구본을 사용합니다.`,
             error,
+          );
+
+          void saveRecoveryRecord(
+            "world-item",
+            itemId,
+            {
+              item_id: itemId,
+              item_type: itemType,
+              x: fallbackPosition.x,
+              y: fallbackPosition.y,
+              is_movable: movable,
+              is_installed: true,
+              revision: revisionRef.current,
+            } satisfies HooWorldItemRow,
+            "fallback-world-item-state",
           );
 
           hydratedItemIdRef.current =
@@ -1421,6 +1018,13 @@ const HooWorldItem = forwardRef<
               revisionRef.current =
                 row.revision;
 
+              void saveRecoveryRecord(
+                "world-item",
+                itemId,
+                row,
+                "realtime-world-item-state",
+              );
+
               setIsInstalled(
                 row.is_installed,
               );
@@ -1444,15 +1048,6 @@ const HooWorldItem = forwardRef<
                   false,
                 );
 
-                broadcastItemMove(
-                  positionRef.current,
-                  false,
-                );
-
-                broadcastItemLock(
-                  false,
-                );
-
                 window.dispatchEvent(
                   new CustomEvent(
                     HOO_WORLD_ITEM_MOVE_EVENT,
@@ -1473,6 +1068,9 @@ const HooWorldItem = forwardRef<
                   row.y,
                 );
 
+              serverPositionRef.current =
+                nextPosition;
+
               /*
                * 내가 이 아이템을 옮기는 동안에는
                * 내 직전 RPC의 Realtime echo가 현재 키보드 위치를
@@ -1483,149 +1081,8 @@ const HooWorldItem = forwardRef<
                 activeKeyboardMoveItemId ===
                   itemId
               ) {
-                serverPositionRef.current =
-                  nextPosition;
-
                 return;
               }
-
-              /*
-               * 원격 Broadcast가 방금 도착했다면 DB UPDATE는 보통
-               * 수십~수백 ms 전 위치다. 그 좌표를 다시 적용하면
-               * 상대 화면에서 아이템이 앞뒤로 떨리므로 잠깐 무시한다.
-               * 최종 위치는 Broadcast 종료 패킷 + DB 영구 저장으로 맞춰진다.
-               */
-              if (
-                Date.now() -
-                  lastRemoteMoveAtRef.current <
-                  HOO_WORLD_ITEM_DB_VISUAL_GRACE_MS
-              ) {
-                return;
-              }
-
-              serverPositionRef.current =
-                nextPosition;
-
-              positionRef.current =
-                nextPosition;
-
-              lastInputPositionRef.current =
-                nextPosition;
-
-              setPosition(
-                nextPosition,
-              );
-
-              onPositionChangeRef.current?.(
-                nextPosition,
-              );
-            },
-          )
-          .on(
-            "broadcast",
-            {
-              event:
-                HOO_WORLD_ITEM_MOVE_BROADCAST_EVENT,
-            },
-            (message) => {
-              if (cancelled) {
-                return;
-              }
-
-              const remoteMove =
-                parseItemMoveBroadcast(
-                  message,
-                );
-
-              if (
-                !remoteMove ||
-                remoteMove.itemId !==
-                  itemId ||
-                remoteMove.clientId ===
-                  clientInstanceIdRef.current
-              ) {
-                return;
-              }
-
-              const previousSequence =
-                remoteMoveSequenceRef.current.get(
-                  remoteMove.clientId,
-                ) ?? -1;
-
-              if (
-                remoteMove.sequence <=
-                  previousSequence
-              ) {
-                return;
-              }
-
-              remoteMoveSequenceRef.current.set(
-                remoteMove.clientId,
-                remoteMove.sequence,
-              );
-
-              /*
-               * 아주 드물게 두 사람이 동시에 X를 누른 경우
-               * clientId 사전순으로 작은 쪽을 승자로 정한다.
-               * 두 브라우저가 같은 규칙을 사용하므로 한쪽은 즉시 양보한다.
-               */
-              if (
-                isMoveModeRef.current &&
-                activeKeyboardMoveItemId ===
-                  itemId
-              ) {
-                const localClientId =
-                  clientInstanceIdRef.current;
-
-                if (
-                  localClientId &&
-                  localClientId.localeCompare(
-                    remoteMove.clientId,
-                  ) <= 0
-                ) {
-                  return;
-                }
-
-                forceStopLocalMoveRef.current =
-                  true;
-              }
-
-              if (remoteMove.moving) {
-                markRemoteMoveLock(
-                  remoteMove.clientId,
-                );
-              }
-
-              const nextPosition =
-                normalizePosition(
-                  Math.max(
-                    5,
-                    Math.min(
-                      95,
-                      remoteMove.x,
-                    ),
-                  ),
-                  Math.max(
-                    9,
-                    Math.min(
-                      93,
-                      remoteMove.y,
-                    ),
-                  ),
-                );
-
-              lastRemoteMoveAtRef.current =
-                Date.now();
-
-              /*
-               * 부모 x/y가 Broadcast 좌표를 다시 DB 저장하지 않도록
-               * 서버 기준 ref도 같은 좌표로 임시 맞춘다.
-               */
-              serverPositionRef.current =
-                nextPosition;
-
-              lastInputPositionRef.current =
-                nextPosition;
 
               positionRef.current =
                 nextPosition;
@@ -1637,107 +1094,9 @@ const HooWorldItem = forwardRef<
               onPositionChangeRef.current?.(
                 nextPosition,
               );
-
-              if (!remoteMove.moving) {
-                clearRemoteMoveLock(
-                  remoteMove.clientId,
-                );
-              }
             },
           )
-          .on(
-            "broadcast",
-            {
-              event:
-                HOO_WORLD_ITEM_LOCK_BROADCAST_EVENT,
-            },
-            (message) => {
-              if (cancelled) {
-                return;
-              }
-
-              const remoteLock =
-                parseItemLockBroadcast(
-                  message,
-                );
-
-              if (
-                !remoteLock ||
-                remoteLock.itemId !==
-                  itemId ||
-                remoteLock.clientId ===
-                  clientInstanceIdRef.current
-              ) {
-                return;
-              }
-
-              if (
-                isMoveModeRef.current &&
-                activeKeyboardMoveItemId ===
-                  itemId
-              ) {
-                const localClientId =
-                  clientInstanceIdRef.current;
-
-                if (
-                  localClientId &&
-                  localClientId.localeCompare(
-                    remoteLock.clientId,
-                  ) <= 0
-                ) {
-                  return;
-                }
-
-                forceStopLocalMoveRef.current =
-                  true;
-              }
-
-              markRemoteMoveLock(
-                remoteLock.clientId,
-              );
-            },
-          )
-          .on(
-            "broadcast",
-            {
-              event:
-                HOO_WORLD_ITEM_UNLOCK_BROADCAST_EVENT,
-            },
-            (message) => {
-              if (cancelled) {
-                return;
-              }
-
-              const remoteUnlock =
-                parseItemLockBroadcast(
-                  message,
-                );
-
-              if (
-                !remoteUnlock ||
-                remoteUnlock.itemId !==
-                  itemId ||
-                remoteUnlock.clientId ===
-                  clientInstanceIdRef.current
-              ) {
-                return;
-              }
-
-              clearRemoteMoveLock(
-                remoteUnlock.clientId,
-              );
-            },
-          )
-          .subscribe(
-            (channelStatus) => {
-              itemRealtimeReadyRef.current =
-                channelStatus ===
-                  "SUBSCRIBED";
-            },
-          );
-
-      itemRealtimeChannelRef.current =
-        channel;
+          .subscribe();
 
       /*
        * getSession() 자체가 Supabase Auth 초기화 완료를 기다린다.
@@ -1769,51 +1128,13 @@ const HooWorldItem = forwardRef<
         pendingMovePositionRef.current =
           null;
 
-        if (
-          itemRealtimeChannelRef.current ===
-          channel
-        ) {
-          itemRealtimeChannelRef.current =
-            null;
-
-          itemRealtimeReadyRef.current =
-            false;
-        }
-
-        if (
-          remoteMoveLockTimerRef.current !==
-          null
-        ) {
-          window.clearTimeout(
-            remoteMoveLockTimerRef.current,
-          );
-
-          remoteMoveLockTimerRef.current =
-            null;
-        }
-
-        remoteMoveLockRef.current =
-          null;
-
-        remoteMoveSequenceRef.current.clear();
-
-        forceStopLocalMoveRef.current =
-          false;
-
-        lastRemoteMoveAtRef.current =
-          0;
-
         void supabase.removeChannel(
           channel,
         );
       };
     }, [
-      broadcastItemLock,
-      broadcastItemMove,
-      clearRemoteMoveLock,
       itemId,
       itemType,
-      markRemoteMoveLock,
       movable,
       supabase,
     ]);
@@ -1947,30 +1268,9 @@ const HooWorldItem = forwardRef<
         number | null =
         null;
 
-      let lockHeartbeatTimer:
-        number | null =
-        null;
-
       function updateProximity() {
         const playerElement =
           getLocalPlayerElement();
-
-        const nextMovementLocked =
-          playerElement?.dataset
-            .hooWorldMovementLocked ===
-          "true";
-
-        if (
-          nextMovementLocked !==
-          isLocalPlayerMovementLockedRef.current
-        ) {
-          isLocalPlayerMovementLockedRef.current =
-            nextMovementLocked;
-
-          setIsLocalPlayerMovementLocked(
-            nextMovementLocked,
-          );
-        }
 
         const nextIsNear =
           playerElement
@@ -2072,10 +1372,7 @@ const HooWorldItem = forwardRef<
         );
       }
 
-      function finishMoveMode(
-        broadcastFinalPosition = true,
-        persistFinalPosition = true,
-      ) {
+      function finishMoveMode() {
         if (
           activeKeyboardMoveItemId !==
             itemId
@@ -2091,18 +1388,6 @@ const HooWorldItem = forwardRef<
         lastMovementTimestamp =
           null;
 
-        if (
-          lockHeartbeatTimer !==
-          null
-        ) {
-          window.clearInterval(
-            lockHeartbeatTimer,
-          );
-
-          lockHeartbeatTimer =
-            null;
-        }
-
         activeKeyboardMoveItemId =
           null;
 
@@ -2113,25 +1398,9 @@ const HooWorldItem = forwardRef<
           false,
         );
 
-        if (persistFinalPosition) {
-          queuePositionSave(
-            positionRef.current,
-          );
-        }
-
-        if (broadcastFinalPosition) {
-          broadcastItemMove(
-            positionRef.current,
-            false,
-          );
-        }
-
-        broadcastItemLock(
-          false,
+        queuePositionSave(
+          positionRef.current,
         );
-
-        forceStopLocalMoveRef.current =
-          false;
 
         dispatchMoveModeEvent(
           false,
@@ -2141,22 +1410,6 @@ const HooWorldItem = forwardRef<
       function applyContinuousMovement(
         timestamp: number,
       ) {
-        if (
-          forceStopLocalMoveRef.current &&
-          activeKeyboardMoveItemId ===
-            itemId &&
-          isMoveModeRef.current
-        ) {
-          /*
-           * 동시 이동 충돌에서 다른 클라이언트가 승리한 경우
-           * 내 마지막 임시 좌표를 다시 Broadcast하지 않고 양보한다.
-           */
-          finishMoveMode(
-            false,
-            false,
-          );
-        }
-
         const isActive =
           activeKeyboardMoveItemId ===
             itemId &&
@@ -2340,15 +1593,6 @@ const HooWorldItem = forwardRef<
           );
 
           /*
-           * DB 저장을 기다리지 않고 현재 좌표를 Broadcast한다.
-           * 다른 이용자는 이 패킷으로 물건 이동 장면을 실시간으로 본다.
-           */
-          broadcastItemMove(
-            nextPosition,
-            true,
-          );
-
-          /*
            * 아이템이 실제로 움직인 만큼
            * 로컬 캐릭터도 같은 프레임에서 함께 움직인다.
            */
@@ -2389,21 +1633,6 @@ const HooWorldItem = forwardRef<
           return;
         }
 
-        /*
-         * 침낭 취침(resting)처럼 캐릭터 이동이 잠긴 상태에서는
-         * X 아이템 이동모드도 새로 시작하지 않는다.
-         * 그렇지 않으면 침낭 안에서 침낭 자체를 움직여
-         * 캐릭터 이동 잠금을 우회할 수 있다.
-         */
-        if (
-          !isMoveModeRef.current &&
-          getLocalPlayerElement()?.dataset
-            .hooWorldMovementLocked ===
-            "true"
-        ) {
-          return;
-        }
-
         if (
           event.code ===
             "KeyX"
@@ -2430,25 +1659,6 @@ const HooWorldItem = forwardRef<
             return;
           }
 
-          const currentRemoteLock =
-            remoteMoveLockRef.current;
-
-          if (
-            currentRemoteLock &&
-            currentRemoteLock.expiresAt <=
-              Date.now()
-          ) {
-            clearRemoteMoveLock(
-              currentRemoteLock.clientId,
-            );
-          }
-
-          if (
-            remoteMoveLockRef.current
-          ) {
-            return;
-          }
-
           if (
             !isNearForMoveRef.current ||
             getClosestMovableItemId() !==
@@ -2468,11 +1678,6 @@ const HooWorldItem = forwardRef<
           lastMovementTimestamp =
             null;
 
-          forceStopLocalMoveRef.current =
-            false;
-
-          getClientInstanceId();
-
           activeKeyboardMoveItemId =
             itemId;
 
@@ -2482,46 +1687,6 @@ const HooWorldItem = forwardRef<
           setIsMoveMode(
             true,
           );
-
-          /*
-           * 먼저 soft lock을 알리고 현재 위치도 1회 송출한다.
-           * 이동하지 않고 잠시 서 있어도 heartbeat가 잠금을 유지한다.
-           */
-          broadcastItemLock(
-            true,
-          );
-
-          broadcastItemMove(
-            positionRef.current,
-            true,
-          );
-
-          if (
-            lockHeartbeatTimer !==
-            null
-          ) {
-            window.clearInterval(
-              lockHeartbeatTimer,
-            );
-          }
-
-          lockHeartbeatTimer =
-            window.setInterval(
-              () => {
-                if (
-                  activeKeyboardMoveItemId !==
-                    itemId ||
-                  !isMoveModeRef.current
-                ) {
-                  return;
-                }
-
-                broadcastItemLock(
-                  true,
-                );
-              },
-              HOO_WORLD_ITEM_LOCK_HEARTBEAT_MS,
-            );
 
           dispatchMoveModeEvent(
             true,
@@ -2696,18 +1861,6 @@ const HooWorldItem = forwardRef<
           );
         }
 
-        if (
-          lockHeartbeatTimer !==
-            null
-        ) {
-          window.clearInterval(
-            lockHeartbeatTimer,
-          );
-
-          lockHeartbeatTimer =
-            null;
-        }
-
         window.removeEventListener(
           "keydown",
           handleMoveKeyboard,
@@ -2729,23 +1882,8 @@ const HooWorldItem = forwardRef<
           activeKeyboardMoveItemId ===
             itemId
         ) {
-          broadcastItemMove(
-            positionRef.current,
-            false,
-          );
-
-          broadcastItemLock(
-            false,
-          );
-
           activeKeyboardMoveItemId =
             null;
-
-          isMoveModeRef.current =
-            false;
-
-          forceStopLocalMoveRef.current =
-            false;
 
           dispatchMoveModeEvent(
             false,
@@ -2753,10 +1891,6 @@ const HooWorldItem = forwardRef<
         }
       };
     }, [
-      broadcastItemLock,
-      broadcastItemMove,
-      clearRemoteMoveLock,
-      getClientInstanceId,
       itemId,
       movable,
       queuePositionSave,
@@ -2815,11 +1949,6 @@ const HooWorldItem = forwardRef<
             ? "true"
             : "false"
         }
-        data-hoo-world-item-remote-locked={
-          isRemoteMoveLocked
-            ? "true"
-            : "false"
-        }
         className={`absolute left-0 top-0${
           isMoveMode
             ? " drop-shadow-[0_0_8px_rgba(255,244,173,0.9)]"
@@ -2840,8 +1969,7 @@ const HooWorldItem = forwardRef<
       >
         {children}
 
-        {movable &&
-        !isLocalPlayerMovementLocked ? (
+        {movable ? (
           <div
             data-hoo-world-move-prompt="true"
             aria-hidden={
@@ -2866,9 +1994,7 @@ const HooWorldItem = forwardRef<
             <span className="text-[7px] font-black text-white">
               {isMoveMode
                 ? "이동 중 · 방향키/WASD / X 완료"
-                : isRemoteMoveLocked
-                  ? "다른 이용자가 이동 중"
-                  : "이동"}
+                : "이동"}
             </span>
           </div>
         ) : null}

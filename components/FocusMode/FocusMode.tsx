@@ -511,9 +511,71 @@ const {
   ]);
 
 
+  function readLocalDailyJournalEntries(): DailyJournalBookEntry[] {
+    const entries: DailyJournalBookEntry[] = [];
+
+    for (
+      let index = 0;
+      index < window.localStorage.length;
+      index += 1
+    ) {
+      const key = window.localStorage.key(index);
+
+      if (!key?.startsWith("hoo-daily-journal-")) {
+        continue;
+      }
+
+      const journalDate = key.replace(
+        "hoo-daily-journal-",
+        "",
+      );
+      const content = window.localStorage.getItem(key) ?? "";
+
+      if (!content.trim()) {
+        continue;
+      }
+
+      entries.push({
+        journalDate,
+        content,
+        updatedAt: new Date(
+          `${journalDate}T00:00:00`,
+        ).toISOString(),
+      });
+    }
+
+    return entries.sort((a, b) =>
+      b.journalDate.localeCompare(a.journalDate),
+    );
+  }
+
+  function writeLocalDailyJournal(
+    journalDate: string,
+    content: string,
+  ) {
+    const storageKey =
+      `hoo-daily-journal-${journalDate}`;
+
+    if (!content.trim()) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+
+    window.localStorage.setItem(storageKey, content);
+  }
+
   const loadDailyJournalEntries =
   useCallback(async () => {
     setJournalBookLoading(true);
+
+    /*
+     * 로그인 여부와 무관하게 로컬 기록을 먼저 확보한다.
+     * Supabase가 느리거나 완전히 사용할 수 없어도 이 기록은 유지된다.
+     */
+    const localEntries =
+      readLocalDailyJournalEntries();
+
+    setDailyJournalEntries(localEntries);
 
     try {
       const {
@@ -526,76 +588,10 @@ const {
         throw userError;
       }
 
-      /*
-       * 비로그인 상태:
-       * 날짜별 localStorage 일기를 모은다.
-       */
       if (!user) {
-        const entries:
-          DailyJournalBookEntry[] = [];
-
-        for (
-          let index = 0;
-          index <
-          window.localStorage.length;
-          index += 1
-        ) {
-          const key =
-            window.localStorage.key(
-              index,
-            );
-
-          if (
-            !key?.startsWith(
-              "hoo-daily-journal-",
-            )
-          ) {
-            continue;
-          }
-
-          const journalDate =
-            key.replace(
-              "hoo-daily-journal-",
-              "",
-            );
-
-          const content =
-            window.localStorage.getItem(
-              key,
-            ) ?? "";
-
-          if (!content.trim()) {
-            continue;
-          }
-
-          entries.push({
-            journalDate,
-            content,
-            updatedAt:
-              new Date(
-                `${journalDate}T00:00:00`,
-              ).toISOString(),
-          });
-        }
-
-        entries.sort(
-          (a, b) =>
-            b.journalDate.localeCompare(
-              a.journalDate,
-            ),
-        );
-
-        setDailyJournalEntries(
-          entries,
-        );
-
         return;
       }
 
-      /*
-       * 로그인 상태:
-       * Supabase에서 일기 전체를 불러온다.
-       */
       const {
         data,
         error,
@@ -615,79 +611,85 @@ const {
           )
           .order(
             "journal_date",
-            {
-              ascending: false,
-            },
+            { ascending: false },
           );
 
       if (error) {
         throw error;
       }
 
-      const entries:
-        DailyJournalBookEntry[] =
-          Array.isArray(data)
-            ? data.reduce<
-                DailyJournalBookEntry[]
-              >(
-                (
-                  result,
-                  journal,
-                ) => {
-                  const journalDate =
-                    typeof journal
-                      .journal_date ===
-                    "string"
-                      ? journal
-                          .journal_date
-                      : "";
+      const cloudEntries: DailyJournalBookEntry[] =
+        Array.isArray(data)
+          ? data.reduce<DailyJournalBookEntry[]>(
+              (result, journal) => {
+                const journalDate =
+                  typeof journal.journal_date === "string"
+                    ? journal.journal_date
+                    : "";
+                const content =
+                  typeof journal.content === "string"
+                    ? journal.content
+                    : "";
 
-                  const content =
-                    typeof journal
-                      .content ===
-                    "string"
-                      ? journal.content
-                      : "";
-
-                  if (
-                    !journalDate ||
-                    !content.trim()
-                  ) {
-                    return result;
-                  }
-
-                  result.push({
-                    journalDate,
-                    content,
-
-                    updatedAt:
-                      typeof journal
-                        .updated_at ===
-                      "string"
-                        ? journal
-                            .updated_at
-                        : new Date()
-                            .toISOString(),
-                  });
-
+                if (!journalDate || !content.trim()) {
                   return result;
-                },
-                [],
-              )
-            : [];
+                }
+
+                const updatedAt =
+                  typeof journal.updated_at === "string"
+                    ? journal.updated_at
+                    : new Date().toISOString();
+
+                result.push({
+                  journalDate,
+                  content,
+                  updatedAt,
+                });
+
+                /* 서버 기록도 항상 로컬 복구본으로 복제한다. */
+                writeLocalDailyJournal(
+                  journalDate,
+                  content,
+                );
+
+                return result;
+              },
+              [],
+            )
+          : [];
+
+      const merged = new Map<
+        string,
+        DailyJournalBookEntry
+      >();
+
+      /*
+       * 로컬을 먼저 넣고 서버 기록으로 같은 날짜를 갱신한다.
+       * 서버 조회에 성공했다면 서버가 현재 정식본이다.
+       */
+      for (const entry of localEntries) {
+        merged.set(entry.journalDate, entry);
+      }
+
+      for (const entry of cloudEntries) {
+        merged.set(entry.journalDate, entry);
+      }
 
       setDailyJournalEntries(
-        entries,
+        Array.from(merged.values()).sort(
+          (a, b) =>
+            b.journalDate.localeCompare(
+              a.journalDate,
+            ),
+        ),
       );
     } catch (error) {
-      console.error(
-        "한줄일기 목록을 불러오지 못했습니다.",
+      console.warn(
+        "한줄일기 서버 조회 실패: 로컬 복구본을 유지합니다.",
         error,
       );
 
-      setDailyJournalEntries(
-        [],
-      );
+      setDailyJournalEntries(localEntries);
     } finally {
       setJournalBookLoading(false);
     }
@@ -718,6 +720,21 @@ const {
         setJournalSaved(false);
       }
 
+      /*
+       * 가장 중요한 보호 장치:
+       * 로그인 사용자도 Supabase보다 먼저 localStorage에 저장한다.
+       * 서버 장애 중 작성한 내용도 브라우저에는 남는다.
+       */
+      writeLocalDailyJournal(
+        journalDate,
+        content,
+      );
+
+      if (isActiveDate()) {
+        setJournalExists(Boolean(trimmedContent));
+        setJournalSaved(true);
+      }
+
       try {
         const {
           data: { user },
@@ -729,123 +746,58 @@ const {
           throw userError;
         }
 
-        /*
-         * 비로그인 상태에서는
-         * 날짜별 localStorage에 저장한다.
-         */
+        /* 비로그인 상태는 로컬 저장으로 완료된다. */
         if (!user) {
-          const storageKey =
-            `hoo-daily-journal-${journalDate}`;
-
-          if (!trimmedContent) {
-            window.localStorage.removeItem(
-              storageKey,
-            );
-
-            if (isActiveDate()) {
-              setJournalExists(false);
-            }
-          } else {
-            window.localStorage.setItem(
-              storageKey,
-              content,
-            );
-
-            if (isActiveDate()) {
-              setJournalExists(true);
-            }
-          }
-
-          if (isActiveDate()) {
-            setJournalSaved(true);
-          }
-
           await loadDailyJournalEntries();
-
           return;
         }
 
-        /*
-         * 내용이 비어 있으면
-         * 해당 날짜의 일지를 삭제한다.
-         */
         if (!trimmedContent) {
-          const {
-            error: deleteError,
-          } =
+          const { error: deleteError } =
             await supabase
               .from("daily_journals")
               .delete()
-              .eq(
-                "user_id",
-                user.id,
-              )
-              .eq(
-                "journal_date",
-                journalDate,
-              );
+              .eq("user_id", user.id)
+              .eq("journal_date", journalDate);
 
           if (deleteError) {
             throw deleteError;
           }
+        } else {
+          const { error: upsertError } =
+            await supabase
+              .from("daily_journals")
+              .upsert(
+                {
+                  user_id: user.id,
+                  journal_date: journalDate,
+                  content,
+                  updated_at: new Date().toISOString(),
+                },
+                {
+                  onConflict:
+                    "user_id,journal_date",
+                },
+              );
 
-          if (isActiveDate()) {
-            setJournalExists(false);
-            setJournalSaved(true);
+          if (upsertError) {
+            throw upsertError;
           }
-
-          await loadDailyJournalEntries();
-
-          return;
-        }
-
-        /*
-         * 같은 사용자·같은 날짜의 일지는
-         * 한 개만 유지한다.
-         */
-        const {
-          error: upsertError,
-        } =
-          await supabase
-            .from("daily_journals")
-            .upsert(
-              {
-                user_id:
-                  user.id,
-
-                journal_date:
-                  journalDate,
-
-                content,
-
-                updated_at:
-                  new Date()
-                    .toISOString(),
-              },
-              {
-                onConflict:
-                  "user_id,journal_date",
-              },
-            );
-
-        if (upsertError) {
-          throw upsertError;
-        }
-
-        if (isActiveDate()) {
-          setJournalExists(true);
-          setJournalSaved(true);
         }
 
         await loadDailyJournalEntries();
       } catch (error) {
-        console.error(
-          "오늘의 일지를 저장하지 못했습니다.",
+        /*
+         * 서버 저장 실패는 더 이상 데이터 저장 실패가 아니다.
+         * 로컬 복구본은 이미 기록되어 있으므로 동기화 대기 상태로 둔다.
+         */
+        console.warn(
+          "오늘의 일지 서버 동기화 실패: 로컬 복구본은 저장되었습니다.",
           error,
         );
 
         if (isActiveDate()) {
-          setJournalSaved(false);
+          setJournalSaved(true);
         }
       } finally {
         if (isActiveDate()) {
@@ -902,17 +854,8 @@ const {
         journalLoadRequestIdRef.current =
           requestId;
 
-        /*
-         * 다른 날짜로 이동하기 전에
-         * 아직 예약 중인 기존 날짜의 입력을
-         * 먼저 즉시 저장한다.
-         */
         await flushPendingDailyJournal();
 
-        /*
-         * 저장을 기다리는 사이 더 새로운 날짜
-         * 요청이 들어왔다면 이 요청은 중단한다.
-         */
         if (
           requestId !==
           journalLoadRequestIdRef.current
@@ -930,6 +873,18 @@ const {
 
         setJournalLoading(true);
         setJournalSaved(false);
+
+        const storageKey =
+          `hoo-daily-journal-${journalDate}`;
+
+        const localJournal =
+          window.localStorage.getItem(
+            storageKey,
+          ) ?? "";
+
+        /* 서버 응답을 기다리지 않고 로컬 기록을 즉시 표시한다. */
+        setDailyJournal(localJournal);
+        setJournalExists(Boolean(localJournal));
 
         try {
           const {
@@ -949,34 +904,7 @@ const {
             return;
           }
 
-          /*
-           * 비로그인 상태에서는
-           * 브라우저 저장소에서 불러온다.
-           */
           if (!user) {
-            const storageKey =
-              `hoo-daily-journal-${journalDate}`;
-
-            const savedJournal =
-              window.localStorage.getItem(
-                storageKey,
-              );
-
-            if (
-              requestId !==
-              journalLoadRequestIdRef.current
-            ) {
-              return;
-            }
-
-            setDailyJournal(
-              savedJournal ?? "",
-            );
-
-            setJournalExists(
-              Boolean(savedJournal),
-            );
-
             return;
           }
 
@@ -1008,16 +936,32 @@ const {
             return;
           }
 
-          const content =
+          const cloudContent =
             typeof data?.content ===
-            "string"
+              "string"
               ? data.content
               : "";
 
-          setDailyJournal(content);
-          setJournalExists(
-            content.length > 0,
-          );
+          if (cloudContent) {
+            writeLocalDailyJournal(
+              journalDate,
+              cloudContent,
+            );
+
+            setDailyJournal(
+              cloudContent,
+            );
+            setJournalExists(true);
+          } else {
+            /*
+             * 서버에 행이 없다고 해서 이미 존재하는 로컬 복구본을 지우지 않는다.
+             * 다음 편집/동기화 때 다시 서버로 올릴 수 있다.
+             */
+            setDailyJournal(localJournal);
+            setJournalExists(
+              Boolean(localJournal),
+            );
+          }
         } catch (error) {
           if (
             requestId !==
@@ -1026,13 +970,13 @@ const {
             return;
           }
 
-          console.error(
-            "오늘의 일지를 불러오지 못했습니다.",
+          console.warn(
+            "오늘의 일지 서버 조회 실패: 로컬 복구본을 표시합니다.",
             error,
           );
 
-          setDailyJournal("");
-          setJournalExists(false);
+          setDailyJournal(localJournal);
+          setJournalExists(Boolean(localJournal));
         } finally {
           if (
             requestId ===
