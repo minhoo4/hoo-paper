@@ -2,8 +2,6 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 // 🎃 Seasonal UI: only renders decorations on the home route, when Supabase is ON.
-import "@/components/site-theme/hooHalloweenTheme.css";
-import HooHalloweenThemeClient from "@/components/site-theme/HooHalloweenThemeClient";
 
 import PwaRegister from "./PwaRegister";
 import PwaInstallButton from "./PwaInstallButton";
@@ -47,7 +45,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className="flex min-h-full flex-col">
         <PwaRegister />
         <PwaInstallButton />
-        <HooHalloweenThemeClient />
+       
         {children}
       </body>
     </html>
