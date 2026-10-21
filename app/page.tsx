@@ -28,6 +28,7 @@ import Hoo2048Game from "@/components/Hoo2048Game";
 import HooShisenGame from "@/components/HooShisenGame";
 import Hoo1952Game from "@/components/Hoo1952Game";
 import HooBubbleGame from "@/components/HooBubbleGame";
+import HooRhythmGame from "@/components/HooRhythmGame";
 import {
   createPuzzleId,
   submitSudokuCompletion,
@@ -333,7 +334,8 @@ type MinigameScreen =
   | "2048"
   | "shisen"
   | "1952"
-  | "bubble";
+  | "bubble"
+  | "rhythm";
 
 type Hoo2048Difficulty =
   | "easy"
@@ -14023,6 +14025,42 @@ setSecretPinInput("");
             data-hoo-vertical-scroll="true"
             className="isolate mt-4 grid h-0 min-h-0 flex-1 touch-pan-y gap-4 overflow-y-scroll overscroll-contain pb-8 pr-0.5 sm:mt-7 sm:gap-5 sm:pr-1 lg:grid-cols-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           >
+            {/* 리듬후 카드 */}
+            <article className="relative z-30 flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#9b87ff]/55 bg-gradient-to-b from-[#0b1024] via-[#151631] to-[#241634] p-4 text-white shadow-[0_22px_60px_rgba(102,76,214,0.28)] sm:rounded-[28px] sm:p-6">
+              <div className="pointer-events-none absolute inset-0 opacity-75 [background-image:radial-gradient(circle_at_28%_18%,rgba(167,139,250,0.28),transparent_30%),radial-gradient(circle_at_78%_74%,rgba(96,165,250,0.18),transparent_34%)]" />
+              <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:radial-gradient(circle,#fff_0.7px,transparent_0.8px)] [background-size:22px_22px]" />
+
+              <div className="relative flex items-center gap-4">
+                <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-violet-200/25 bg-violet-300/10 text-3xl shadow-[0_0_30px_rgba(139,92,246,0.22)]">♪</span>
+                <div>
+                  <p className="text-[11px] font-black tracking-[0.18em] text-violet-200/55">4 KEY RHYTHM GAME</p>
+                  <h3 className="text-2xl font-black tracking-[0.05em] text-white">리듬후</h3>
+                </div>
+              </div>
+
+              <p className="relative mt-4 text-sm font-bold leading-6 text-white/65">내 음악으로 직접 채보를 만들고, A · S · K · L 네 개의 키로 박자를 연주하세요.</p>
+
+              <div className="relative mt-4 space-y-3 rounded-2xl border border-white/10 bg-black/25 p-4 sm:mt-6">
+                <div className="flex items-center justify-between gap-3"><span className="text-xs font-bold text-white/45">조작 키</span><strong className="text-right text-sm font-black text-violet-100">A · S · K · L</strong></div>
+                <div className="flex items-center justify-between gap-3"><span className="text-xs font-bold text-white/45">채보 제작</span><strong className="text-right text-sm font-black text-white">자동 분석 · 직접 REC</strong></div>
+                <div className="flex items-center justify-between gap-3"><span className="text-xs font-bold text-white/45">난이도</span><strong className="text-right text-sm font-black text-white">EASY · NORMAL · HARD</strong></div>
+              </div>
+
+              <button
+                type="button"
+                data-game-id="rhythm"
+                aria-label="리듬후 게임 열기"
+                onPointerDown={(event) => { event.stopPropagation(); }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openMinigame("rhythm");
+                }}
+                className="relative z-30 mt-auto w-full touch-manipulation rounded-2xl border border-violet-200/30 bg-gradient-to-r from-violet-500 to-fuchsia-500 py-3.5 text-sm font-black tracking-[0.08em] text-white shadow-[0_12px_35px_rgba(139,92,246,0.28)] transition hover:scale-[1.02] hover:from-violet-400 hover:to-fuchsia-400 active:scale-[0.98]"
+              >
+                리듬후 플레이
+              </button>
+            </article>
+
             {/* 스도쿠 카드 */}
             <article className="rounded-[22px] border border-[#ded8ef] bg-[#faf9ff] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
               <div className="flex items-center gap-4">
@@ -14451,8 +14489,10 @@ setSecretPinInput("");
               </button>
             </article>
 
+            
+
             {/* HOO WORLD 카드 */}
-            <article className="relative order-6 flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#b8d6aa] bg-gradient-to-b from-[#f5fbef] to-[#e3f0d8] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
+            <article className="relative order-7 flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#b8d6aa] bg-gradient-to-b from-[#f5fbef] to-[#e3f0d8] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
               <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/45" />
               <div className="pointer-events-none absolute -bottom-12 -left-8 h-36 w-36 rounded-full bg-[#bdd9aa]/30" />
 
@@ -14635,6 +14675,17 @@ setSecretPinInput("");
           return (
             <HooBubbleGame
               key="hoo-bubble-game"
+              onExit={closeMinigame}
+              onRecordSaved={() => {
+                setCommunityRefreshKey((previous) => previous + 1);
+              }}
+            />
+          );
+
+        case "rhythm":
+          return (
+            <HooRhythmGame
+              key="hoo-rhythm-game"
               onExit={closeMinigame}
               onRecordSaved={() => {
                 setCommunityRefreshKey((previous) => previous + 1);

@@ -1,5 +1,6 @@
 "use client";
 
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -11,6 +12,8 @@ import {
   useRef,
   useState,
 } from "react";
+
+import HooTradingDock, { HooTradingStatus } from "@/components/HooWorld/HooTradingDock";
 
 import HooWorldPlayer, {
   type HooWorldPlayerFacing,
@@ -1487,6 +1490,10 @@ export default function HooWorldPage() {
   ] = useState<FirewoodFieldItem[]>(
     [],
   );
+
+  // 후레이딩은 포커스모드와 별개이며, 후월드 필드 안에서만 열립니다.
+  const [hooTradingActive, setHooTradingActive] = useState(false);
+  const hooTradingActiveRef = useRef(false);
 
   const [
     isEnteringFocusMode,
@@ -3299,11 +3306,18 @@ export default function HooWorldPage() {
       }
 
       if (error) {
-        console.error(
-          "HOO WORLD 관리자 캐릭터 상태를 불러오지 못했습니다.",
-          error,
+        // [HOO WORLD ADMIN DIAGNOSTIC V1]
+        // 관리자 캐릭터가 로딩되지 않더라도 메인 필드와 포탈을 유지합니다.
+        // 실제 Supabase 오류 코드를 개발자 도구 콘솔에서 확인할 수 있습니다.
+        console.warn(
+          "[HOO WORLD] 관리자 캐릭터 조회 실패 (메인 필드 유지)",
+          {
+            code: error.code ?? "UNKNOWN",
+            message: error.message ?? "상세 메시지 없음",
+            details: error.details ?? null,
+            hint: error.hint ?? null,
+          },
         );
-
         return;
       }
 
@@ -6075,6 +6089,14 @@ export default function HooWorldPage() {
     function handleKeyDown(
       event: KeyboardEvent,
     ) {
+      // 거래 UI가 열린 동안 후월드 이동/관리자 이동 입력을 차단합니다.
+      if (hooTradingActiveRef.current) {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+        if (setMovementInput(event.code, false)) event.preventDefault();
+        return;
+      }
+
       if (
         isControllingAdminCharacterRef.current
       ) {
@@ -6155,6 +6177,13 @@ export default function HooWorldPage() {
     function handleKeyUp(
       event: KeyboardEvent,
     ) {
+      if (hooTradingActiveRef.current) {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+        if (setMovementInput(event.code, false)) event.preventDefault();
+        return;
+      }
+
       if (
         isControllingAdminCharacterRef.current
       ) {
@@ -6489,6 +6518,17 @@ export default function HooWorldPage() {
       previousMovementTimeRef.current =
         0;
     }, []);
+
+  // 후레이딩 진입 시 이동 RAF와 눌린 방향키를 즉시 해제합니다.
+  const handleHooTradingActiveChange = useCallback((active: boolean) => {
+    hooTradingActiveRef.current = active;
+    setHooTradingActive(active);
+    if (active) {
+      stopPlayerMovementForWorldItemInteraction();
+      const { x, y } = playerPositionRef.current;
+      void updatePositionRef.current(x, y, playerFacingRef.current, false);
+    }
+  }, [stopPlayerMovementForWorldItemInteraction]);
 
   const applyTornSleepingBagPlayerPosition =
     useCallback(
@@ -10192,6 +10232,8 @@ export default function HooWorldPage() {
     상자 열기 / 아이템 꺼내기는 다음 단계에서
     HooWorldDeliveryGate 컴포넌트에 이어서 연결한다.
 ───────────────────────── */}
+
+
 <HooWorldDeliveryGate
   playerPositionRef={
     playerPositionRef
@@ -11844,9 +11886,7 @@ export default function HooWorldPage() {
         }
         data-hoo-world-local-player="true"
         data-hoo-world-movement-locked={
-          isHooWorldMovementLockedStatus(
-            status,
-          )
+          hooTradingActive || isHooWorldMovementLockedStatus(status)
             ? "true"
             : "false"
         }
@@ -11983,13 +12023,14 @@ export default function HooWorldPage() {
                       : undefined,
                 }}
               >
+              <div className="relative" data-hoo-trading-local-player={hooTradingActive ? "true" : "false"}>
               <HooWorldPlayer
                 nickname={
                   nickname ??
                   "HOO"
                 }
                 status={
-                  status
+                  hooTradingActive ? "focusing" : status
                 }
                 facing={
                   playerFacing
@@ -12017,6 +12058,9 @@ export default function HooWorldPage() {
                   showTornSleepingBagColdNotice
                 }
               />
+              {/* 기존 포커스 노트북 포즈를 재사용하고, 거래 중 배지를 덧붙입니다. */}
+              <HooTradingStatus />
+              </div>
               </div>
             </div>
           </div>
@@ -12303,6 +12347,22 @@ export default function HooWorldPage() {
           </div>
         </div>
       </header>
+
+      {/* 기존 포커스모드 버튼 바로 위: 별도 페이지 이동 없이 후월드 내부 거래 UI 오픈 */}
+      <HooTradingDock
+        buttonBottom={84}
+        walletHoo={hooCoinBalance}
+        onWalletHooChange={handleHooCoinBalanceChange}
+        disabled={
+          !isClientReady ||
+          isUserLoading ||
+          isEnteringFocusMode ||
+          !isConnected ||
+          fieldId === null ||
+          isHooWorldMovementLockedStatus(status)
+        }
+        onActiveChange={handleHooTradingActiveChange}
+      />
 
             <button
         type="button"

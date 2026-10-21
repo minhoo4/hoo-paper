@@ -1,0 +1,94 @@
+/* HOO WORLD · 후레이딩 v2. No background image or separate scene. */
+.entryButton{position:fixed;z-index:65;right:18px;bottom:112px;display:flex;align-items:center;gap:8px;padding:11px 17px;border:1px solid #d6c39d;border-radius:15px;background:#fff8e8;color:#273f56;box-shadow:0 5px 17px #11233925;font-size:17px;font-weight:800;letter-spacing:-.35px;cursor:pointer;transition:transform .15s,box-shadow .15s}
+.entryButton:hover{transform:translateY(-2px);box-shadow:0 7px 20px #142a412f}.entryDot{width:6px;height:6px;border-radius:50%;background:#10a783;box-shadow:0 0 0 3px #10a78322}
+.overlay{position:fixed;inset:0;z-index:1100;pointer-events:none;font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-variant-numeric:tabular-nums;font-size:16px;color:#263d55}
+.overlay *, .overlay *::before, .overlay *::after{box-sizing:border-box}
+/* Important: NO photo, gradient-room, canvas, field or duplicate player. Existing HOO WORLD remains behind this light scrim. */
+.scrim{position:absolute;inset:0;background:rgba(9,19,36,.17);pointer-events:auto}
+.header{position:absolute;left:2.5%;right:2.5%;top:14px;min-height:53px;padding:8px 12px 8px 18px;display:flex;gap:14px;align-items:center;justify-content:space-between;border:1px solid #ece4d5;border-radius:18px;background:rgba(255,253,248,.98);box-shadow:0 4px 18px #10243a22;pointer-events:auto}
+.heading{font-size:22px;font-weight:850;color:#243a53;letter-spacing:-.65px}.heading small{font-size:14px;font-weight:600;color:#70839a;margin-left:15px;letter-spacing:0}.clock{color:#75879c;font-size:14px;font-weight:600}.close{border:0;border-radius:12px;background:#f1f3f5;color:#526882;font-size:29px;line-height:32px;height:35px;min-width:35px;cursor:pointer}.close:hover{background:#e5edf2}
+.left{position:absolute;left:1.1%;top:83px;bottom:16px;width:min(405px,26.1vw);min-width:260px;display:flex;flex-direction:column;gap:11px;overflow-y:auto;scrollbar-width:thin;pointer-events:auto;padding-right:3px}
+.right{position:absolute;right:1.1%;top:83px;bottom:16px;width:min(680px,42vw);min-width:420px;overflow:auto;scrollbar-width:thin;padding:15px;background:rgba(255,253,248,.985);border:1px solid #e6e3df;border-radius:20px;box-shadow:0 8px 28px #1122392a;pointer-events:auto}
+.card{border:1px solid #e9e3da;border-radius:18px;background:rgba(255,253,249,.985);box-shadow:0 5px 20px #1a354524;padding:16px 18px;flex:none}
+.cardTitle{display:flex;align-items:center;gap:8px;margin:0 0 11px;font-size:19px;font-weight:850;letter-spacing:-.5px;color:#263a52}.cardTitle small{font-size:13px;font-weight:650;color:#8c9bad;letter-spacing:0}.cardTitle button{margin-left:auto;border:0;background:none;color:#687c94;font-size:14px;cursor:pointer;font-weight:700;padding:4px}.cardTitle button:hover{color:#1d9f80}
+.bigMoney{font-size:29px;font-weight:850;letter-spacing:-.6px;padding-bottom:7px;border-bottom:1px solid #f1ede7}.bigMoney small{font-size:15px;color:#7b8b9d;font-weight:650}
+.pair{display:flex;align-items:center;justify-content:space-between;gap:9px;padding:4px 0;color:#718196;font-size:14px;line-height:1.5}.pair span{min-width:0}.pair b,.pair strong{font-weight:760;color:#293f56}
+.statsRow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:11px}.statsRow>div{border:1px solid #ecf0ec;border-radius:12px;padding:10px;background:#f7f8f4;min-width:0}.statsRow small{display:block;font-size:13px;color:#8b9aab;margin-bottom:3px}.statsRow strong{font-size:17px;font-weight:850;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.positive{color:#089a7b!important}.negative{color:#db5a6c!important}
+.transfer{display:flex;align-items:end;gap:5px;margin-top:12px}.transfer label{flex:1;min-width:0;font-size:13px;color:#6f8294}.transfer input{width:100%;min-width:0;margin-top:4px;padding:8px 9px;border:1px solid #e1e6e8;border-radius:9px;background:white;color:#263a52;font-size:15px}.transfer button,.positionActions button{background:#e9f5f1;border:1px solid #b8ddd1;border-radius:9px;padding:10px 13px;white-space:nowrap;font-size:15px;color:#1b806c;font-weight:750;cursor:pointer}.transfer button:hover,.positionActions button:hover{background:#d7eee5}.transfer button:disabled,.positionActions button:disabled{opacity:.5;cursor:not-allowed}
+.miniNote{color:#8899a9;font-size:13px;line-height:1.55;margin-top:7px}
+.newsRow{display:flex;gap:9px;align-items:flex-start;padding:9px 0;border-top:1px solid #f0ece8;font-size:14px;color:#33485d;line-height:1.45}.newsRow b{color:#273e56;font-size:14px}.newsRow small{display:block;color:#929fae;font-size:13px;margin-top:4px}.newsGood,.newsBad{font-size:13px;font-weight:800;border-radius:7px;padding:5px 6px;min-width:34px;text-align:center}.newsGood{background:#e4f6ef;color:#129576}.newsBad{background:#fce7e8;color:#dd5a6b}
+.rankHeader,.rankRow{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.78fr) minmax(0,1.05fr);gap:5px;align-items:center}.rankHeader{background:#f7f6f1;border-radius:8px;padding:8px 5px;color:#90a0ad;font-size:13px}.rankHeader span:not(:first-child),.rankRow b{text-align:right}.rankRow{padding:8px 4px;border-bottom:1px solid #f1eee9;font-size:14px}.rankRow span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:730;color:#30485d}.rankRow b{white-space:nowrap;font-size:13.5px}.rankRow small{font-size:12px}
+.symbols{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}.symbols button{min-width:0;padding:10px 8px;border:1px solid #e7e6e0;border-radius:12px;color:#2c445d;background:#fffcf8;cursor:pointer;text-align:left;transition:border-color .12s,background .12s}.symbols button.selectedSymbol{border-color:#52b69d;background:#e8f7f1;box-shadow:inset 0 0 0 1px #95d7c6}.symbols span,.symbols strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.symbols span{font-size:14px;font-weight:800}.symbols strong{font-size:19px;letter-spacing:-.4px;margin-top:5px}.symbols small{font-size:13px;color:#8798a6}
+.priceRow{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:15px 1px 9px;font-size:22px;font-weight:850;color:#273c54}.priceRow strong{color:#0e9e7d;font-size:25px}.priceRow small{font-size:13px;color:#8192a5;font-weight:600}
+.intervals{display:flex;gap:5px;margin-bottom:11px;flex-wrap:wrap}.intervals button,.segment button,.quick button{cursor:pointer;padding:9px 13px;background:#f6f5f1;border:1px solid #eeeae5;border-radius:9px;color:#64798d;font-size:15px;font-weight:760}.intervals .selectedFrame,.segment .selectedFrame{color:#187e6c;background:#daf5e9;border-color:#6ac9ae}
+.chartBox{border:1px solid #27415b;border-radius:15px;background:#152a45;padding:8px 8px 3px;min-height:255px}.chartSvg{display:block;width:100%;height:auto;max-height:292px}.chartEmpty{color:#b2c6d5;text-align:center;padding:70px 14px}
+.tradeForm{padding:11px 7px 2px}.tradeRow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 12px}.tradeRow>b{flex:none;font-size:15px}.segment{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:4px}.segment button{padding:11px 13px;font-size:15px;min-height:38px}.segment button.activeLong{background:#dcf5ed;color:#099b77;border-color:#7cdbc1}.segment button.activeShort{background:#fdebef;color:#d74e69;border-color:#ec9cb0}
+.tradeRow label,.riskRow label{min-width:0;flex:1;font-size:14px;font-weight:720;color:#596e83}.tradeRow label input,.riskRow label input{display:block;width:100%;min-width:0;margin-top:5px;padding:12px 12px;border:1px solid #dfe4e9;border-radius:10px;background:#fff;color:#294259;font-size:16px;min-height:43px}
+.quick{display:flex;justify-content:flex-end;gap:4px}.quick button{padding:10px 10px;font-size:14px;min-height:38px}.riskRow{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.estimate{margin:9px 0;color:#8d9aa8;font-size:13px}
+.submitLong,.submitShort{display:block;width:100%;padding:17px 9px;min-height:53px;border:0;border-radius:11px;color:#fff;cursor:pointer;font-weight:850;font-size:20px;box-shadow:0 3px 7px #10283b16}.submitLong{background:#11a887}.submitShort{background:#f05d75}.submitLong:hover{background:#0a9879}.submitShort:hover{background:#dd4c67}.submitLong:disabled,.submitShort:disabled{background:#78caba;cursor:not-allowed;box-shadow:none}
+.holdings{margin-top:10px;background:#fffcf8;border:1px solid #f0eae0;border-radius:14px;overflow:hidden}.tabs{display:flex;border-bottom:1px solid #f0ebe5;gap:4px}.tabs button{padding:10px 14px;cursor:pointer;border:0;background:none;font-size:15px;font-weight:750;color:#8d9eac}.tabs .currentTab{color:#0c9d7c;border-bottom:2px solid #0db48f}
+.positions{padding:7px 13px;max-height:250px;overflow:auto}.position{border-bottom:1px solid #f0eae5;padding:7px 0}.position .pair{font-size:14px}.positionActions{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}.foot{font-size:13px;line-height:1.5;color:#91a0ab;margin:9px 5px 1px}
+.error,.notice{border-radius:10px;padding:9px 11px;margin-top:8px;font-size:14px;line-height:1.5}.error{color:#aa4659;background:#fde9ea}.notice{color:#16795f;background:#e7f6ef}
+.characterStatus{display:block;position:absolute;bottom:-24px;left:50%;transform:translateX(-50%);white-space:nowrap;background:#fffaeb;border:1px solid #e7d3a0;border-radius:12px;box-shadow:0 2px 8px #22374622;color:#3d5265;font-size:14px;font-weight:850;padding:4px 9px;pointer-events:none;z-index:9}
+@media(max-width:1280px){.left{width:29vw}.right{width:48vw}.heading small{display:none}}
+@media(max-width:930px){.left{width:32vw}.right{width:53vw;padding:10px;min-width:0}.card{padding:12px}.right .symbols strong{font-size:16px}}
+@media(max-width:700px){.overlay{font-size:15px}.header{left:5px;right:5px;top:5px;min-height:49px}.clock{display:none}.left{left:6px;right:6px;top:61px;bottom:auto;width:auto;min-width:0;height:205px;overflow-x:auto;overflow-y:hidden;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(250px,82%);gap:8px;padding:0 0 4px}.left .card{overflow-y:auto}.right{left:6px;right:6px;top:275px;bottom:6px;width:auto;min-width:0;padding:10px}.priceRow{font-size:18px}.priceRow strong{font-size:21px}.entryButton{right:9px;bottom:100px;padding:9px 12px}.chartBox{min-height:185px}.symbols span{font-size:13px}.symbols strong{font-size:15px}}
+@media(prefers-reduced-motion:reduce){.entryButton,.symbols button{transition:none}.entryButton:hover{transform:none}}
+
+.entryButton:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+
+/* V3.1 – Uncapped SL/TP percentage controls. Keep prices server-side. */
+.riskBasisRow{display:flex;gap:8px;align-items:center;justify-content:space-between;margin:6px 0 9px;font-size:15px}
+.riskBasisRow>b{color:#344d64;flex:none}
+.riskBasisSwitch{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}
+.riskBasisSwitch button{min-height:37px;padding:8px 12px;border:1px solid #e9e7e2;border-radius:10px;background:#f6f5f1;color:#708297;font-size:15px;font-weight:800;cursor:pointer}
+.riskBasisSwitch .riskBasisSelected{border-color:#65c7aa;background:#ddf6e9;color:#107e65}
+.riskRow label{font-size:15px;font-weight:800}
+.riskRow input{font-size:18px!important;min-height:45px}
+.riskPreview{display:flex;justify-content:space-between;flex-wrap:wrap;gap:5px 10px;margin:10px 0 2px;padding:9px 11px;border-radius:10px;background:#f2f8f6;font-size:14px;color:#677f90}
+.riskPreview b{color:#244456;font-size:15px}
+.riskHelp{margin:6px 0 4px;color:#8193a4;font-size:14px;line-height:1.5}
+.riskWarning{padding:8px 10px;margin:6px 0;border:1px solid #f4bbbd;border-radius:9px;background:#fff0f0;color:#b33c51;font-size:15px}
+.positionRiskHint{font-size:13px;color:#708397;padding:2px 0 5px}
+@media(max-width:700px){.riskBasisRow{flex-wrap:wrap}.riskBasisSwitch{justify-content:flex-start}.riskBasisSwitch button{font-size:14px;padding:7px 8px}.riskPreview{flex-direction:column}.right{width:auto}}
+
+/* v3.2: scale-in & percentage partial exits */
+.scaleHint{padding:10px 12px;margin:-3px 0 10px;background:#eef9f3;border:1px solid #b8e0ce;color:#277968;border-radius:10px;font-size:15px;font-weight:750;line-height:1.5}
+.scaleHint span{display:block;font-size:14px;font-weight:500;color:#658c7e;margin-top:3px}
+.positionActions button{font-size:15px;min-height:40px;padding:9px 13px;flex:1 1 auto}
+.segment button:disabled{opacity:.36;cursor:not-allowed}
+
+/* Readability only: SVG chart labels inherit a larger display font. */
+.chartSvg text{font-size:13px}
+
+/* UI-only: show held positions in the free central gap, next to the live chart.
+   History and empty positions remain in their original trading-panel location. */
+.centerPositions{
+  position:fixed;
+  top:83px;
+  left:calc(1.1% + min(405px,26.1vw) + 13px);
+  right:calc(1.1% + min(680px,42vw) + 13px);
+  width:auto;
+  max-height:calc(100dvh - 100px);
+  margin:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  scrollbar-width:thin;
+  pointer-events:auto;
+  z-index:3;
+  box-shadow:0 8px 28px #1122392a;
+}
+.centerPositions .positions{max-height:calc(100dvh - 155px)}
+.centerPositions .position .pair{flex-wrap:wrap}
+@media(min-width:1251px) and (max-width:1280px){
+  .centerPositions{left:calc(1.1% + 29vw + 13px);right:calc(1.1% + 48vw + 13px)}
+}
+@media(max-width:1250px){
+  .centerPositions{left:calc(32vw + 16px);right:14px;top:auto;bottom:12px;max-height:36dvh}
+  .centerPositions .positions{max-height:calc(36dvh - 53px)}
+}
+@media(max-width:700px){
+  .centerPositions{left:6px;right:6px;bottom:6px;max-height:41dvh}
+  .centerPositions .positions{max-height:calc(41dvh - 53px)}
+}
