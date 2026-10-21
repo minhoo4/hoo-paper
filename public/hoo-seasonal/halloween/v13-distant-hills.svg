@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="300" viewBox="0 0 1600 300" preserveAspectRatio="none">
+  <!-- Transparent above the hills; no rectangular sky texture or hard top seam. -->
+  <defs>
+    <linearGradient id="fade" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".27" stop-color="#fff" stop-opacity=".03"/><stop offset=".63" stop-color="#fff" stop-opacity=".70"/><stop offset="1" stop-color="#fff"/></linearGradient>
+    <linearGradient id="mist" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9b4c95" stop-opacity="0"/><stop offset=".60" stop-color="#80416d" stop-opacity=".20"/><stop offset="1" stop-color="#4a2149" stop-opacity=".52"/></linearGradient>
+    <linearGradient id="hill" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#6e356c" stop-opacity=".55"/><stop offset="1" stop-color="#301536" stop-opacity=".86"/></linearGradient>
+    <mask id="soft"><rect width="1600" height="300" fill="url(#fade)"/></mask>
+    <radialGradient id="haze"><stop stop-color="#fa9a68" stop-opacity=".40"/><stop offset="1" stop-color="#fa9a68" stop-opacity="0"/></radialGradient>
+  </defs>
+  <g mask="url(#soft)">
+    <ellipse cx="1224" cy="220" rx="290" ry="115" fill="url(#haze)"/>
+    <path d="M0 240 C160 210 275 170 408 192 C530 218 665 238 785 206 C935 164 1021 181 1125 204 C1290 244 1410 179 1600 203 V300 H0Z" fill="url(#mist)"/>
+    <path d="M0 266 C154 235 246 204 368 218 C536 239 614 213 749 215 C865 211 993 254 1161 214 C1341 173 1492 229 1600 214 V300 H0Z" fill="url(#hill)"/>
+    <path d="M0 276 C200 251 329 254 480 262 C670 273 806 237 988 252 C1178 264 1365 242 1600 260 V300 H0Z" fill="#301630" opacity=".49"/>
+  </g>
+</svg>

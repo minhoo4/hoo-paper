@@ -1,0 +1,29 @@
+/* HOO Halloween V15 — fixed seasonal corridor behind all original UI.
+ * OFF never matches these selectors, so the user's personal wallpaper returns.
+ * No visual overlays above buttons. No modification to user wallpaper settings.
+ */
+html[data-hoo-season="halloween"]:has(body) {
+  background-color: #15091c !important;
+}
+html[data-hoo-season="halloween"] body {
+  /* This image is pure corridor scenery: no baked text, cards or fake buttons. */
+  background-image:
+    linear-gradient(90deg, rgba(9,4,17,.16), rgba(21,8,31,.24) 48%, rgba(9,4,17,.16)),
+    url('/hoo-seasonal/halloween/haunted-mansion-corridor.svg') !important;
+  background-color: #120817 !important;
+  background-attachment: fixed, fixed !important;
+  background-position: center center, center center !important;
+  background-repeat: no-repeat, no-repeat !important;
+  background-size: cover, cover !important;
+}
+/* Remove the older V14 floating ghost and crescent, as previously requested.
+   Keep bats, pumpkins and other corridor-appropriate items. */
+html[data-hoo-season="halloween"] :is(
+  .hoo-halloween-page-icon--moon-right,
+  .hoo-halloween-page-icon--ghost-left
+) { display: none !important; }
+@media (max-width: 800px) {
+  html[data-hoo-season="halloween"] body {
+    background-position: center center, center center !important;
+  }
+}

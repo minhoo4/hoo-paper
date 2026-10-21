@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="300" viewBox="0 0 1600 300" preserveAspectRatio="none">
+  <defs>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#fff" stop-opacity="0"/><stop offset=".26" stop-color="#fff" stop-opacity=".03"/><stop offset=".50" stop-color="#fff" stop-opacity=".39"/><stop offset=".81" stop-color="#fff" stop-opacity=".87"/><stop offset="1" stop-color="#fff"/></linearGradient>
+    <mask id="fadeOut"><rect width="1600" height="300" fill="url(#fade)"/></mask>
+    <linearGradient id="hills" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#321536" stop-opacity=".6"/><stop offset="1" stop-color="#190f29"/></linearGradient>
+    <radialGradient id="ember"><stop stop-color="#ffbd76" stop-opacity=".7"/><stop offset="1" stop-color="#ffbd76" stop-opacity="0"/></radialGradient>
+  </defs>
+  <g mask="url(#fadeOut)">
+    <path d="M0 272 Q104 235 209 246 T400 256 Q514 225 610 250 T810 254 Q945 228 1095 255 T1334 252 Q1480 228 1600 247 V300H0Z" fill="url(#hills)"/>
+    <!-- One small distant castle, integrated into the rolling slopes rather than a rectangular block. -->
+    <g fill="#1c1029" opacity=".88">
+      <path d="M1012 262 V182 L1026 182 V157 L1054 134 L1082 157 V182 H1096 V234 H1112 V194 L1129 174 L1149 194 V235 H1165 V158 L1194 114 L1223 158 V204 H1242 V255Z"/>
+      <path d="M1001 185 1054 125 1106 185H1085L1054 147 1025 185Z M1154 165 1194 100 1234 165H1217L1194 130 1173 165Z"/>
+      <path d="M1060 160V111h-4V99h14v13h-4v47Z"/>
+    </g>
+    <g fill="#f4a65a" opacity=".62"><rect x="1046" y="204" width="11" height="18" rx="5"/><rect x="1178" y="185" width="9" height="18" rx="4"/><rect x="1204" y="185" width="9" height="18" rx="4"/><rect x="1126" y="209" width="6" height="12" rx="3"/></g>
+    <ellipse cx="1186" cy="212" rx="75" ry="55" fill="url(#ember)" opacity=".3"/>
+    <!-- Thin old trees and grave markers with varied heights. -->
+    <g stroke="#231129" stroke-width="4.2" fill="none" stroke-linecap="round" opacity=".77">
+      <path d="M150 274V194 M150 224 116 202 M149 241 183 212 M116 203 106 183 M181 213 192 198"/>
+      <path d="M356 270V210 M356 227 328 214 M356 238 381 221"/>
+      <path d="M1418 273V208 M1418 230 1394 206 M1418 245 1453 221 M1394 206 1382 186"/>
+    </g>
+    <g fill="#221128" opacity=".76"><path d="M210 273v-22a12 12 0 0 1 24 0v22Z M284 273v-17a9 9 0 0 1 18 0v17Z M1325 270v-23a13 13 0 0 1 26 0v23Z"/></g>
+    <g stroke="#26132a" stroke-width="5" stroke-linecap="round" opacity=".78"><path d="M447 274v-48m-15 16h30 M1492 275v-45m-16 13h32"/></g>
+  </g>
+</svg>

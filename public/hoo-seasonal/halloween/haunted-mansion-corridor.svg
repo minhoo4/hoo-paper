@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+<defs>
+ <linearGradient id="night" x2="0" y2="1"><stop stop-color="#08040f"/><stop offset=".48" stop-color="#240b2e"/><stop offset="1" stop-color="#090414"/></linearGradient>
+ <radialGradient id="light" cx="50%" cy="52%" r="53%"><stop stop-color="#e6702e" stop-opacity=".40"/><stop offset=".45" stop-color="#70214e" stop-opacity=".18"/><stop offset="1" stop-color="#090310" stop-opacity="0"/></radialGradient>
+ <linearGradient id="wallL"><stop stop-color="#07040a"/><stop offset=".6" stop-color="#2a1322"/><stop offset="1" stop-color="#522335"/></linearGradient>
+ <linearGradient id="wallR"><stop stop-color="#4b1b2d"/><stop offset=".7" stop-color="#27101b"/><stop offset="1" stop-color="#07040c"/></linearGradient>
+ <linearGradient id="floor" x2="0" y2="1"><stop stop-color="#2d0c22"/><stop offset=".6" stop-color="#1e081c"/><stop offset="1" stop-color="#08040c"/></linearGradient>
+ <radialGradient id="glow"><stop stop-color="#fff0a5"/><stop offset=".1" stop-color="#ffbb55"/><stop offset=".38" stop-color="#fb6b1b" stop-opacity=".67"/><stop offset="1" stop-color="#fa5213" stop-opacity="0"/></radialGradient>
+ <linearGradient id="rug" x2="0" y2="1"><stop stop-color="#160a26"/><stop offset="1" stop-color="#602037"/></linearGradient>
+ <radialGradient id="vignette"><stop offset=".28" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".62"/></radialGradient>
+ <pattern id="wood" width="42" height="120" patternUnits="userSpaceOnUse"><path d="M2 0 V120 M5 15 Q30 50 12 115 M24 0 Q18 80 37 120" stroke="#b96550" stroke-opacity=".14" fill="none" stroke-width="1.5"/></pattern>
+ <pattern id="stone" width="82" height="70" patternUnits="userSpaceOnUse"><path d="M0 3 H82 M0 34 H82 M41 3 V34 M0 34 V70 M82 34 V70" stroke="#e68851" stroke-opacity=".14" stroke-width="1.4"/></pattern>
+ <pattern id="web" width="240" height="240" patternUnits="userSpaceOnUse"><path d="M0 0 L240 0 M0 0 L0 240 M0 0 L240 80 M0 0 L80 240 M0 0 L240 240 M0 0 Q120 15 200 65 M0 0 Q100 50 160 145 M0 0 Q45 115 68 200 M0 0 Q145 32 200 100" stroke="#e0ac9d" stroke-opacity=".23" stroke-width="1.3" fill="none"/></pattern>
+ <filter id="soft"><feGaussianBlur stdDeviation="16"/></filter>
+</defs>
+<!-- Pure artwork/background: NO UI, text, panels, controls or duplicate widgets. -->
+<rect width="1920" height="1080" fill="url(#night)"/>
+<rect width="1920" height="1080" fill="url(#light)"/>
+<!-- Massive receding corridor, pointed arches and arched violet stained window -->
+<path d="M0 0 H1920 L1170 660 H750 Z" fill="#18091d"/>
+<path d="M480 0 H1440 L1120 665 H800 Z" fill="#351534" stroke="#9b574e" stroke-opacity=".35" stroke-width="20"/>
+<path d="M680 130 Q960 -55 1240 130 L1112 632 H808 Z" fill="#1b0b28" stroke="#663b68" stroke-width="15"/>
+<path d="M805 240 Q960 70 1115 240 V640 H805Z" fill="#230c3e" stroke="#74478f" stroke-width="11"/>
+<path d="M826 260 Q960 130 1094 260 V620 H826Z" fill="#57316d"/>
+<path d="M960 150 V630 M824 390 H1095 M824 520 H1095" stroke="#10071e" stroke-width="17"/>
+<path d="M835 260 L960 390 L1084 260 M837 520 L960 395 L1082 520" stroke="#160920" stroke-width="10" fill="none"/>
+<path d="M855 586 L900 460 L950 540 L1010 375 L1090 595" fill="#1c1727" opacity=".75"/>
+<!-- Outer walls with warm plaster and aged wood -->
+<path d="M0 0 H500 L760 660 L0 1080Z" fill="url(#wallL)"/>
+<path d="M1920 0 H1420 L1160 660 L1920 1080 Z" fill="url(#wallR)"/>
+<path d="M0 0 H500 L760 660 L0 1080Z M1920 0 H1420 L1160 660 L1920 1080 Z" fill="url(#wood)" opacity=".5"/>
+<path d="M0 0 H400 L730 660 M1920 0 H1520 L1190 660" stroke="#140812" stroke-width="74" fill="none"/>
+<path d="M0 0 H420 L742 660 M1920 0 H1500 L1178 660" stroke="#6e3a39" stroke-opacity=".6" stroke-width="10" fill="none"/>
+<path d="M20 0 L760 660 M1900 0 L1160 660" stroke="#09040c" stroke-width="30"/>
+<path d="M70 0 L755 660 M1850 0 L1165 660" stroke="#b26856" stroke-opacity=".35" stroke-width="3"/>
+<path d="M0 760 L750 665 H1170 L1920 760 V1080 H0Z" fill="url(#floor)"/>
+<path d="M0 760 L750 665 H1170 L1920 760 V1080H0" fill="url(#stone)" opacity=".55"/>
+<!-- Perspective polished floor, carpet and seams -->
+<path d="M650 680 H1270 L1755 1080 H165Z" fill="url(#rug)" opacity=".74"/>
+<path d="M660 688 H1260 L1700 1065 H220Z" stroke="#b95752" stroke-width="10" stroke-opacity=".52" fill="none"/>
+<path d="M740 688 H1180 L1535 1065 H385Z" stroke="#ad6e57" stroke-width="3" stroke-opacity=".3" fill="none"/>
+<path d="M0 885 L775 672 M1920 885 L1145 672 M0 1080 L790 670 M1920 1080 L1130 670" stroke="#f99259" stroke-opacity=".17" stroke-width="5"/>
+<ellipse cx="960" cy="770" rx="580" ry="160" fill="#a62958" opacity=".18" filter="url(#soft)"/>
+<!-- side cathedral windows -->
+<path d="M90 210 Q240 10 385 210 V625 H90Z" fill="#170923" stroke="#a35d70" stroke-width="15"/>
+<path d="M110 218 Q240 50 365 218 V605 H110Z" fill="#3b1d5e"/>
+<path d="M240 85 V616 M110 380 H368" stroke="#16091a" stroke-width="22"/>
+<path d="M1570 208 Q1705 20 1840 208 V626 H1570Z" fill="#1b0922" stroke="#a15c6b" stroke-width="15"/>
+<path d="M1590 220 Q1705 53 1820 220 V604 H1590Z" fill="#43235f"/>
+<path d="M1705 85 V616 M1590 378 H1820" stroke="#16091a" stroke-width="21"/>
+<path d="M150 580 L200 400 L239 470 L300 350 L360 575 M1598 600 L1650 440 L1710 530 L1790 375 L1810 597" fill="#191324"/>
+<!-- doorframes / portraits -->
+<path d="M35 80 H450 V740 H35Z M1470 80 H1880 V740 H1470Z" fill="none" stroke="#130710" stroke-width="30"/>
+<path d="M35 80 H450 V740 H35Z M1470 80 H1880 V740 H1470Z" fill="none" stroke="#b36d50" stroke-opacity=".4" stroke-width="8"/>
+<rect x="500" y="235" width="145" height="265" rx="3" fill="#11091a" stroke="#985b44" stroke-width="15" transform="rotate(-7 570 360)"/>
+<rect x="515" y="250" width="115" height="235" fill="#281425" stroke="#9b6d5a" stroke-opacity=".6" stroke-width="4" transform="rotate(-7 570 360)"/>
+<path d="M574 292 a26 38 0 1 1 0 75 a26 38 0 1 1 0 -75 M552 365 Q580 340 608 365 L630 442H535Z" fill="#08070e" opacity=".92"/>
+<rect x="1270" y="234" width="144" height="260" fill="#140b17" stroke="#91563c" stroke-width="14" transform="rotate(6 1338 350)"/>
+<path d="M1334 285 a25 36 0 1 1 0 72 a25 36 0 1 1 0 -72 M1310 358 Q1334 340 1362 358 L1385 436 H1288Z" fill="#08060e"/>
+<!-- wrought iron chandeliers -->
+<path d="M960 0 V160 M960 145 Q840 190 770 150 Q865 260 960 230 Q1055 260 1150 150 Q1080 190 960 145" fill="none" stroke="#090509" stroke-width="22"/>
+<path d="M960 0 V160 M960 145 Q840 190 770 150 Q865 260 960 230 Q1055 260 1150 150 Q1080 190 960 145" fill="none" stroke="#b17652" stroke-opacity=".4" stroke-width="5"/>
+<!-- steps and stairs -->
+<path d="M0 600 L455 450 L620 650 L0 945Z" fill="#160917" stroke="#6f3e45" stroke-width="9"/>
+<path d="M1300 650 L1500 470 L1920 640 V945Z" fill="#180918" stroke="#75434c" stroke-width="9"/>
+<path d="M-20 870L585 610 M-20 825 L550 588 M-20 780 L517 566 M-20 735 L487 540 M1940 870 L1340 608 M1940 825 L1380 580 M1940 780 L1410 557 M1940 735L1440 530" stroke="#aa6856" stroke-width="8" stroke-opacity=".42"/>
+<!-- Gothic wood barrels right/left; no UI elements -->
+<g fill="#2c151c" stroke="#090509" stroke-width="7">
+ <path d="M28 690 Q125 660 230 690 L248 1010 Q125 1050 3 1010Z"/><path d="M1690 710 Q1810 672 1908 710 L1935 1060 Q1810 1090 1665 1050Z"/>
+</g>
+<g stroke="#cc7948" stroke-width="7" stroke-opacity=".7" fill="none">
+ <path d="M20 730 Q125 711 235 730 M5 910 Q125 920 245 910 M1680 760 Q1810 745 1925 760 M1668 976 Q1800 1010 1930 976"/>
+ <path d="M85 702 L80 1016 M155 702 L162 1016 M1738 730 L1730 1058 M1850 730 L1860 1058" opacity=".5"/>
+</g>
+<!-- candle sconces and suspended lanterns -->
+<g stroke="#a86a45" stroke-width="8" fill="#10070f">
+ <path d="M110 250 H190 M1810 250 H1730 M620 480 H680 M1300 480 H1240"/>
+ <path d="M157 260 V400 M1775 260 V400"/>
+</g>
+<g fill="#ffbf72" stroke="#fef3bd" stroke-width="1"><rect x="157" y="218" width="13" height="44" rx="4"/><rect x="1752" y="218" width="13" height="44" rx="4"/><rect x="650" y="445" width="9" height="27" rx="3"/><rect x="1250" y="445" width="9" height="27" rx="3"/><rect x="925" y="136" width="9" height="40" rx="3"/><rect x="982" y="136" width="9" height="40" rx="3"/></g>
+<g fill="url(#glow)"><circle cx="163" cy="211" r="83"/><circle cx="1758" cy="211" r="83"/><circle cx="654" cy="440" r="50"/><circle cx="1255" cy="440" r="50"/><circle cx="930" cy="127" r="70"/><circle cx="986" cy="127" r="70"/></g>
+<g fill="#fff6b5"><path d="M160 215 Q148 198 164 182 Q178 198 166 218Z M1755 215 Q1743 198 1759 182 Q1773 198 1761 218Z M650 446 Q644 430 655 420 Q668 433 660 448Z M1250 446 Q1245 430 1256 420 Q1267 433 1260 448Z"/></g>
+<!-- pumpkins at far edges: natural scene objects, not UI -->
+<g><ellipse cx="342" cy="832" rx="76" ry="80" fill="#a33511" stroke="#6c1c11" stroke-width="9"/><path d="M342 770 L351 745" stroke="#3e3917" stroke-width="16"/><path d="M300 800l24 -22 6 34z M365 800l-23 -22 -6 34z M303 837Q341 886 380 835L356 849 339 839 325 849Z" fill="#ffb344"/><ellipse cx="1584" cy="874" rx="70" ry="74" fill="#b34010" stroke="#621d12" stroke-width="8"/><path d="M1584 812 l12 -32" stroke="#413e1b" stroke-width="16"/><path d="M1545 839 L1567 819 L1574 846Z M1613 839 L1591 819 L1584 846Z M1545 885 Q1584 925 1624 885 L1603 894 1584 886 1564 894Z" fill="#ffc06b"/></g>
+<!-- bats & web accents in architectural space -->
+<g fill="#050408" opacity=".92"><path d="M520 140 Q550 108 576 143 Q575 103 613 125 Q597 145 576 151 Q558 142 520 140Z"/><path d="M1370 135 Q1400 98 1430 133 Q1438 102 1462 124 Q1450 154 1430 145 Q1410 150 1370 135Z"/><path d="M1060 345Q1090 320 1115 345Q1124 317 1139 328Q1134 357 1110 358Q1097 355 1060 345Z"/></g>
+<g fill="none" stroke="#c6a19b" stroke-opacity=".33" stroke-width="2"><path d="M0 0 L250 0 M0 0L0 220 M0 0L210 140 M0 0L130 220 M0 0Q130 30 205 115 M0 0Q70 80 115 190"/><path d="M1920 0 L1670 0 M1920 0 L1920 230 M1920 0L1720 150 M1920 0L1780 230 M1920 0Q1795 40 1710 120 M1920 0Q1840 90 1800 195"/></g>
+<!-- depth and realism texture -->
+<rect width="1920" height="1080" fill="url(#vignette)"/>
+<path d="M0 0 H1920 V1080 H0Z" fill="none" stroke="#050309" stroke-width="58" stroke-opacity=".54"/>
+</svg>

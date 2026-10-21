@@ -1,0 +1,221 @@
+/* HOO Halloween V13 — SEAMLESS LANDSCAPE REPLACEMENT (based on V12).
+ * ALL decoration is CSS background paint on foreground UI elements.
+ * Background paints are BEHIND the element's real content by definition.
+ * No pseudo-elements, absolutely positioned overlays, opacity on containers,
+ * global z-index changes, or body/html wallpaper modifications.
+ * OFF = all selectors inactive; native HOO appearance restored.
+ */
+html[data-hoo-season="halloween"] {
+  --hoo-h-orange: #ff9842;
+  --hoo-h-lilac: #c077ef;
+  --hoo-h-cream: #ffdfbe;
+  --hoo-h-frame: 0 0 0 1px rgba(255,167,91,.17), 0 0 18px rgba(245,102,42,.21), inset 0 0 12px rgba(188,98,236,.11);
+}
+
+/* Exact data-hoo-skin annotations in app/page.tsx take priority over fallback marks. */
+html[data-hoo-season="halloween"] :is([data-hoo-skin], [data-hoo-h-panel]) {
+  border: 1px solid rgba(255,149,77,.70) !important;
+  box-shadow: var(--hoo-h-frame) !important;
+  /* Every decorative layer is background paint, behind real controls. */
+  background-color: rgba(25,12,38,.87) !important;
+  /* Top webs + 3 softly feathered landscape layers, no rectangular horizon strip. */
+  --hoo-h-web-tl: 112px;
+  --hoo-h-web-tr: 112px;
+  --hoo-h-web-bl: 86px;
+  --hoo-h-web-br: 86px;
+  --hoo-h-far-h: 200px;
+  --hoo-h-mid-h: 144px;
+  --hoo-h-front-h: 68px;
+  background-image:
+    url('/hoo-seasonal/halloween/v12-web-a.svg'),
+    url('/hoo-seasonal/halloween/v12-web-b.svg'),
+    url('/hoo-seasonal/halloween/v12-web-c.svg'),
+    url('/hoo-seasonal/halloween/v12-web-d.svg'),
+    radial-gradient(ellipse 64% 42% at 75% 95%,rgba(255,122,73,.14),transparent 84%),
+    url('/hoo-seasonal/halloween/v13-foreground-ground.svg'),
+    url('/hoo-seasonal/halloween/v13-midground-village.svg'),
+    url('/hoo-seasonal/halloween/v13-distant-hills.svg'),
+    linear-gradient(180deg,rgba(29,12,44,.95),rgba(29,12,43,.94) 54%,rgba(39,12,48,.97)) !important;
+  background-repeat: no-repeat !important;
+  background-position:
+    top left,top right,bottom left,bottom right,
+    center bottom,center bottom,center bottom,center bottom,center !important;
+  background-size:
+    var(--hoo-h-web-tl) var(--hoo-h-web-tl),
+    var(--hoo-h-web-tr) var(--hoo-h-web-tr),
+    var(--hoo-h-web-bl) var(--hoo-h-web-bl),
+    var(--hoo-h-web-br) var(--hoo-h-web-br),
+    cover,
+    100% var(--hoo-h-front-h),
+    100% var(--hoo-h-mid-h),
+    100% var(--hoo-h-far-h),
+    cover !important;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+/* Decorate bounded panels; do NOT alter their position/display/overflow/z-index. */
+html[data-hoo-season="halloween"] :is([data-hoo-skin], [data-hoo-h-panel]) :is(h1,h2,h3) {
+  text-shadow: 0 0 12px rgba(255,157,79,.25);
+}
+/* Accessibility: text fields/controls remain naturally above panel background paint. */
+html[data-hoo-season="halloween"] :is([data-hoo-skin], [data-hoo-h-panel]) :is(input,textarea,select) {
+  border-color: rgba(242,152,101,.39) !important;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin], [data-hoo-h-panel]) :is(input,textarea,select,button,a):focus-visible {
+  outline: 2px solid #ffb474 !important;
+  outline-offset: 2px;
+}
+
+/* HOME: decorative bookmark icons are also painted underneath glyphs/text. */
+html[data-hoo-season="halloween"] [data-hoo-h-brand] {
+  color: #ffdbb8 !important;
+  text-shadow: 0 0 10px rgba(255,144,56,.52),0 0 28px rgba(191,89,205,.27) !important;
+}
+html[data-hoo-season="halloween"] [data-hoo-h-bookmark] {
+  border: 1px solid rgba(252,148,75,.59) !important;
+  box-shadow: inset 0 0 11px rgba(180,85,209,.13),0 0 11px rgba(255,116,52,.16) !important;
+  background-color: rgba(25,13,39,.81) !important;
+  background-image: url('/hoo-seasonal/halloween/v12-pumpkin.svg'),linear-gradient(135deg,rgba(117,57,143,.15),transparent) !important;
+  background-repeat:no-repeat !important;
+  background-size: 39px 39px, cover !important;
+  background-position: 100% 100%,center !important;
+}
+html[data-hoo-season="halloween"] [data-hoo-h-bookmark="2"],
+html[data-hoo-season="halloween"] [data-hoo-h-bookmark="5"] {
+  background-image:url('/hoo-seasonal/halloween/v12-ghost.svg'),linear-gradient(135deg,rgba(117,57,143,.15),transparent) !important;
+}
+html[data-hoo-season="halloween"] [data-hoo-h-bookmark="3"],
+html[data-hoo-season="halloween"] [data-hoo-h-bookmark="7"] {
+  background-image:url('/hoo-seasonal/halloween/v12-bats.svg'),linear-gradient(135deg,rgba(117,57,143,.15),transparent) !important;
+}
+
+/* TOP BAR: no overlay to intercept search/settings/back buttons. */
+html[data-hoo-season="halloween"] [data-hoo-h-bar] {
+  border:1px solid rgba(255,147,77,.68) !important;
+  box-shadow:0 0 18px rgba(248,104,53,.18),inset 0 0 16px rgba(130,65,175,.12) !important;
+}
+html[data-hoo-season="halloween"] [data-hoo-h-search] {
+  border:1px solid rgba(205,107,237,.82) !important;
+  border-radius:999px !important;
+  box-shadow:inset 0 0 13px rgba(151,61,183,.11),0 0 13px rgba(183,93,239,.19) !important;
+}
+html[data-hoo-season="halloween"] [data-hoo-h-action="primary"] {
+  background:linear-gradient(110deg,#ff963a,#ffbe74 64%,#df92e6) !important;
+  border:1px solid #fbd1a2 !important;
+  color:#27102b !important;
+  box-shadow:0 0 12px rgba(252,131,53,.28) !important;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-h-action="secondary"],[data-hoo-h-widget]) {
+  border-color: rgba(232,123,230,.56) !important;
+  box-shadow:0 0 10px rgba(203,87,211,.20) !important;
+}
+
+/* Each screen: only the enclosing panels are decorated. No interior cards recolored.
+   User memo sticker backgrounds, the spinning vinyl, videos and form values are intact. */
+html[data-hoo-season="halloween"] :is([data-hoo-skin="home-brief"],[data-hoo-h-panel="home-brief"]) {
+  --hoo-h-web-tl: 64px;
+  --hoo-h-web-tr: 64px;
+  --hoo-h-web-bl: 40px;
+  --hoo-h-web-br: 40px;
+  --hoo-h-far-h: 73px;
+  --hoo-h-mid-h: 47px;
+  --hoo-h-front-h: 26px;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin="todo-main"],[data-hoo-h-panel="todo-main"]) {
+  --hoo-h-web-tl: 122px;
+  --hoo-h-web-tr: 104px;
+  --hoo-h-web-bl: 72px;
+  --hoo-h-web-br: 72px;
+  --hoo-h-far-h: 212px;
+  --hoo-h-mid-h: 154px;
+  --hoo-h-front-h: 74px;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin="todo-progress"],[data-hoo-h-panel="todo-progress"]) {
+  --hoo-h-web-tl: 80px;
+  --hoo-h-web-tr: 85px;
+  --hoo-h-web-bl: 55px;
+  --hoo-h-web-br: 55px;
+  --hoo-h-far-h: 175px;
+  --hoo-h-mid-h: 116px;
+  --hoo-h-front-h: 54px;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin="calendar-grid"],[data-hoo-h-panel="calendar-grid"]) {
+  --hoo-h-web-tl: 96px;
+  --hoo-h-web-tr: 96px;
+  --hoo-h-web-bl: 78px;
+  --hoo-h-web-br: 78px;
+  --hoo-h-far-h: 206px;
+  --hoo-h-mid-h: 154px;
+  --hoo-h-front-h: 72px;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin="calendar-detail"],[data-hoo-h-panel="calendar-detail"]) {
+  --hoo-h-web-tl: 78px;
+  --hoo-h-web-tr: 78px;
+  --hoo-h-web-bl: 55px;
+  --hoo-h-web-br: 55px;
+  --hoo-h-far-h: 190px;
+  --hoo-h-mid-h: 122px;
+  --hoo-h-front-h: 54px;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin="calendar-grid"],[data-hoo-h-panel="calendar-grid"],[data-hoo-skin="calendar-detail"],[data-hoo-h-panel="calendar-detail"]) :is([aria-selected="true"],[data-selected="true"]) {
+  outline:1px solid #ffb36e !important;
+  box-shadow:0 0 10px rgba(251,115,52,.26) !important;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin="memo-main"],[data-hoo-h-panel="memo-main"],[data-hoo-skin="memo-folders"],[data-hoo-h-panel="memo-folders"]) {
+  --hoo-h-web-tl: 96px;
+  --hoo-h-web-tr: 88px;
+  --hoo-h-web-bl: 65px;
+  --hoo-h-web-br: 65px;
+  --hoo-h-far-h: 188px;
+  --hoo-h-mid-h: 126px;
+  --hoo-h-front-h: 62px;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin="games-main"],[data-hoo-h-panel="games-main"],[data-hoo-skin="ranking"],[data-hoo-h-panel="ranking"]) {
+  --hoo-h-web-tl: 102px;
+  --hoo-h-web-tr: 96px;
+  --hoo-h-web-bl: 66px;
+  --hoo-h-web-br: 66px;
+  --hoo-h-far-h: 195px;
+  --hoo-h-mid-h: 146px;
+  --hoo-h-front-h: 69px;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin="playlist-poster"],[data-hoo-h-panel="playlist-poster"]) {
+  --hoo-h-web-tl: 95px;
+  --hoo-h-web-tr: 95px;
+  --hoo-h-web-bl: 68px;
+  --hoo-h-web-br: 68px;
+  --hoo-h-far-h: 204px;
+  --hoo-h-mid-h: 149px;
+  --hoo-h-front-h: 68px;
+}
+html[data-hoo-season="halloween"] :is([data-hoo-skin="music-list"],[data-hoo-h-panel="music-list"],[data-hoo-skin="music-video"],[data-hoo-h-panel="music-video"]) {
+  --hoo-h-web-tl: 78px;
+  --hoo-h-web-tr: 78px;
+  --hoo-h-web-bl: 54px;
+  --hoo-h-web-br: 54px;
+  --hoo-h-far-h: 170px;
+  --hoo-h-mid-h: 112px;
+  --hoo-h-front-h: 51px;
+}
+/* Record: do not paint artwork onto the playable record. Only perimeter glow. */
+html[data-hoo-season="halloween"] :is([data-hoo-skin="music-record"],[data-hoo-h-panel="music-record"]) {
+  background-image:none !important;
+  background-color:transparent !important;
+  box-shadow:0 0 0 1px rgba(255,159,80,.46),0 0 19px rgba(247,110,47,.22) !important;
+}
+@media(max-width:800px) {
+  html[data-hoo-season="halloween"] :is([data-hoo-skin],[data-hoo-h-panel]) {
+    --hoo-h-web-tl: 68px;
+    --hoo-h-web-tr: 68px;
+    --hoo-h-web-bl: 42px;
+    --hoo-h-web-br: 42px;
+    --hoo-h-far-h: 138px;
+    --hoo-h-mid-h: 99px;
+    --hoo-h-front-h: 44px;
+  }
+}
+@media(prefers-reduced-motion:reduce) {
+  html[data-hoo-season="halloween"] :is([data-hoo-skin],[data-hoo-h-panel],[data-hoo-h-action]) {
+    transition:none !important;
+  }
+}
