@@ -5,7 +5,18 @@ export type SymbolCode = 'HOO' | 'EGG' | 'COAL';
 export type MarketBar = { t:number; open:number; high:number; low:number; close:number; volume:number };
 export type MarketNews = { id:string; second:number; symbol:SymbolCode; headline:string; sentiment:'호재'|'악재'; effect:number };
 export const SYMBOLS: SymbolCode[] = ['HOO','EGG','COAL'];
-export const PRICE_START: Record<SymbolCode,number> = { HOO:100, EGG:20, COAL:0.005 }; // 1TC = ₩10,000
+export const PRICE_START: Record<SymbolCode,number> = { HOO:100, EGG:20, COAL:0.005 }; // Original history anchor, immutable.
+/** Explicitly inactive unless HOO_MARKET_REBASE_UTC is configured on Vercel.
+ * The cutover MUST happen while the entire trading economy is paused and FLAT.
+ * Historical quotes before this second remain byte-for-byte equivalent.
+ */
+export const REBASE_TARGETS_TC: Record<SymbolCode,number> = {HOO:58000000, EGG:12500000, COAL:4000000};
+const RAW_REBASE_UTC=process.env.HOO_MARKET_REBASE_UTC;
+if(RAW_REBASE_UTC && !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.000)?Z$/.test(RAW_REBASE_UTC))
+ throw new Error('INVALID_HOO_MARKET_REBASE_UTC');
+const parsedRebase = RAW_REBASE_UTC ? Date.parse(RAW_REBASE_UTC) : NaN;
+if(RAW_REBASE_UTC && !Number.isFinite(parsedRebase))throw new Error('INVALID_HOO_MARKET_REBASE_UTC');
+export const REBASE_AT_SECOND:number|null=Number.isFinite(parsedRebase)?Math.floor(parsedRebase/1000):null;
 export const BASE_EPOCH = Math.floor(Date.parse(process.env.HOO_MARKET_EPOCH_UTC || '2026-10-19T00:00:00.000Z') / 1000);
 export const TIMESPANS = [1,5,15,60,240,1440] as const; // simulated minute bars in real seconds
 const SECRET = process.env.HOO_MARKET_SECRET;
@@ -231,7 +242,7 @@ function v4LogLevel(symbol:SymbolCode,t:number):number {
 function v4Relative(symbol:SymbolCode,relativeSecond:number):number {
   return v4LogLevel(symbol,relativeSecond)-v4LogLevel(symbol,0);
 }
-export function priceAt(symbol:SymbolCode,absSecond:number):number {
+function priceAtBeforeRebase(symbol:SymbolCode,absSecond:number):number {
   const s=Math.max(BASE_EPOCH,Math.floor(absSecond));
   const activation=V4_ACTIVATION_SECOND;
   if(activation!==null && !process.env.HOO_MARKET_SECRET)throw new Error('HOO_MARKET_SECRET must be set before V4 activation');
@@ -240,6 +251,18 @@ export function priceAt(symbol:SymbolCode,absSecond:number):number {
   const baseline=legacyPriceAt(symbol,activation);
   const delta=v4Relative(symbol,s-BASE_EPOCH)-v4Relative(symbol,activation-BASE_EPOCH);
   return baseline*Math.exp(Math.max(-13,Math.min(13,delta)));
+}
+/** Production market quote. Disabled rebase is exactly the original price path. */
+export function priceAt(symbol:SymbolCode,absSecond:number):number {
+ const s=Math.max(BASE_EPOCH,Math.floor(absSecond));
+ const old=priceAtBeforeRebase(symbol,s);
+ if(REBASE_AT_SECOND===null||s<REBASE_AT_SECOND)return old;
+ if(REBASE_AT_SECOND<=BASE_EPOCH)throw new Error('INVALID_HOO_MARKET_REBASE_TIME');
+ const at=priceAtBeforeRebase(symbol,REBASE_AT_SECOND);
+ if(!Number.isFinite(at)||at<=0)throw new Error('INVALID_REBASE_ANCHOR');
+ const updated=old/at*REBASE_TARGETS_TC[symbol];
+ if(!Number.isFinite(updated)||updated<=0)throw new Error('INVALID_REBASE_PRICE');
+ return updated;
 }
 function volumeAt(symbol:SymbolCode,s:number,ret:number):number {
   const c=VOL[symbol],t=Math.max(0,s-BASE_EPOCH);
@@ -256,7 +279,7 @@ function volumeAt(symbol:SymbolCode,s:number,ret:number):number {
 }
 function v4SecondBar(symbol:SymbolCode,absSecond:number):MarketBar {
   const s=Math.max(BASE_EPOCH+1,Math.floor(absSecond));
-  const open=priceAt(symbol,s-1),close=priceAt(symbol,s);
+  const close=priceAt(symbol,s),open=s===REBASE_AT_SECOND?close:priceAt(symbol,s-1);
   const logOpen=Math.log(open), logClose=Math.log(close);
   const length=20;
   const sigma=VOL[symbol].micro*regimeLevel(symbol,s-BASE_EPOCH)*.74;
@@ -286,7 +309,7 @@ export function secondBar(symbol:SymbolCode,absSecond:number):MarketBar {
 }
 function legacySecondBar(symbol:SymbolCode,absSecond:number):MarketBar {
   const s=Math.max(BASE_EPOCH+1,Math.floor(absSecond));
-  const open=legacyPriceAt(symbol,s-1),close=legacyPriceAt(symbol,s);
+  const close=priceAt(symbol,s),open=s===REBASE_AT_SECOND?close:priceAt(symbol,s-1);
   const volatility={HOO:.00032,EGG:.00053,COAL:.00125}[symbol];
   const up=legacyUnit('wick-up:'+symbol,s)*volatility,down=legacyUnit('wick-down:'+symbol,s)*volatility;
   const volumeBase={HOO:200,EGG:120,COAL:90}[symbol],magnitude=Math.abs(close/open-1);

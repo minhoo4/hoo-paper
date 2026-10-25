@@ -1,10 +1,10 @@
 import { createHmac } from 'node:crypto';
-import { BASE_EPOCH, V4_ACTIVATION_SECOND, chart, type MarketBar, type SymbolCode } from './market';
+import { BASE_EPOCH, V4_ACTIVATION_SECOND, REBASE_AT_SECOND, REBASE_TARGETS_TC, chart, type MarketBar, type SymbolCode } from './market';
 // Cache namespace changes if the price-generating configuration changes. Never expose the secret.
 export function marketCacheIdentity():string {
  const secret=process.env.HOO_MARKET_SECRET;
  if(!secret||secret==='hoo-world-shared-2026-v1-constant-market-seed')throw new Error('MARKET_SECRET_REQUIRED');
- return createHmac('sha256',secret).update(`hoo-path-v4-1:${BASE_EPOCH}:${V4_ACTIVATION_SECOND}`).digest('hex');
+ return createHmac('sha256',secret).update(`hoo-path-v4-p1:${BASE_EPOCH}:${V4_ACTIVATION_SECOND}:${REBASE_AT_SECOND}:${JSON.stringify(REBASE_TARGETS_TC)}`).digest('hex');
 }
 export type CandleCache={read:(engine:string,symbol:SymbolCode,span:number,starts:number[])=>Promise<MarketBar[]>;write:(engine:string,symbol:SymbolCode,span:number,bars:MarketBar[])=>Promise<void>};
 /** At most 1,440 minute samples on a miss. Older pages load independently of live prices. */

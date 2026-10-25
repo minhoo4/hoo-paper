@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { useCandlePan } from './useCandlePan';
 import styles from './HooTradingDock.module.css';
 import { RequestGate } from '../../lib/hoo-trading/contracts';
+import { returnOnInitialCapital, SEASON_INITIAL_HOO } from '../../lib/hoo-trading/performance';
 
 const R4SrDemoChart = dynamic(() => import('./R4SrDemoChart'));
 const allowR4SrDemo = process.env.NODE_ENV === 'development';
@@ -153,7 +154,7 @@ async function requestReadOnlyRanking():Promise<ReadOnlyRanking>{
 }
 
 type PublicMarket={now:number;virtualMinute:number;prices:Record<SymbolCode,number>;
- candles:Partial<Record<SymbolCode,Bar[]>>;news:News[];historyBefore?:number|null};
+ candles:Partial<Record<SymbolCode,Bar[]>>;news:News[];historyBefore?:number|null;cacheMode?:string};
 async function requestMarket(symbol:SymbolCode,frame:number,before?:number):Promise<PublicMarket>{
  const response=await fetch(`/api/hoo-trading/market?symbol=${symbol}&timeframe=${frame}${before===undefined?'':`&before=${before}`}`,{cache:'no-store'});
  const json=await response.json().catch(()=>({error:'공통 시세 응답 오류'}));
@@ -240,6 +241,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  // Last verified public prices survive coin/timeframe switches and in-flight requests.
  const lastMarketPrices=useRef<Partial<Record<SymbolCode,number>>>({});
  const barsRef=useRef<Bar[]>([]),historyCursor=useRef<number|null|undefined>(undefined),historyFetching=useRef(false);
+ const chartEngineMode=useRef<string|null>(null),chartEngineEpoch=useRef(0);
  // Ignore stale GET responses that started before a trade was submitted.
  const gate=useRef(new RequestGate());
  const requestContext=useRef('');requestContext.current=`${open}:${symbol}:${frame}`;
@@ -331,6 +333,14 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        const price=Number(next.prices?.[code]);
        if(Number.isFinite(price)&&price>0)lastMarketPrices.current[code]=price;
      }
+     // Historical Legacy/V4 candles and the new V6 session must never share a
+     // single plotted price axis. Clear local memory at the committed cutover.
+     const nextMode=next.cacheMode||'legacy';
+     if(chartEngineMode.current!==null&&chartEngineMode.current!==nextMode){
+       barsRef.current=[];historyCursor.current=undefined;chartEngineEpoch.current++;
+     }
+     chartEngineMode.current=nextMode;
+     const myEpoch=chartEngineEpoch.current;
      const merged=new Map(barsRef.current.map(b=>[b.t,b]));for(const b of next.candles[symbol]||[])merged.set(b.t,b);
      barsRef.current=[...merged.values()].sort((a,b)=>a.t-b.t).slice(-MAX_RETAINED_CANDLES);
      setMarketData({...next,candles:{[symbol]:barsRef.current}});setMarketError(null);
@@ -338,9 +348,9 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      if(!historyFetching.current&&historyCursor.current!=null&&barsRef.current.length<78){
        historyFetching.current=true;
        void (async()=>{try{
-         while(context===requestContext.current&&historyCursor.current!=null&&barsRef.current.length<78){
+         while(context===requestContext.current&&myEpoch===chartEngineEpoch.current&&historyCursor.current!=null&&barsRef.current.length<78){
            const older=await requestMarket(symbol,frame,historyCursor.current);
-           if(context!==requestContext.current)return;
+           if(context!==requestContext.current||myEpoch!==chartEngineEpoch.current)return;
            const all=new Map((older.candles[symbol]||[]).map(b=>[b.t,b]));for(const b of barsRef.current)all.set(b.t,b);
            barsRef.current=[...all.values()].sort((a,b)=>a.t-b.t).slice(-MAX_RETAINED_CANDLES);historyCursor.current=older.historyBefore;
            setMarketData(prev=>prev?{...prev,candles:{[symbol]:barsRef.current}}:prev);
@@ -356,6 +366,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    // Reset candles for the NEW market context, never reset verified coin prices.
    setMarketData(previous=>previous?{...previous,candles:{}}:null);
    setMarketError(null);setHistoryBusy(false);barsRef.current=[];historyCursor.current=undefined;
+   chartEngineMode.current=null;chartEngineEpoch.current++;
    void refreshMarket();
    const ticker=window.setInterval(()=>void refreshMarket(),1000);
    return()=>window.clearInterval(ticker);
@@ -365,10 +376,11 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    if(context!==requestContext.current||!isActive.current||historyFetching.current||historyCursor.current==null||barsRef.current.length>=MAX_RETAINED_CANDLES)return;
    historyFetching.current=true;setHistoryBusy(true);
    const cursor=historyCursor.current;
+   const loadingEpoch=chartEngineEpoch.current;
    void (async()=>{
      try{
        const older=await requestMarket(symbol,frame,cursor);
-       if(context!==requestContext.current)return;
+       if(context!==requestContext.current||loadingEpoch!==chartEngineEpoch.current)return;
        const fresh=older.candles[symbol]||[];
        if(!fresh.length){historyCursor.current=null;return;}
        const merged=new Map(barsRef.current.map(b=>[b.t,b]));
@@ -432,7 +444,6 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    // eslint-disable-next-line react-hooks/exhaustive-deps
  },[selectedPosition?.id]);
  const totalEq=totalSeed,deposit=Number(data?.account.total_deposit_tc||0);
- const roi=deposit?Number(data?.account.realized_tc||0)/deposit*100:0;
  const pnl=Number(data?.account.realized_tc||0);
  // READ-ONLY fallback never enables orders. Count=0 is a verified DB query result.
  const shownWallet=data?.walletHoo??readOnlyAssets?.walletHoo;
@@ -441,7 +452,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const shownTotalTC=data?totalEq:readOnlyAssets?.openPositions===0?shownFreeTC:null;
  const shownRealized=data?pnl:readOnlyAssets?.account?.realized_tc;
  const shownDeposits=data?deposit:readOnlyAssets?.account?.total_deposit_tc;
- const shownRoi=shownDeposits?Number(shownRealized)/shownDeposits*100:null;
+ const shownRoi=shownRealized!=null?returnOnInitialCapital(Number(shownRealized)):null;
  const knownUnrealized=data?livePositions.reduce((sum,p)=>sum+p.unrealized,0)
    :readOnlyAssets?.openPositions===0?0:null;
  const newsList=market?.news||[];
@@ -517,11 +528,11 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          <div className={styles.pair}><span>미실현 손익</span><b>{knownUnrealized!=null?`${signed(knownUnrealized)} TC`:'미확인'}</b></div>
          <div className={styles.statsRow}>
            <div><small>실현 손익</small><strong className={shownRealized!=null&&shownRealized>=0?styles.positive:styles.negative}>{shownRealized!=null?`${signed(shownRealized)} TC`:'미확인'}</strong></div>
-           <div><small>총 수익률</small><strong className={shownRoi!=null&&shownRoi>=0?styles.positive:styles.negative}>{shownRoi!=null?percent(shownRoi):'미산출'}</strong></div>
+           <div><small>실현수익률 (초기 500 HOO 기준)</small><strong className={shownRoi!=null&&shownRoi>=0?styles.positive:styles.negative}>{shownRoi!=null?percent(shownRoi):'미산출'}</strong></div>
          </div>
          {economyMaintenance&&readOnlyAssets&&<div className={styles.miniNote}>실제 DB 지갑 조회 완료 · 읽기 전용 · 주문과 거래는 계속 중지됩니다.{readOnlyAssets.account===null?' 거래 계좌가 아직 생성되지 않았습니다.':''}</div>}
          {readOnlyAssetError&&<div className={styles.miniNote}>자산 조회 실패: {readOnlyAssetError}</div>}
-         <div className={styles.miniNote}>공용 후코인 지갑 · 체결 후 자동 정산 (1 HOO 미만은 TC 잔액으로 유지)</div>
+         <div className={styles.miniNote}>공용 후코인 지갑 · 체결 후 자동 정산 (1 HOO 미만은 TC 잔액으로 유지) · 수익률은 초기 500 HOO 대비 누적 실현손익 추정치로, 외부 지급·지출을 반영한 전체 자산 수익률과 다를 수 있습니다.</div>
        </section>
        <section className={styles.card}>
          <div className={styles.cardTitle}>📣 오늘의 소식 <button type="button" onClick={()=>setNewsExpanded(x=>!x)}>{newsExpanded?'접기':'더보기'}</button></div>
@@ -533,7 +544,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        </section>
        <section className={styles.card}>
          <div className={styles.cardTitle}>🏆 후레이딩 랭킹 <button type="button" onClick={()=>setRankingExpanded(x=>!x)}>{rankingExpanded?'TOP 5':'TOP 10'}</button><button type="button" onClick={()=>void refreshRanking()} disabled={rankingLoading} aria-label="랭킹 새로고침">{rankingLoading?'조회 중':'↻ 갱신'}</button></div>
-         <div className={styles.rankHeader}><span>순위 · 추종자</span><span>수익률</span><span>수익금</span></div>
+         <div className={styles.rankHeader}><span>순위 · 추종자</span><span>500 HOO 기준 수익률</span><span>누적 실현손익</span></div>
          {(rankingExpanded?leaderboard:leaderboard.slice(0,5)).map((p,i)=><div className={styles.rankRow} key={p.userId}>
            <span>{i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`} {p.name}</span>
            <b className={p.roi>=0?styles.positive:styles.negative}>{percent(p.roi)}</b>
@@ -543,7 +554,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          {!leaderboard.length&&!rankingIsKnown&&!rankingError&&<div className={styles.miniNote}>랭킹 조회 중입니다…</div>}
          {rankingError&&<div className={styles.miniNote}>랭킹 최신 조회 실패: {rankingError}{readOnlyRanking?' · 이전 조회 결과를 유지합니다.':''}</div>}
          {readOnlyRanking&&<div className={styles.miniNote}>DB 기록 조회 완료 · 집계 대상 {readOnlyRanking.eligibleCount}명 · 15초마다 자동 갱신 (읽기 전용)</div>}
-         <div className={styles.miniNote}>전체 기간 · 실현손익 ÷ 누적 입금액 · 누적 입금 1,000 TC 이상</div>
+         <div className={styles.miniNote}>초기 {SEASON_INITIAL_HOO} HOO 지급 기준 추정치 · 별도 지급/선물/소비 및 미실현손익은 미반영 · 거래 참여자만 표시</div>
        </section>
      </aside>
      <main className={styles.right} aria-label="공통 거래 화면">

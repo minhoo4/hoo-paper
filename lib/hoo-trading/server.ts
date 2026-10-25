@@ -1,6 +1,8 @@
 import 'server-only';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { BASE_EPOCH, SYMBOLS, marketSecond, recentNews, secondBar } from './market';
+import { returnOnInitialCapital } from './performance';
+import { catchUpV6 } from './v6-live';
 
 function env(key:string):string {const value=process.env[key]; if(!value)throw new Error(`Missing env: ${key}`); return value; }
 let adminClient:SupabaseClient | null=null;
@@ -42,6 +44,10 @@ export async function catchUp(maxTicks = 75): Promise<{caughtUp:boolean;remainin
   const budget = Number.isFinite(maxTicks)
     ? Math.max(1, Math.min(960, Math.trunc(maxTicks)))
     : 75;
+  // Fail closed if the V6 status query itself fails; never silently use legacy quotes.
+  const v6State=await db.from('hootrading_v6_stream').select('mode').eq('id',1).maybeSingle();
+  if(v6State.error)throw new Error(`V6_MODE_UNAVAILABLE:${v6State.error.message}`);
+  if(v6State.data?.mode==='active')return catchUpV6(db,budget);
   const initial = assert(
     await db.from('hootrading_market_state').select('last_second').eq('id', 1).single(),
     'market clock'
@@ -99,20 +105,49 @@ export async function catchUp(maxTicks = 75): Promise<{caughtUp:boolean;remainin
   };
 }
 /** All account fields are captured in one DB statement, not six REST queries. */
+/** Reject malformed DB finance rows instead of returning Infinity/NaN as JSON null. */
+function finiteMoney(value:unknown,field:string,minimum=Number.NEGATIVE_INFINITY):number {
+ if(value===null||value===undefined||typeof value==='boolean'||(typeof value==='string'&&value.trim()===''))
+  throw new Error(`INVALID_DB_SNAPSHOT:${field}`);
+ const n=Number(value);
+ if(!Number.isFinite(n)||n<minimum)throw new Error(`INVALID_DB_SNAPSHOT:${field}`);
+ return n;
+}
 export function presentState(raw:any,timeframe:number){
  if(!raw?.account||!Array.isArray(raw.positions)||!raw.prices)throw new Error('INVALID_DB_SNAPSHOT');
  const now=Number(raw.marketSecond),lastPrices=raw.prices;
  if(!Number.isSafeInteger(now)||SYMBOLS.some(s=>!Number.isFinite(Number(lastPrices[s]))||Number(lastPrices[s])<=0||Number(raw.priceSeconds?.[s])!==now))throw new Error('STALE_DB_QUOTES');
- const entries=raw.positions.map((p:any)=>{
-  const mark=Number(lastPrices[p.symbol]),qty=Number(p.qty),entry=Number(p.entry_price),margin=Number(p.margin_tc),side=Number(p.side);
+ const cashTc=finiteMoney(raw.account.cash_tc,'cash_tc');
+ const walletHoo=finiteMoney(raw.walletHoo,'walletHoo',0);
+ const entries=raw.positions.map((p:any,index:number)=>{
+  if(!p||!SYMBOLS.includes(p.symbol))throw new Error(`INVALID_DB_SNAPSHOT:position_${index}_symbol`);
+  const side=finiteMoney(p.side,`position_${index}_side`);
+  if(side!==1&&side!==-1)throw new Error(`INVALID_DB_SNAPSHOT:position_${index}_side`);
+  const qty=finiteMoney(p.qty,`position_${index}_qty`,Number.MIN_VALUE);
+  const entry=finiteMoney(p.entry_price,`position_${index}_entry_price`,Number.MIN_VALUE);
+  const margin=finiteMoney(p.margin_tc,`position_${index}_margin_tc`,0);
+  const leverage=finiteMoney(p.leverage,`position_${index}_leverage`,1);
+  if(!Number.isInteger(leverage)||leverage>20)throw new Error(`INVALID_DB_SNAPSHOT:position_${index}_leverage`);
+  const mark=Number(lastPrices[p.symbol]);
   const unrealized=side*qty*(mark-entry);
-  return {...p,side,leverage:Number(p.leverage),qty,entry_price:entry,margin_tc:margin,mark,unrealized,
-   position_equity_tc:Math.max(0,margin+unrealized),
-   liquidation_price:side===1?(entry-margin/qty)/.995:(entry+margin/qty)/1.005};
+  const positionEquity=Math.max(0,margin+unrealized);
+  const liquidation=side===1?(entry-margin/qty)/.995:(entry+margin/qty)/1.005;
+  if(![unrealized,positionEquity,liquidation].every(Number.isFinite))throw new Error(`INVALID_DB_SNAPSHOT:position_${index}_calculation`);
+  return {...p,side,leverage,qty,entry_price:entry,margin_tc:margin,mark,unrealized,
+    position_equity_tc:positionEquity,liquidation_price:liquidation};
  });
- const equity=Number(raw.account.cash_tc)+entries.reduce((sum:number,p:any)=>sum+p.position_equity_tc,0);
- return {...raw,market:{now,virtualMinute:Math.max(0,now-BASE_EPOCH),prices:lastPrices,candles:{},news:recentNews(now,5)},
-  totalHooEquivalent:Number(raw.walletHoo)+equity/1000,account:{...raw.account,equity_tc:equity},positions:entries,
+ const equity=cashTc+entries.reduce((sum:number,p:any)=>sum+p.position_equity_tc,0);
+ const totalHooEquivalent=walletHoo+equity/1000;
+ if(!Number.isFinite(equity)||!Number.isFinite(totalHooEquivalent))throw new Error('INVALID_DB_SNAPSHOT:equity');
+ // Supabase RPC currently computes roi=realized_tc/total_deposit_tc.
+ // Correct the UI field to the explicitly labelled season-500-HOO baseline.
+ // Sorting by corrected ROI matters for the top-ten ordering; RPC itself may
+ // prefilter the top ten, so authoritative ranking is /api/hoo-trading?view=ranking.
+ const correctedRanking=Array.isArray(raw.ranking)?raw.ranking.map((r:any)=>({
+  ...r,roi:returnOnInitialCapital(finiteMoney(r.profit,'ranking_profit'))
+ })).sort((a:any,b:any)=>b.roi-a.roi||b.profit-a.profit):[];
+ return {...raw,ranking:correctedRanking,market:{now,virtualMinute:Math.max(0,now-BASE_EPOCH),prices:lastPrices,candles:{},news:recentNews(now,5)},
+  walletHoo,totalHooEquivalent,account:{...raw.account,cash_tc:cashTc,equity_tc:equity},positions:entries,
   conversion:{oneHooTC:1000,oneTCWon:10000},timeframe};
 }
 export async function snapshot(userId:string,userName:string,timeframe:number){

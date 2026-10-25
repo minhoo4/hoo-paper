@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { admin, catchUp, executeOrder, snapshot, presentState, verifyUser } from '../../../lib/hoo-trading/server';
 import { TIMESPANS } from '../../../lib/hoo-trading/market';
 import { validateCommand } from '../../../lib/hoo-trading/contracts';
+import { returnOnInitialCapital } from '../../../lib/hoo-trading/performance';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
 const headers={'Cache-Control':'private, no-store'};
@@ -57,7 +58,7 @@ async function readOnlyRanking(){
   const deposited=finite(record.total_deposit_tc,'total_deposit_tc');
   const profit=finite(record.realized_tc,'realized_tc');
   if(deposited<1000)throw new Error('INVALID_READ_ONLY_RANKING:deposit_threshold');
-  const roi=profit/deposited*100;
+  const roi=returnOnInitialCapital(profit);
   if(!Number.isFinite(roi))throw new Error('INVALID_READ_ONLY_RANKING:roi');
   const userId=String(record.user_id??'');
   if(!/^[0-9a-f-]{36}$/i.test(userId))throw new Error('INVALID_READ_ONLY_RANKING:user_id');

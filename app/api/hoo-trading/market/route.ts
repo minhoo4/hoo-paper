@@ -4,13 +4,13 @@ import { BASE_EPOCH, SYMBOLS, TIMESPANS, recentNews, type SymbolCode } from '../
 import { chartPage } from '../../../../lib/hoo-trading/paged-chart';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
-/** A missing OPTIONAL derived-candle cache must not prevent the shared chart from loading.
- * Only missing-RPC errors get the slower on-demand calculation fallback.
- * All actual quotes still come from the authoritative, settled database clock.
+/**
+ * P7: Bounded per-instance cache of completed candles.
+ * Does not modify market prices, positions, or Supabase data.
  */
-function missingCacheFunction(e:{code?:string;message?:string}):boolean{
- return e.code==='PGRST202'||e.code==='42883'||/could not find the function public\.hootrading_cache_(read|write)/i.test(e.message||'');
-}
+type CachedCandle = Awaited<ReturnType<typeof chartPage>>['bars'][number];
+const MAX_LOCAL_BARS = 8192;
+const localCandleCache = new Map<string, CachedCandle>();
 function publicError(error:unknown):{code:string;error:string}{
  const message=error instanceof Error?error.message:String(error);
  if(message.includes('MARKET_SECRET_REQUIRED')||message.includes('Missing env:'))return {code:'MARKET_CONFIG',error:'시장 서버 설정이 완료되지 않았습니다. HOO_MARKET_SECRET 및 Supabase 서버 환경변수를 확인하세요.'};
@@ -30,25 +30,47 @@ export async function GET(req:Request){
   if(now<BASE_EPOCH+1||data.some(x=>Number(x.tick_second)!==now))throw new Error('MARKET_NOT_READY');
   const prices=Object.fromEntries(data.map(x=>[x.symbol,Number(x.price)]));
   const rawBefore=q.get('before'),before=rawBefore===null?undefined:Number(rawBefore);
-  let cacheUnavailable=false;
-  const page=await chartPage({
-   read:async(engine,s,span,starts)=>{
-    if(cacheUnavailable)return [];
-    const r=await admin().rpc('hootrading_cache_read',{p_engine:engine,p_symbol:s,p_span:span,p_starts:starts});
-    if(r.error){
-     if(missingCacheFunction(r.error)){cacheUnavailable=true;return [];}
-     throw r.error;
+  const v6Mode=await admin().from('hootrading_v6_stream').select('mode').eq('id',1).maybeSingle();
+  if(v6Mode.error)throw new Error('V6_SCHEMA_NOT_READY:'+v6Mode.error.message);
+  if(v6Mode.data?.mode==='active'){
+   if(rawBefore!==null&&(!Number.isSafeInteger(before)||before! > now))throw new Error('INVALID_CHART_CURSOR');
+   const streamed=await admin().rpc('hootrading_v6_chart',{p_symbol:symbol,p_span:timeframe,p_before:before??null,p_limit:78,p_until:now});
+   if(streamed.error||!streamed.data)throw new Error('V6_CHART_UNAVAILABLE:'+streamed.error?.message);
+   const value=streamed.data as {bars:CachedCandle[];historyBefore:number|null;asOf:number};
+   if(Number(value.asOf)!==now)throw new Error('V6_MARKET_CLOCK_CHANGED_RETRY');
+   return NextResponse.json({now,virtualMinute:now-BASE_EPOCH,prices,candles:{[symbol]:value.bars},
+    historyBefore:value.historyBefore,news:[],cacheMode:'v6-database'},
+    {headers:{'Cache-Control':'no-store, max-age=0'}});
+  }
+  const page = await chartPage({
+    read: async (engine, s, span, starts) => {
+      const found: CachedCandle[] = [];
+      for (const t of starts) {
+        const key = `${engine}:${s}:${span}:${t}`;
+        const bar = localCandleCache.get(key);
+        if (!bar) continue;
+        localCandleCache.delete(key);
+        localCandleCache.set(key, bar);
+        found.push({ ...bar });
+      }
+      return found;
+    },
+    write: async (engine, s, span, bars) => {
+      for (const bar of bars) {
+        const key = `${engine}:${s}:${span}:${bar.t}`;
+        localCandleCache.delete(key);
+        localCandleCache.set(key, { ...bar });
+        while (localCandleCache.size > MAX_LOCAL_BARS) {
+          const oldest = localCandleCache.keys().next().value;
+          if (oldest === undefined) break;
+          localCandleCache.delete(oldest);
+        }
+      }
     }
-    return r.data;
-   },
-   write:async(engine,s,span,bars)=>{
-    if(cacheUnavailable)return;
-    const r=await admin().rpc('hootrading_cache_write',{p_engine:engine,p_symbol:s,p_span:span,p_bars:bars});
-    if(r.error){if(missingCacheFunction(r.error)){cacheUnavailable=true;return;}throw r.error;}
-   }
-  },symbol,now,timeframe,before);
-  if(cacheUnavailable)console.warn('hoo-trading market: candle cache SQL not installed; using on-demand bars (slower)');
-  return NextResponse.json({now,virtualMinute:now-BASE_EPOCH,prices,candles:{[symbol]:page.bars},historyBefore:page.historyBefore,news:recentNews(now,5),cacheMode:cacheUnavailable?'on-demand':'persistent'},
+  }, symbol, now, timeframe, before);
+  const modeAfter=await admin().from('hootrading_v6_stream').select('mode').eq('id',1).maybeSingle();
+  if(modeAfter.error||modeAfter.data?.mode==='active')throw new Error('MARKET_MODE_CHANGED_RETRY');
+  return NextResponse.json({now,virtualMinute:now-BASE_EPOCH,prices,candles:{[symbol]:page.bars},historyBefore:page.historyBefore,news:recentNews(now,5),cacheMode:'memory'},
    {headers:{'Cache-Control':'no-store, max-age=0'}});
  }catch(e){console.error('hoo-trading market',e);return NextResponse.json(publicError(e),{status:503,headers:{'Cache-Control':'no-store'}});}
 }
