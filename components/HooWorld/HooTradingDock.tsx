@@ -57,6 +57,9 @@ type Snapshot={receipt?:{requestId:string;committed:boolean;replayed:boolean;pos
  walletHoo:number;totalHooEquivalent:number;account:{cash_tc:number;total_deposit_tc:number;total_withdraw_tc:number;realized_tc:number;equity_tc:number},
  positions:Position[];history:{id:number;symbol:string;action:string;side:number;net_pnl_tc:number;fill_price:number;happened_second:number}[];
  ranking:Leader[];clock:{caughtUp:boolean;remaining:number};timeframe:number};
+type ReadOnlyAssets={readOnly:true;walletHoo:number;openPositions:number;account:null|{
+ cash_tc:number;total_deposit_tc:number;realized_tc:number
+}};
 const SYMBOLS:SymbolCode[]=['HOO','EGG','COAL'];
 const LABELS:Record<SymbolCode,string>={HOO:'🦉 후코인',EGG:'🥚 계란코인',COAL:'🪨 석탄코인'};
 const fmt=(v:number,d=2)=>Number(v||0).toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d});
@@ -110,6 +113,24 @@ async function requestTrading(body?:Record<string,unknown>,frame=15):Promise<Sna
  }
  if(!json.statePending&&(!Array.isArray(json.positions)||!json.account||!json.market))throw new Error('계좌 응답 구조가 올바르지 않습니다.');
  return json as Snapshot;
+}
+
+// Read only the authenticated user's wallet and account while orders are locked.
+async function requestReadOnlyAssets():Promise<ReadOnlyAssets>{
+ const client=getBrowserDb();
+ const {data:{session},error}=await client.auth.getSession();
+ if(error||!session?.access_token)throw new Error('후월드 로그인이 필요합니다.');
+ const res=await fetch('/api/hoo-trading?view=assets',{
+  headers:{Authorization:`Bearer ${session.access_token}`},cache:'no-store'
+ });
+ const json=await res.json().catch(()=>({error:'잔액 조회 응답 오류'}));
+ if(!res.ok)throw new Error(json.error||'잔액을 조회하지 못했습니다.');
+ if(json.readOnly!==true||!Number.isSafeInteger(json.openPositions)||json.openPositions<0||
+    !Number.isFinite(json.walletHoo)||json.walletHoo<0||
+    (json.account!=null&&(!Number.isFinite(json.account.cash_tc)||json.account.cash_tc<0||
+     !Number.isFinite(json.account.total_deposit_tc)||!Number.isFinite(json.account.realized_tc))))
+  throw new Error('읽기 전용 자산 응답이 올바르지 않습니다.');
+ return json as ReadOnlyAssets;
 }
 
 type PublicMarket={now:number;virtualMinute:number;prices:Record<SymbolCode,number>;
@@ -179,6 +200,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [marketData,setMarketData]=useState<PublicMarket|null>(null);
  const [marketError,setMarketError]=useState<string|null>(null);
  const [economyMaintenance,setEconomyMaintenance]=useState(false);
+ const [readOnlyAssets,setReadOnlyAssets]=useState<ReadOnlyAssets|null>(null);
+ const [readOnlyAssetError,setReadOnlyAssetError]=useState<string|null>(null);
  const [historyBusy,setHistoryBusy]=useState(false);
  const [r4Demo,setR4Demo]=useState(false);
  const [symbol,setSymbol]=useState<SymbolCode>('HOO'),[frame,setFrame]=useState(15);
@@ -204,7 +227,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    fetching.current=true;
    try{const next=await requestTrading(undefined,frame);
       if(!gate.current.accepts(token)||context!==requestContext.current)return;
-      setData(next);setError(null);setEconomyMaintenance(false);
+      setData(next);setReadOnlyAssets(null);setReadOnlyAssetError(null);
+      setError(null);setEconomyMaintenance(false);
       if(Number.isFinite(next.walletHoo)&&lastWalletSeen.current!==next.walletHoo){
         lastWalletSeen.current=next.walletHoo;onWalletHooChange?.(next.walletHoo);
       }}
@@ -213,6 +237,26 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        const maintenance=e instanceof Error&&e.name==='EconomyMaintenance';
        setEconomyMaintenance(maintenance);
        setError(maintenance?null:e instanceof Error?e.message:String(e));
+       if(maintenance){
+        // An unsuccessful trading snapshot must never be mistaken for an empty account.
+        setData(null);
+        try{
+         const assets=await requestReadOnlyAssets();
+         if(gate.current.accepts(token)&&context===requestContext.current){
+          setReadOnlyAssets(assets);setReadOnlyAssetError(null);
+          if(lastWalletSeen.current!==assets.walletHoo){
+           lastWalletSeen.current=assets.walletHoo;onWalletHooChange?.(assets.walletHoo);
+          }
+         }
+        }catch(assetError){
+         if(gate.current.accepts(token)&&context===requestContext.current){
+          setReadOnlyAssets(null);
+          setReadOnlyAssetError(assetError instanceof Error?assetError.message:String(assetError));
+         }
+        }
+       }else{
+        setReadOnlyAssets(null);setReadOnlyAssetError(null);
+       }
      }
    }
    finally{fetching.current=false;}
@@ -347,6 +391,16 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const totalEq=totalSeed,deposit=Number(data?.account.total_deposit_tc||0);
  const roi=deposit?Number(data?.account.realized_tc||0)/deposit*100:0;
  const pnl=Number(data?.account.realized_tc||0);
+ // READ-ONLY fallback never enables orders. Count=0 is a verified DB query result.
+ const shownWallet=data?.walletHoo??readOnlyAssets?.walletHoo;
+ const shownFreeTC=data?availableTC:readOnlyAssets
+   ?readOnlyAssets.walletHoo*1000+(readOnlyAssets.account?.cash_tc??0):null;
+ const shownTotalTC=data?totalEq:readOnlyAssets?.openPositions===0?shownFreeTC:null;
+ const shownRealized=data?pnl:readOnlyAssets?.account?.realized_tc;
+ const shownDeposits=data?deposit:readOnlyAssets?.account?.total_deposit_tc;
+ const shownRoi=shownDeposits?Number(shownRealized)/shownDeposits*100:null;
+ const knownUnrealized=data?livePositions.reduce((sum,p)=>sum+p.unrealized,0)
+   :readOnlyAssets?.openPositions===0?0:null;
  const newsList=market?.news||[];
  const leaderboard=data?.ranking||[];
  const riskSide:1|-1=selectedPosition?.side??(direction==='long'?1:-1);
@@ -411,15 +465,17 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      <aside className={styles.left} aria-label="자산 뉴스 순위">
        <section className={styles.card}>
          <div className={styles.cardTitle}>🍃 내 자산 <small>TC / HOO</small></div>
-         <div className={styles.bigMoney}>{data?fmt(totalEq):'—'} <small>TC</small></div>
-         <div className={styles.pair}><span>현재 후코인 지갑</span><b>{data&&Number.isFinite(data.walletHoo)?`${fmt(liveWallet,0)} HOO`:'미확인'}</b></div>
-         <div className={styles.pair}><span>거래 가능 TC</span><b>{data?fmt(availableTC):'미확인'}</b></div>
-         <div className={styles.pair}><span>총 HOO 환산자산</span><b>{data?`${fmt(totalEq/1000,3)} HOO`:'미확인'}</b></div>
-         <div className={styles.pair}><span>미실현 손익</span><b>{signed(livePositions.reduce((sum,p)=>sum+p.unrealized,0))} TC</b></div>
+         <div className={styles.bigMoney}>{shownTotalTC!=null?fmt(shownTotalTC):'—'} <small>TC</small></div>
+         <div className={styles.pair}><span>현재 후코인 지갑</span><b>{shownWallet!=null&&Number.isFinite(shownWallet)?`${fmt(shownWallet,0)} HOO`:'미확인'}</b></div>
+         <div className={styles.pair}><span>{economyMaintenance?'보유액 환산 TC (거래 중지)':'거래 가능 TC'}</span><b>{shownFreeTC!=null?fmt(shownFreeTC):'미확인'}</b></div>
+         <div className={styles.pair}><span>총 HOO 환산자산</span><b>{shownTotalTC!=null?`${fmt(shownTotalTC/1000,3)} HOO`:'미확인'}</b></div>
+         <div className={styles.pair}><span>미실현 손익</span><b>{knownUnrealized!=null?`${signed(knownUnrealized)} TC`:'미확인'}</b></div>
          <div className={styles.statsRow}>
-           <div><small>실현 손익</small><strong className={pnl>=0?styles.positive:styles.negative}>{signed(pnl)} TC</strong></div>
-           <div><small>총 수익률</small><strong className={roi>=0?styles.positive:styles.negative}>{percent(roi)}</strong></div>
+           <div><small>실현 손익</small><strong className={shownRealized!=null&&shownRealized>=0?styles.positive:styles.negative}>{shownRealized!=null?`${signed(shownRealized)} TC`:'미확인'}</strong></div>
+           <div><small>총 수익률</small><strong className={shownRoi!=null&&shownRoi>=0?styles.positive:styles.negative}>{shownRoi!=null?percent(shownRoi):'미산출'}</strong></div>
          </div>
+         {economyMaintenance&&readOnlyAssets&&<div className={styles.miniNote}>실제 DB 지갑 조회 완료 · 읽기 전용 · 주문과 거래는 계속 중지됩니다.{readOnlyAssets.account===null?' 거래 계좌가 아직 생성되지 않았습니다.':''}</div>}
+         {readOnlyAssetError&&<div className={styles.miniNote}>자산 조회 실패: {readOnlyAssetError}</div>}
          <div className={styles.miniNote}>공용 후코인 지갑 · 체결 후 자동 정산 (1 HOO 미만은 TC 잔액으로 유지)</div>
        </section>
        <section className={styles.card}>
@@ -523,7 +579,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          </button>
        </div>
        <div className={`${styles.holdings}${positionTab==='position'&&livePositions.length>0?' '+styles.centerPositions:''}`}>
-         <div className={styles.tabs}><button className={positionTab==='position'?styles.currentTab:''} onClick={()=>setPositionTab('position')} type="button">포지션 ({data?.positions.length||0})</button>
+         <div className={styles.tabs}><button className={positionTab==='position'?styles.currentTab:''} onClick={()=>setPositionTab('position')} type="button">포지션 ({data?.positions.length??readOnlyAssets?.openPositions??'미확인'})</button>
            <button className={positionTab==='history'?styles.currentTab:''} onClick={()=>setPositionTab('history')} type="button">매매 기록</button></div>
          {positionTab==='position'?<div className={styles.positions}>
            {livePositions.map(p=><div className={styles.position} key={p.id}>
@@ -541,7 +597,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
              </div>
              <div className={styles.miniNote}>청산 비율은 실행 시점의 <b>남은 수량</b> 기준이에요. 기존 포지션의 수량과 증거금이 같은 비율로 줄어듭니다.</div>
            </div>)}
-           {!data&&<span className={styles.miniNote}>거래 계좌 조회 대기 중입니다. 미확인을 포지션 0개로 해석하지 마세요.</span>}
+           {!data&&<span className={styles.miniNote}>{readOnlyAssets?.openPositions===0?'DB에서 열린 포지션 0개 확인 (읽기 전용).':readOnlyAssets?`열린 포지션 ${readOnlyAssets.openPositions}건 확인 · 세부 정보는 점검 해제 후 조회합니다.`:'거래 계좌 조회 대기 중입니다. 미확인을 포지션 0개로 해석하지 마세요.'}</span>}
            {data&&!data.positions.length&&<span className={styles.miniNote}>현재 열린 포지션이 없습니다.</span>}
          </div>:<div className={styles.positions}>
            {(data?.history||[]).slice(0,15).map(x=><div className={styles.pair} key={x.id}><span>{x.symbol} · {x.action} · {pformat(Number(x.fill_price))}</span><b className={Number(x.net_pnl_tc)>=0?styles.positive:styles.negative}>{signed(Number(x.net_pnl_tc))} TC</b></div>)}
@@ -549,7 +605,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        </div>
        {marketError&&Boolean(market?.candles[symbol]?.length)&&<div className={styles.error} role="status">차트 연결: {marketError}</div>}
        {economyMaintenance&&<div className={styles.notice} role="status">
-         경제 시스템 점검 중 — 공통 차트는 이용할 수 있습니다. 거래 및 계좌 조회는 점검 해제 전까지 중단됩니다.
+         경제 시스템 점검 중 — 차트와 본인 지갑 잔액은 조회할 수 있습니다. 거래·정산과 상세 계좌 스냅샷은 여전히 중단됩니다.
        </div>}
        {(error||message)&&<div className={error?styles.error:styles.notice} role="status">{error||message}</div>}
        <div className={styles.foot}>후코인 1 = 1,000 TC · 공동 가상시장 · 부분청산 / 동일방향 추가 진입 가능 · 투자 결과는 후코인 게임자산에 반영</div>

@@ -4,7 +4,36 @@ import { TIMESPANS } from '../../../lib/hoo-trading/market';
 import { validateCommand } from '../../../lib/hoo-trading/contracts';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
-const headers={'Cache-Control':'no-store'};
+const headers={'Cache-Control':'private, no-store'};
+// Authenticated READ-ONLY balance endpoint. No RPC, market synchronization,
+// row creation, write, or maintenance-gate mutation is performed here.
+async function readOnlyAssets(userId:string){
+ const db=admin();
+ const [wallet,account,positions]=await Promise.all([
+  db.from('hoo_coin_wallets').select('balance').eq('user_id',userId).maybeSingle(),
+  db.from('hootrading_accounts').select('cash_tc,total_deposit_tc,realized_tc').eq('user_id',userId).maybeSingle(),
+  db.from('hootrading_positions').select('id',{head:true,count:'exact'}).eq('user_id',userId)
+ ]);
+ if(wallet.error||!wallet.data)throw new Error(`READ_ONLY_WALLET_ERROR: ${wallet.error?.message||'wallet_missing'}`);
+ if(account.error)throw new Error(`READ_ONLY_ACCOUNT_ERROR: ${account.error.message}`);
+ if(positions.error||positions.count===null)throw new Error(`READ_ONLY_POSITIONS_ERROR: ${positions.error?.message||'count_unavailable'}`);
+ const amount=(value:unknown,field:string,min=-Number.MAX_SAFE_INTEGER)=>{
+  if(value===null||value===undefined||typeof value==='boolean'||(typeof value==='string'&&value.trim()===''))
+   throw new Error(`INVALID_READ_ONLY_ASSETS:${field}`);
+  const n=Number(value);
+  if(!Number.isFinite(n)||!Number.isSafeInteger(Math.trunc(n))||n<min)throw new Error(`INVALID_READ_ONLY_ASSETS:${field}`);
+  return n;
+ };
+ const walletHoo=amount(wallet.data.balance,'walletHoo',0);
+ const tradingAccount=account.data?{
+  cash_tc:amount(account.data.cash_tc,'cash_tc',0),
+  total_deposit_tc:amount(account.data.total_deposit_tc,'total_deposit_tc'),
+  realized_tc:amount(account.data.realized_tc,'realized_tc')
+ }:null;
+ const openPositions=positions.count;
+ if(!Number.isSafeInteger(openPositions)||openPositions<0)throw new Error('INVALID_READ_ONLY_ASSETS:openPositions');
+ return {readOnly:true,walletHoo,account:tradingAccount,openPositions};
+}
 // Compare replay payloads independent of JSONB key ordering; never run a different command with an old request ID.
 function canonical(value:unknown):string {
  if(value===null||typeof value!=='object')return JSON.stringify(value);
@@ -27,7 +56,12 @@ function fail(e:unknown,requestId?:string){
 export async function GET(req:Request){
  try{
   const user=await verifyUser(req);
-  const timeframe=Number(new URL(req.url).searchParams.get('timeframe')||15);
+  const url=new URL(req.url);
+  if(url.searchParams.get('view')==='assets'){
+   // This endpoint remains available during maintenance without opening trading.
+   return NextResponse.json(await readOnlyAssets(user.id),{headers});
+  }
+  const timeframe=Number(url.searchParams.get('timeframe')||15);
   if(!TIMESPANS.includes(timeframe as typeof TIMESPANS[number]))throw new Error('INVALID_TIMEFRAME');
   const clock=await catchUp(90);
   const data=await snapshot(user.id,user.name,timeframe);
