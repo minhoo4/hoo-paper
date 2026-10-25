@@ -261,19 +261,38 @@ export default function HooWorldStall({
 
     void loadStallState();
 
+    // Recovery polling; foreground users get a refresh at most every 30s.
+    // Keep the existing donation flow and all database mutations unchanged.
     const refreshTimer =
       window.setInterval(
         () => {
-          void loadStallState();
+          if (document.visibilityState === "visible") {
+            void loadStallState();
+          }
         },
-        5000,
+        30000,
       );
+
+    // Resync immediately after returning from a background tab.
+    const handleStallVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void loadStallState();
+      }
+    };
+    document.addEventListener(
+      "visibilitychange",
+      handleStallVisibilityChange,
+    );
 
     return () => {
       cancelled = true;
 
       window.clearInterval(
         refreshTimer,
+      );
+      document.removeEventListener(
+        "visibilitychange",
+        handleStallVisibilityChange,
       );
     };
   }, [

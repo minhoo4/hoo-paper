@@ -62,15 +62,8 @@ export async function GET(
     );
 
   if (error) {
-    return NextResponse.json(
-      {
-        error:
-          error.message,
-      },
-      {
-        status: 500,
-      },
-    );
+    console.error("1952 랭킹 조회 오류:", error);
+    return NextResponse.json({ error: "랭킹을 불러오지 못했습니다." }, { status: 500 });
   }
 
   const userIds =
@@ -169,49 +162,27 @@ export async function POST(
     );
   }
 
-  const body =
-    await request
-      .json()
-      .catch(
-        () => ({}),
-      );
-
-  const score =
-    Math.max(
-      0,
-      Math.floor(
-        Number(body.score) || 0,
-      ),
-    );
-
-  const wave =
-    Math.max(
-      1,
-      Math.floor(
-        Number(body.wave) || 1,
-      ),
-    );
-
-  const survivalSeconds =
-    Math.max(
-      0,
-      Math.floor(
-        Number(
-          body.survivalSeconds,
-        ) || 0,
-      ),
-    );
-
-  if (score <= 0) {
-    return NextResponse.json(
-      {
-        error:
-          "유효한 점수가 필요합니다.",
-      },
-      {
-        status: 400,
-      },
-    );
+  // Only accept finite, integral game values; do not silently clamp malformed records.
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return NextResponse.json({ error: "올바른 요청 형식이 아닙니다." }, { status: 400 });
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return NextResponse.json({ error: "올바른 요청 형식이 아닙니다." }, { status: 400 });
+  }
+  const body = payload as Record<string, unknown>;
+  const score = body.score;
+  const wave = body.wave;
+  const survivalSeconds = body.survivalSeconds;
+  if (
+    typeof score !== "number" || !Number.isSafeInteger(score) || score <= 0 ||
+    typeof wave !== "number" || !Number.isSafeInteger(wave) || wave < 1 ||
+    typeof survivalSeconds !== "number" || !Number.isSafeInteger(survivalSeconds) || survivalSeconds < 0 ||
+    wave > Math.floor(Number.MAX_SAFE_INTEGER / 5)
+  ) {
+    return NextResponse.json({ error: "점수, 웨이브 또는 생존 시간이 올바르지 않습니다." }, { status: 400 });
   }
 
   const {
@@ -231,15 +202,8 @@ export async function POST(
     .maybeSingle();
 
   if (previousError) {
-    return NextResponse.json(
-      {
-        error:
-          previousError.message,
-      },
-      {
-        status: 500,
-      },
-    );
+    console.error("1952 이전 기록 조회 오류:", previousError);
+    return NextResponse.json({ error: "이전 기록을 확인하지 못했습니다." }, { status: 500 });
   }
 
   const previousBestScore =
@@ -312,15 +276,8 @@ export async function POST(
     );
 
   if (recordSaveError) {
-    return NextResponse.json(
-      {
-        error:
-          recordSaveError.message,
-      },
-      {
-        status: 500,
-      },
-    );
+    console.error("1952 기록 저장 오류:", recordSaveError);
+    return NextResponse.json({ error: "1952 기록을 저장하지 못했습니다." }, { status: 500 });
   }
 
   /*

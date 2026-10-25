@@ -1,24 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const GAMES = new Set(["sudoku", "2048"]);
+const GAMES = new Set(["2048"]);
 
 export async function GET(request: NextRequest) {
   try {
     const gameParam =
-      request.nextUrl.searchParams.get("game") ?? "sudoku";
+      request.nextUrl.searchParams.get("game") ?? "2048";
 
     const game = GAMES.has(gameParam)
       ? gameParam
-      : "sudoku";
+      : "2048";
 
-    const limit = Math.min(
-      100,
-      Math.max(
-        1,
-        Number(request.nextUrl.searchParams.get("limit") ?? 20),
-      ),
-    );
+    const requestedLimit = Number(request.nextUrl.searchParams.get("limit") ?? 20);
+    if (!Number.isSafeInteger(requestedLimit)) {
+      return NextResponse.json(
+        { error: "올바른 랭킹 조회 개수를 입력하세요." },
+        { status: 400 },
+      );
+    }
+    const limit = Math.min(100, Math.max(1, requestedLimit));
 
     const supabase = await createClient();
 

@@ -94,15 +94,6 @@ export type HooWorldPresencePlayer = {
   characterSlot?: number;
 
   /*
-   * M핀 운영자 스킨 여부.
-   *
-   * 기존 Presence 세션과의 호환을 위해
-   * optional로 유지한다.
-   * 값이 없으면 일반 유저로 처리한다.
-   */
-  operatorSkin?: boolean;
-
-  /*
    * HOO WORLD에서 마지막으로 확정된 위치.
    *
    * 포커스모드로 전환되면
@@ -196,9 +187,6 @@ const HOO_WORLD_FOCUS_FACING_KEY =
 const HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY =
   "hoo-world-focus-character-slot";
 
-const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
-  "hoo-world-focus-operator-skin";
-
 const HOO_WORLD_FOCUS_READY_KEY =
   "hoo-world-focus-presence-ready";
 
@@ -219,7 +207,6 @@ type HooWorldFocusHandoff = {
     | "up"
     | "down";
   characterSlot?: number;
-  operatorSkin?: boolean;
 };
 
 type HooWorldMovementSnapshot = {
@@ -341,19 +328,6 @@ function readHooWorldFocusHandoff():
         ? rawCharacterSlot
         : undefined;
 
-    const storedOperatorSkin =
-      window.sessionStorage.getItem(
-        HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
-      );
-
-    const operatorSkin:
-      boolean | undefined =
-      storedOperatorSkin === "true"
-        ? true
-        : storedOperatorSkin === "false"
-          ? false
-          : undefined;
-
     return {
       x: Math.max(
         0,
@@ -379,7 +353,6 @@ function readHooWorldFocusHandoff():
       worldRegionId,
       facing,
       characterSlot,
-      operatorSkin,
     };
   } catch {
     return null;
@@ -808,9 +781,6 @@ const fieldIdRef =
   const characterSlotRef =
     useRef(4);
 
-  const operatorSkinRef =
-    useRef(false);
-
   /*
    * HOO WORLD -> Focus Mode 전환 때 사용하던 필드.
    * 페이지가 바뀌어 훅이 다시 생성되어도 같은 필드로 복귀한다.
@@ -944,14 +914,6 @@ const fieldIdRef =
       ) {
         characterSlotRef.current =
           focusHandoff.characterSlot;
-      }
-
-      if (
-        typeof focusHandoff.operatorSkin ===
-        "boolean"
-      ) {
-        operatorSkinRef.current =
-          focusHandoff.operatorSkin;
       }
     }
 
@@ -1134,14 +1096,6 @@ function scheduleReconnect() {
             characterSlotRef.current =
               focusHandoff.characterSlot;
           }
-
-          if (
-            typeof focusHandoff.operatorSkin ===
-            "boolean"
-          ) {
-            operatorSkinRef.current =
-              focusHandoff.operatorSkin;
-          }
         }
 
         void connect();
@@ -1283,25 +1237,16 @@ function scheduleReconnect() {
         return null;
       }
 
-      const [
-        profileResult,
-        operatorSkinResult,
-      ] = await Promise.all([
-        supabase
-          .from("profiles")
-          .select(
-            "hoo_world_accessory_slot",
-          )
-          .eq(
-            "id",
-            userId,
-          )
-          .maybeSingle(),
-
-        supabase.rpc(
-          "has_hoo_world_operator_skin",
-        ),
-      ]);
+      const profileResult = await supabase
+        .from("profiles")
+        .select(
+          "hoo_world_accessory_slot",
+        )
+        .eq(
+          "id",
+          userId,
+        )
+        .maybeSingle();
 
       let characterSlot =
         characterSlotRef.current;
@@ -1316,18 +1261,6 @@ function scheduleReconnect() {
 
         characterSlotRef.current =
           characterSlot;
-      }
-
-      let operatorSkin =
-        operatorSkinRef.current;
-
-      if (!operatorSkinResult.error) {
-        operatorSkin =
-          operatorSkinResult.data ===
-          true;
-
-        operatorSkinRef.current =
-          operatorSkin;
       }
 
       /*
@@ -1377,16 +1310,6 @@ function scheduleReconnect() {
               focusHandoff.characterSlot;
           }
 
-          if (
-            typeof focusHandoff.operatorSkin ===
-            "boolean"
-          ) {
-            operatorSkin =
-              focusHandoff.operatorSkin;
-
-            operatorSkinRef.current =
-              focusHandoff.operatorSkin;
-          }
         }
       }
 
@@ -1412,7 +1335,6 @@ function scheduleReconnect() {
           now,
         onlineAt: now,
         characterSlot,
-        operatorSkin,
         x: positionRef.current.x,
         y: positionRef.current.y,
         facing:
@@ -2435,8 +2357,8 @@ movementChannel.on(
    * 이미 연결된 Presence payload만 가볍게 갱신한다.
    *
    * 중요:
-   * Presence payload를 다시 track할 때 characterSlot/operatorSkin까지
-   * 항상 같이 넣는다. 일부 필드만 다시 track하면 기존 스킨 메타데이터가
+   * Presence payload를 다시 track할 때 characterSlot까지
+   * 항상 같이 넣는다. 일부 필드만 다시 track하면 기존 캐릭터 메타데이터가
    * 사라져 상대 화면에서 user-4 기본 캐릭터로 떨어질 수 있다.
    */
   useEffect(() => {
@@ -2492,25 +2414,16 @@ movementChannel.on(
         return;
       }
 
-      const [
-        profileResult,
-        operatorSkinResult,
-      ] = await Promise.all([
-        supabase
-          .from("profiles")
-          .select(
-            "hoo_world_accessory_slot",
-          )
-          .eq(
-            "id",
-            user.id,
-          )
-          .maybeSingle(),
-
-        supabase.rpc(
-          "has_hoo_world_operator_skin",
-        ),
-      ]);
+      const profileResult = await supabase
+        .from("profiles")
+        .select(
+          "hoo_world_accessory_slot",
+        )
+        .eq(
+          "id",
+          user.id,
+        )
+        .maybeSingle();
 
       if (cancelled) {
         return;
@@ -2529,18 +2442,6 @@ movementChannel.on(
 
         characterSlotRef.current =
           characterSlot;
-      }
-
-      let operatorSkin =
-        operatorSkinRef.current;
-
-      if (!operatorSkinResult.error) {
-        operatorSkin =
-          operatorSkinResult.data ===
-          true;
-
-        operatorSkinRef.current =
-          operatorSkin;
       }
 
       const now =
@@ -2573,8 +2474,6 @@ movementChannel.on(
             now,
 
           characterSlot,
-
-          operatorSkin,
 
           x:
             positionRef.current.x,
@@ -2697,6 +2596,7 @@ movementChannel.on(
    */
   async function refreshPresence(
     characterSlotOverride?: number,
+    skipProfileRead = false,
   ) {
     if (
       !enabled ||
@@ -2744,25 +2644,19 @@ movementChannel.on(
         normalizedOverride;
     }
 
-    const [
-      profileResult,
-      operatorSkinResult,
-    ] = await Promise.all([
-      supabase
-        .from("profiles")
-        .select(
-          "hoo_world_accessory_slot",
-        )
-        .eq(
-          "id",
-          user.id,
-        )
-        .maybeSingle(),
-
-      supabase.rpc(
-        "has_hoo_world_operator_skin",
-      ),
-    ]);
+    const profileResult =
+      normalizedOverride === 0 && !skipProfileRead
+        ? await supabase
+      .from("profiles")
+      .select(
+        "hoo_world_accessory_slot",
+      )
+      .eq(
+        "id",
+        user.id,
+      )
+      .maybeSingle()
+        : null;
 
     let characterSlot =
       characterSlotRef.current;
@@ -2770,7 +2664,7 @@ movementChannel.on(
     if (normalizedOverride !== 0) {
       characterSlot =
         normalizedOverride;
-    } else if (!profileResult.error) {
+    } else if (profileResult && !profileResult.error) {
       characterSlot =
         normalizeHooWorldCharacterSlot(
           profileResult.data
@@ -2781,18 +2675,6 @@ movementChannel.on(
 
     characterSlotRef.current =
       characterSlot;
-
-    let operatorSkin =
-      operatorSkinRef.current;
-
-    if (!operatorSkinResult.error) {
-      operatorSkin =
-        operatorSkinResult.data ===
-        true;
-
-      operatorSkinRef.current =
-        operatorSkin;
-    }
 
     const now =
       new Date().toISOString();
@@ -2827,8 +2709,6 @@ movementChannel.on(
           now,
 
         characterSlot,
-
-        operatorSkin,
 
         x:
           positionRef.current.x,
@@ -2909,7 +2789,7 @@ movementChannel.on(
       return false;
     }
 
-    return await refreshPresence();
+    return await refreshPresence(undefined, true);
   }
 
   /*
@@ -2929,7 +2809,7 @@ movementChannel.on(
       return false;
     }
 
-    return await refreshPresence();
+    return await refreshPresence(undefined, true);
   }
 
   async function updateStatus(
@@ -3071,9 +2951,6 @@ movementChannel.on(
           HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY,
         );
 
-        window.sessionStorage.removeItem(
-          HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
-        );
       }
     }
 
@@ -3088,30 +2965,24 @@ movementChannel.on(
       return false;
     }
 
-    const [
-      profileResult,
-      operatorSkinResult,
-    ] = await Promise.all([
-      supabase
-        .from("profiles")
-        .select(
-          "hoo_world_accessory_slot",
-        )
-        .eq(
-          "id",
-          user.id,
-        )
-        .maybeSingle(),
-
-      supabase.rpc(
-        "has_hoo_world_operator_skin",
-      ),
-    ]);
+    const profileResult =
+      nextStatus === 'focusing'
+        ? await supabase
+      .from("profiles")
+      .select(
+        "hoo_world_accessory_slot",
+      )
+      .eq(
+        "id",
+        user.id,
+      )
+      .maybeSingle()
+        : null;
 
     let characterSlot =
       characterSlotRef.current;
 
-    if (!profileResult.error) {
+    if (profileResult && !profileResult.error) {
       characterSlot =
         normalizeHooWorldCharacterSlot(
           profileResult.data
@@ -3123,18 +2994,6 @@ movementChannel.on(
         characterSlot;
     }
 
-    let operatorSkin =
-      operatorSkinRef.current;
-
-    if (!operatorSkinResult.error) {
-      operatorSkin =
-        operatorSkinResult.data ===
-        true;
-
-      operatorSkinRef.current =
-        operatorSkin;
-    }
-
     if (
       typeof window !== "undefined" &&
       nextStatus === "focusing"
@@ -3144,10 +3003,6 @@ movementChannel.on(
         String(characterSlot),
       );
 
-      window.sessionStorage.setItem(
-        HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
-        String(operatorSkin),
-      );
     }
 
     const now =
@@ -3183,8 +3038,6 @@ movementChannel.on(
           now,
 
         characterSlot,
-
-        operatorSkin,
 
         x:
           positionRef.current.x,
@@ -3322,7 +3175,7 @@ async function updateWorldRegion(
   }
 
   const tracked =
-    await refreshPresence();
+    await refreshPresence(undefined, true);
 
   const movementChannel =
     movementChannelRef.current;

@@ -17,4 +17,5 @@ export const HOO_WORLD_MUSIC_TRACKS = [
   "/hoo-world/music/song-07.mp3.wav",
   "/hoo-world/music/song-08.mp3.wav",
   "/hoo-world/music/song-09.mp3.wav",
+  "/hoo-world/music/ambientHaze-01.mp3.wav"
 ] as const;

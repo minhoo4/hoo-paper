@@ -1,9 +1,13 @@
 'use client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import dynamic from 'next/dynamic';
+import { useCandlePan } from './useCandlePan';
 import styles from './HooTradingDock.module.css';
 import { RequestGate } from '../../lib/hoo-trading/contracts';
 
+const R4SrDemoChart = dynamic(() => import('./R4SrDemoChart'));
+const allowR4SrDemo = process.env.NODE_ENV === 'development';
 type SymbolCode='HOO'|'EGG'|'COAL';
 type RiskMode='percent'|'absolute';
 type RiskKind='stop'|'take';
@@ -106,52 +110,65 @@ async function requestMarket(symbol:SymbolCode,frame:number,before?:number):Prom
  return json as PublicMarket;
 }
 const colors={up:'#13b58e',down:'#e26671'};
-function CandleChart({bars,symbol}:{bars:Bar[];symbol:SymbolCode}){
+const MAX_RETAINED_CANDLES=2000;
+function CandleChart({bars,symbol,timeframe,onLoadOlder,hasOlder}:{
+ bars:Bar[];symbol:SymbolCode;timeframe:number;onLoadOlder:()=>void;hasOlder:boolean;olderLoading:boolean;
+}){
+ const pan=useCandlePan(bars,78,`${symbol}:${timeframe}`,onLoadOlder,hasOlder);
+ const visible=pan.visible;
  const dimension={width:760,height:320};
  const view=useMemo(()=>{
-   if(!bars.length)return null;
-   const high=Math.max(...bars.map(b=>Number(b.high)))*1.008;
-   const low=Math.min(...bars.map(b=>Number(b.low)))*.992;
-   const maximumVolume=Math.max(1,...bars.map(b=>Number(b.volume))); // preserve raw market volume; spikes remain visible
-   const length=Math.max(1,bars.length);
-   const left=18, chartW=690;
+   if(!visible.length)return null;
+   const high=Math.max(...visible.map(b=>Number(b.high)))*1.008;
+   const low=Math.min(...visible.map(b=>Number(b.low)))*.992;
+   const maximumVolume=Math.max(1,...visible.map(b=>Number(b.volume)));
+   const length=Math.max(1,visible.length);
+   const left=18,chartW=690;
    const y=(price:number)=>18+(high-price)/(high-low||1)*201;
    const bw=Math.min(8,(chartW/length)*.64);
    return {high,low,maximumVolume,length,left,chartW,y,bw};
- },[bars]);
+ },[visible]);
  if(!view)return <div className={styles.chartEmpty}>공통 시장 차트를 불러오는 중…</div>;
  const {length,left,chartW,y,bw}=view;
  const x=(i:number)=>left+(i+.5)*chartW/length;
- return <svg className={styles.chartSvg} viewBox={`0 0 ${dimension.width} ${dimension.height}`} role="img" aria-label={`${symbol} 캔들 차트와 거래량 하나`}>
-   {[0,1,2,3,4].map(i=><g key={'g'+i}>
-     <line x1="12" x2="710" y1={18+i*51} y2={18+i*51} stroke="#b3c9d7" strokeOpacity=".23"/>
-     <text x="722" y={23+i*51} fontSize="12" fill="#a8bdcf">{pformat(view.high-(view.high-view.low)*i/4)}</text>
-   </g>)}
-   {bars.map((b,i)=>{
-     const up=b.close>=b.open, c=up?colors.up:colors.down;
-     const bx=x(i),candleH=Math.max(1.3,Math.abs(y(b.close)-y(b.open)));
-     return <g key={b.t}>
-       <line x1={bx} x2={bx} y1={y(b.high)} y2={y(b.low)} stroke={c} strokeWidth="1.3"/>
-       <rect x={bx-bw/2} y={Math.min(y(b.open),y(b.close))} width={bw} height={candleH} fill={c} rx=".6"/>
-       {/* ONE volume area, below the price chart. */}
-       <rect x={bx-bw/2} y={286-Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48))}
-         width={bw} height={Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48))} fill={c} opacity=".90"/>
-     </g>;
-   })}
-   <line x1="12" x2="710" y1="229" y2="229" stroke="#9bb5c4" strokeOpacity=".5"/>
-   <line x1="12" x2="710" y1="286" y2="286" stroke="#9bb5c4" strokeOpacity=".25"/>
-   <text x="18" y="239" fontSize="11" fill="#a8bdcf">거래량</text>
-   <text x="20" y="308" fontSize="11" fill="#a8bdcf">{new Date(bars[0].t*1000).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',timeZone:'UTC'})}</text>
-   <text x="610" y="308" fontSize="11" fill="#a8bdcf">현재</text>
-   <text x="722" y="284" fontSize="10" fill="#a8bdcf">{fmt(view.maximumVolume,0)}</text>
- </svg>;
+ return <div>
+   <svg className={styles.chartSvg} viewBox={`0 0 ${dimension.width} ${dimension.height}`}
+     role="img" tabIndex={0} aria-label={`${symbol} 캔들 차트와 거래량, 좌우로 드래그하거나 방향키로 과거 탐색`}
+     {...pan.pointerHandlers}
+     onDoubleClick={pan.goLatest}
+     style={{cursor:pan.dragging?'grabbing':'grab',touchAction:'pan-y',userSelect:'none'}}>
+     {[0,1,2,3,4].map(i=><g key={'g'+i}>
+       <line x1="12" x2="710" y1={18+i*51} y2={18+i*51} stroke="#b3c9d7" strokeOpacity=".23"/>
+       <text x="722" y={23+i*51} fontSize="12" fill="#a8bdcf">{pformat(view.high-(view.high-view.low)*i/4)}</text>
+     </g>)}
+     {visible.map((b,i)=>{
+       const up=b.close>=b.open,c=up?colors.up:colors.down;
+       const bx=x(i),candleH=Math.max(1.3,Math.abs(y(b.close)-y(b.open)));
+       return <g key={b.t}>
+         <line x1={bx} x2={bx} y1={y(b.high)} y2={y(b.low)} stroke={c} strokeWidth="1.3"/>
+         <rect x={bx-bw/2} y={Math.min(y(b.open),y(b.close))} width={bw} height={candleH} fill={c} rx=".6"/>
+         <rect x={bx-bw/2} y={286-Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48))}
+           width={bw} height={Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48))} fill={c} opacity=".90"/>
+       </g>;
+     })}
+     <line x1="12" x2="710" y1="229" y2="229" stroke="#9bb5c4" strokeOpacity=".5"/>
+     <line x1="12" x2="710" y1="286" y2="286" stroke="#9bb5c4" strokeOpacity=".25"/>
+     <text x="18" y="239" fontSize="11" fill="#a8bdcf">거래량</text>
+     <text x="20" y="308" fontSize="11" fill="#a8bdcf">{new Date(visible[0].t*1000).toLocaleString('ko-KR',{timeZone:'Asia/Seoul',month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</text>
+     <text x="580" y="308" fontSize="11" fill="#a8bdcf">{pan.isLatest?'현재':'과거'} {new Date(visible[visible.length-1].t*1000).toLocaleTimeString('ko-KR',{timeZone:'Asia/Seoul',hour:'2-digit',minute:'2-digit'})}</text>
+     <text x="722" y="284" fontSize="10" fill="#a8bdcf">{fmt(view.maximumVolume,0)}</text>
+   </svg>
+ </div>;
 }
+
 export type HooTradingDockProps={onActiveChange?:(active:boolean)=>void;buttonBottom?:number;disabled?:boolean;walletHoo?:number;onWalletHooChange?:(balance:number)=>void};
 /** Install ONCE in app/hoo-world/page.tsx, do not create a separate game page. */
 export default function HooTradingDock({onActiveChange,buttonBottom,disabled=false,walletHoo=0,onWalletHooChange}:HooTradingDockProps){
  const [open,setOpen]=useState(false),[data,setData]=useState<Snapshot|null>(null);
  const [marketData,setMarketData]=useState<PublicMarket|null>(null);
  const [marketError,setMarketError]=useState<string|null>(null);
+ const [historyBusy,setHistoryBusy]=useState(false);
+ const [r4Demo,setR4Demo]=useState(false);
  const [symbol,setSymbol]=useState<SymbolCode>('HOO'),[frame,setFrame]=useState(15);
  const [direction,setDirection]=useState<'long'|'short'>('long');
  const [leverage,setLeverage]=useState(3),[margin,setMargin]=useState('100');
@@ -203,7 +220,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    if(context!==requestContext.current||marketFetching.current||!isActive.current)return;
    marketFetching.current=true;
    try{const next=await requestMarket(symbol,frame);if(context!==requestContext.current)return;const merged=new Map(barsRef.current.map(b=>[b.t,b]));for(const b of next.candles[symbol]||[])merged.set(b.t,b);
-     barsRef.current=[...merged.values()].sort((a,b)=>a.t-b.t).slice(-78);
+     barsRef.current=[...merged.values()].sort((a,b)=>a.t-b.t).slice(-MAX_RETAINED_CANDLES);
      setMarketData({...next,candles:{[symbol]:barsRef.current}});setMarketError(null);
      if(historyCursor.current===undefined)historyCursor.current=next.historyBefore;
      if(!historyFetching.current&&historyCursor.current!=null&&barsRef.current.length<78){
@@ -213,7 +230,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
            const older=await requestMarket(symbol,frame,historyCursor.current);
            if(context!==requestContext.current)return;
            const all=new Map((older.candles[symbol]||[]).map(b=>[b.t,b]));for(const b of barsRef.current)all.set(b.t,b);
-           barsRef.current=[...all.values()].sort((a,b)=>a.t-b.t).slice(-78);historyCursor.current=older.historyBefore;
+           barsRef.current=[...all.values()].sort((a,b)=>a.t-b.t).slice(-MAX_RETAINED_CANDLES);historyCursor.current=older.historyBefore;
            setMarketData(prev=>prev?{...prev,candles:{[symbol]:barsRef.current}}:prev);
          }
        }catch(e){if(context===requestContext.current)setMarketError(e instanceof Error?e.message:String(e));}
@@ -224,11 +241,33 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  },[symbol,frame]);
  useEffect(()=>{
    if(!open)return;
-   setMarketData(null);setMarketError(null);barsRef.current=[];historyCursor.current=undefined;
+   setMarketData(null);setMarketError(null);setHistoryBusy(false);barsRef.current=[];historyCursor.current=undefined;
    void refreshMarket();
    const ticker=window.setInterval(()=>void refreshMarket(),1000);
    return()=>window.clearInterval(ticker);
  },[open,refreshMarket]);
+ const loadOlder=useCallback(()=>{
+   const context=`true:${symbol}:${frame}`;
+   if(context!==requestContext.current||!isActive.current||historyFetching.current||historyCursor.current==null||barsRef.current.length>=MAX_RETAINED_CANDLES)return;
+   historyFetching.current=true;setHistoryBusy(true);
+   const cursor=historyCursor.current;
+   void (async()=>{
+     try{
+       const older=await requestMarket(symbol,frame,cursor);
+       if(context!==requestContext.current)return;
+       const fresh=older.candles[symbol]||[];
+       if(!fresh.length){historyCursor.current=null;return;}
+       const merged=new Map(barsRef.current.map(b=>[b.t,b]));
+       for(const b of fresh)merged.set(b.t,b);
+       const all=[...merged.values()].sort((a,b)=>a.t-b.t);
+       // Keep recent market bars and a bounded historical buffer; never alter market prices.
+       barsRef.current=all.slice(-MAX_RETAINED_CANDLES);
+       historyCursor.current=older.historyBefore===cursor?null:older.historyBefore;
+       setMarketData(prev=>prev?{...prev,candles:{[symbol]:barsRef.current}}:prev);
+     }catch(e){if(context===requestContext.current)setMarketError(e instanceof Error?e.message:String(e));}
+     finally{historyFetching.current=false;if(context===requestContext.current)setHistoryBusy(false);}
+   })();
+ },[symbol,frame]);
  const submit=useCallback(async(body:Record<string,unknown>,label:string)=>{
    if(!gate.current.beginMutation())return;
    setWorking(true);setError(null);setMessage(null);
@@ -341,10 +380,10 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      <aside className={styles.left} aria-label="자산 뉴스 순위">
        <section className={styles.card}>
          <div className={styles.cardTitle}>🍃 내 자산 <small>TC / HOO</small></div>
-         <div className={styles.bigMoney}>{fmt(totalEq)} <small>TC</small></div>
-         <div className={styles.pair}><span>현재 후코인 지갑</span><b>{fmt(liveWallet,0)} HOO</b></div>
-         <div className={styles.pair}><span>거래 가능 TC</span><b>{fmt(availableTC)}</b></div>
-         <div className={styles.pair}><span>총 HOO 환산자산</span><b>{fmt(totalEq/1000,3)} HOO</b></div>
+         <div className={styles.bigMoney}>{data?fmt(totalEq):'—'} <small>TC</small></div>
+         <div className={styles.pair}><span>현재 후코인 지갑</span><b>{data&&Number.isFinite(data.walletHoo)?`${fmt(liveWallet,0)} HOO`:'미확인'}</b></div>
+         <div className={styles.pair}><span>거래 가능 TC</span><b>{data?fmt(availableTC):'미확인'}</b></div>
+         <div className={styles.pair}><span>총 HOO 환산자산</span><b>{data?`${fmt(totalEq/1000,3)} HOO`:'미확인'}</b></div>
          <div className={styles.pair}><span>미실현 손익</span><b>{signed(livePositions.reduce((sum,p)=>sum+p.unrealized,0))} TC</b></div>
          <div className={styles.statsRow}>
            <div><small>실현 손익</small><strong className={pnl>=0?styles.positive:styles.negative}>{signed(pnl)} TC</strong></div>
@@ -381,10 +420,24 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트</small></span><strong>{pformat(mark)} <small>TC</small></strong></div>
        <div className={styles.intervals}>{[1,5,15,60,240,1440].map(s=><button type="button" key={s} className={frame===s?styles.selectedFrame:''} onClick={()=>setFrame(s)}>
           {{1:'1분',5:'5분',15:'15분',60:'1시간',240:'4시간',1440:'1일'}[s as 1|5|15|60|240|1440]}
-       </button>)}</div>
-       <div className={styles.chartBox}>{marketError&&!(market?.candles[symbol]?.length)
+        </button>)}</div>
+        {allowR4SrDemo&&<div style={{display:'flex',justifyContent:'flex-end',padding:'6px 0'}}>
+          <button type="button" aria-pressed={r4Demo} onClick={()=>setR4Demo(v=>!v)}
+            style={{border:'1px solid #648ec0',borderRadius:8,padding:'7px 12px',background:r4Demo?'#215568':'#203447',color:'#f0f5fb',cursor:'pointer'}}>
+            {r4Demo?'↩ 기존 실거래 차트로 돌아가기':'🧪 R4-SR 차트 샘플 비교 (개발 전용)'}
+          </button>
+        </div>}
+        {allowR4SrDemo&&r4Demo?<section aria-label="R4-SR 별도 가상 차트" style={{padding:'12px',background:'#102239',color:'#fff',border:'2px solid #ecb75a',borderRadius:12}}>
+          <div role="alert" style={{fontWeight:750,color:'#ffcc75',marginBottom:10}}>
+            ⚠ 개발용 고정 샘플 가격입니다. HOO WORLD 실제 시세·주문·지갑과 연결되지 않습니다.
+            이 화면에서는 거래 조작을 표시하지 않습니다.
+          </div>
+          <R4SrDemoChart symbol={symbol} timeframe={([1,5,15,60] as number[]).includes(frame)?frame:60}/>
+          {![1,5,15,60].includes(frame)&&<p>해당 봉 주기는 샘플 미지원이므로 60분봉으로 표시합니다.</p>}
+        </section>:<>
+        <div className={styles.chartBox}>{marketError&&!(market?.candles[symbol]?.length)
          ?<div className={styles.chartEmpty} role="status">차트 연결 실패: {marketError}<div style={{marginTop:12,fontSize:13}}>서버 설정 또는 SQL 적용 상태를 확인해주세요. 연결되면 자동으로 다시 불러옵니다.</div></div>
-         :<CandleChart bars={market?.candles[symbol]||[]} symbol={symbol}/>}</div>
+         :<CandleChart key={`${symbol}:${frame}`} bars={market?.candles[symbol]||[]} symbol={symbol} timeframe={frame} onLoadOlder={loadOlder} olderLoading={historyBusy} hasOlder={historyCursor.current!=null&&barsRef.current.length<MAX_RETAINED_CANDLES}/>}</div>
        <div className={styles.tradeForm}>
          <div className={styles.tradeRow}><b>매매 방향</b><div className={styles.segment}>
            <button className={direction==='long'?styles.activeLong:''} onClick={()=>setDirection('long')} type="button" disabled={Boolean(selectedPosition&&selectedPosition.side!==1)}>▲ LONG</button>
@@ -465,6 +518,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        {marketError&&Boolean(market?.candles[symbol]?.length)&&<div className={styles.error} role="status">차트 연결: {marketError}</div>}
        {(error||message)&&<div className={error?styles.error:styles.notice} role="status">{error||message}</div>}
        <div className={styles.foot}>후코인 1 = 1,000 TC · 공동 가상시장 · 부분청산 / 동일방향 추가 진입 가능 · 투자 결과는 후코인 게임자산에 반영</div>
+       </>}
      </main>
    </div>}
  </>;

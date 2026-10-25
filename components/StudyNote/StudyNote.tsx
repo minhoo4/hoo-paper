@@ -1493,29 +1493,49 @@ export default function StudyNote({ active }: StudyNoteProps) {
         });
     };
 
+    let eventSyncTimer: number | null = null;
+    let disposed = false;
+
+    const scheduleSyncFromCloud = () => {
+      if (disposed || !navigator.onLine) {
+        return;
+      }
+
+      if (eventSyncTimer !== null) {
+        window.clearTimeout(eventSyncTimer);
+      }
+
+      eventSyncTimer = window.setTimeout(() => {
+        eventSyncTimer = null;
+
+        if (!disposed) {
+          syncFromCloud();
+        }
+      }, 500);
+    };
+
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        syncFromCloud();
+        scheduleSyncFromCloud();
       }
     };
 
-    const initialSyncTimer =
-      window.setTimeout(
-        syncFromCloud,
-        0,
-      );
+    const initialSyncTimer = window.setTimeout(
+      scheduleSyncFromCloud,
+      0,
+    );
 
     window.addEventListener(
       "focus",
-      syncFromCloud,
+      scheduleSyncFromCloud,
     );
     window.addEventListener(
       "pageshow",
-      syncFromCloud,
+      scheduleSyncFromCloud,
     );
     window.addEventListener(
       "online",
-      syncFromCloud,
+      scheduleSyncFromCloud,
     );
     document.addEventListener(
       "visibilitychange",
@@ -1523,20 +1543,24 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
 
     return () => {
-      window.clearTimeout(
-        initialSyncTimer,
-      );
+      disposed = true;
+      window.clearTimeout(initialSyncTimer);
+
+      if (eventSyncTimer !== null) {
+        window.clearTimeout(eventSyncTimer);
+      }
+
       window.removeEventListener(
         "focus",
-        syncFromCloud,
+        scheduleSyncFromCloud,
       );
       window.removeEventListener(
         "pageshow",
-        syncFromCloud,
+        scheduleSyncFromCloud,
       );
       window.removeEventListener(
         "online",
-        syncFromCloud,
+        scheduleSyncFromCloud,
       );
       document.removeEventListener(
         "visibilitychange",

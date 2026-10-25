@@ -1,3 +1,4 @@
+
 {
   "compilerOptions": {
     "target": "ES2017",
@@ -33,9 +34,17 @@
     "**/*.ts",
     "**/*.tsx",
     ".next/types/**/*.ts",
-    ".next/dev/types/**/*.ts"
-, "public/새텍스트"  ],
+    ".next/dev/types/**/*.ts",
+    "public/새텍스트"
+  ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "tests",
+    "originals",
+    "reference",
+    "recovery",
+    "patch",
+    "preview",
+    "components/recovery"
   ]
 }

@@ -14,20 +14,30 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: "로그인이 필요합니다." }, { status: 401 });
     }
 
-    const { nickname, avatarEmoji } = (await request.json()) as {
-      nickname?: string;
-      avatarEmoji?: string;
-    };
-
-    const cleanNickname = nickname?.trim();
-    if (!cleanNickname || !NICKNAME_PATTERN.test(cleanNickname)) {
+    // Reject malformed JSON and non-string fields before using string methods.
+    let payload: unknown;
+    try {
+      payload = await request.json();
+    } catch {
+      return NextResponse.json({ error: "올바른 요청 형식이 아닙니다." }, { status: 400 });
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return NextResponse.json({ error: "올바른 요청 형식이 아닙니다." }, { status: 400 });
+    }
+    const body = payload as Record<string, unknown>;
+    const nickname = body.nickname;
+    const avatarEmoji = body.avatarEmoji;
+    const cleanNickname = typeof nickname === "string" ? nickname.trim() : "";
+    if (!NICKNAME_PATTERN.test(cleanNickname)) {
       return NextResponse.json(
         { error: "닉네임은 한글·영문·숫자·밑줄 2~16자로 입력해주세요." },
         { status: 400 },
       );
     }
-
-    const cleanEmoji = (avatarEmoji ?? "🦉").slice(0, 8);
+    if (avatarEmoji !== undefined && (typeof avatarEmoji !== "string" || avatarEmoji.length > 8)) {
+      return NextResponse.json({ error: "아바타 이모지는 8자 이하로 입력해주세요." }, { status: 400 });
+    }
+    const cleanEmoji = avatarEmoji === undefined ? "🦉" : avatarEmoji as string;
     const { data, error } = await supabase
       .from("profiles")
       .update({ nickname: cleanNickname, avatar_emoji: cleanEmoji })
@@ -51,7 +61,7 @@ export async function PATCH(request: Request) {
 
   return NextResponse.json(
     {
-      error: "닉네임을 저장하지 못했습니다. 잠시 후 다시 시도해주시는.",
+      error: "닉네임을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.",
     },
     {
       status: 500,

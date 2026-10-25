@@ -1,4 +1,6 @@
-"use client";
+﻿"use client";
+
+import dynamic from "next/dynamic";
 
 import {
   FormEvent,
@@ -8,11 +10,11 @@ import {
   useState,
 } from "react";
 
-import { createPortal } from "react-dom";
+
 import FocusMode from "@/components/FocusMode/FocusMode";
 
-import HooCommunityPanel from "@/components/HooCommunityPanel";
-import HooMusicCommunity from "@/components/HooCommunity/HooMusicCommunity";
+
+
 
 import {
   useHooWorldPresence,
@@ -23,14 +25,11 @@ import StudyNoteSummary from "@/components/StudyNote/StudyNoteSummary";
 
 import PushNotificationButton from "../PushNotificationButton";
 
-import Hoo2048Game from "@/components/Hoo2048Game";
-import HooShisenGame from "@/components/HooShisenGame";
-import Hoo1952Game from "@/components/Hoo1952Game";
-import HooBubbleGame from "@/components/HooBubbleGame";
-import {
-  createPuzzleId,
-  submitSudokuCompletion,
-} from "@/lib/community";
+
+
+
+
+
 
 import { createClient } from "@/lib/supabase/client";
 
@@ -49,6 +48,13 @@ import {
   Settings,
   X,
 } from "lucide-react";
+
+// HOO Foundation: optional game/music/community modules are separate client chunks.
+// The base TODO, calendar, memo, auth, and HOO WORLD UI stay unchanged.
+const HooCommunityPanel = dynamic(() => import("@/components/HooCommunityPanel"));
+const HooMusicCommunity = dynamic(() => import("@/components/HooCommunity/HooMusicCommunity"));
+const Hoo2048Game = dynamic(() => import("@/components/Hoo2048Game"), { loading: () => <div role="status" className="p-6 text-center">2048을 불러오는 중...</div> });
+const Hoo1952Game = dynamic(() => import("@/components/Hoo1952Game"), { loading: () => <div role="status" className="p-6 text-center">1952를 불러오는 중...</div> });
 
 /* ─────────────────────────────
    타입
@@ -313,22 +319,17 @@ type HooRecommendedTask = {
   enabled: boolean;
 };
 
-type SudokuDifficulty = "easy" | "normal" | "hard";
-type SudokuBoard = number[][];
-type SudokuCell = { row: number; column: number };
 
-type SudokuBestTimes = Record<
-  SudokuDifficulty,
-  number | null
->;
+
+
+
+
 
 type MinigameScreen =
   | "menu"
-  | "sudoku"
   | "2048"
-  | "shisen"
   | "1952"
-  | "bubble";
+
 
 type Hoo2048Difficulty =
   | "easy"
@@ -366,8 +367,7 @@ const FAVORITE_STORAGE_KEY = "hoo-favorites";
 
 const TODO_STORAGE_KEY = "hoo-todos";
 
-const SUDOKU_BEST_TIMES_STORAGE_KEY =
-  "hoo-sudoku-best-times";
+
 
   const HOO2048_BEST_SCORES_STORAGE_KEY =
   "hoo-2048-best-scores";
@@ -722,84 +722,24 @@ function normalizeFavorites(value: unknown): Favorite[] {
 }
 
 /* ─────────────────────────────
-   스도쿠 함수
+   게임 함수
 ───────────────────────────── */
 
-const SUDOKU_NUMBERS = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-function copySudokuBoard(board: SudokuBoard): SudokuBoard {
-  return board.map((row) => [...row]);
-}
 
-function shuffleArray<T>(items: T[]): T[] {
-  const result = [...items];
 
-  for (let index = result.length - 1; index > 0; index -= 1) {
-    const randomIndex = Math.floor(Math.random() * (index + 1));
-    [result[index], result[randomIndex]] = [
-      result[randomIndex],
-      result[index],
-    ];
-  }
 
-  return result;
-}
 
-function createSudokuSolution(): SudokuBoard {
-  const base = 3;
-  const side = base * base;
-  const pattern = (row: number, column: number) =>
-    (base * (row % base) + Math.floor(row / base) + column) % side;
 
-  const rowGroups = shuffleArray([0, 1, 2]);
-  const columnGroups = shuffleArray([0, 1, 2]);
-  const rows = rowGroups.flatMap((group) =>
-    shuffleArray([0, 1, 2]).map((row) => group * base + row),
-  );
-  const columns = columnGroups.flatMap((group) =>
-    shuffleArray([0, 1, 2]).map((column) => group * base + column),
-  );
-  const numbers = shuffleArray(SUDOKU_NUMBERS);
 
-  return rows.map((row) =>
-    columns.map((column) => numbers[pattern(row, column)]),
-  );
-}
 
-function getSudokuEmptyCount(difficulty: SudokuDifficulty) {
-  if (difficulty === "hard") return 52;
-  if (difficulty === "normal") return 44;
-  return 36;
-}
 
-function generateSudokuGame(difficulty: SudokuDifficulty) {
-  const solution = createSudokuSolution();
-  const puzzle = copySudokuBoard(solution);
-  const positions = shuffleArray(
-    Array.from({ length: 81 }, (_, index) => index),
-  );
 
-  positions
-    .slice(0, getSudokuEmptyCount(difficulty))
-    .forEach((position) => {
-      puzzle[Math.floor(position / 9)][position % 9] = 0;
-    });
 
-  return { puzzle, solution };
-}
 
-function formatSudokuTime(totalSeconds: number) {
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
 
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
 
-function getSudokuDifficultyLabel(difficulty: SudokuDifficulty) {
-  if (difficulty === "hard") return "어려움";
-  if (difficulty === "normal") return "보통";
-  return "쉬움";
-}
+
 
 /* ─────────────────────────────
    메인
@@ -878,9 +818,6 @@ const HOO_WORLD_FOCUS_READY_EVENT =
 
 const HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY =
   "hoo-world-focus-character-slot";
-
-const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
-  "hoo-world-focus-operator-skin";
 
 
   useEffect(() => {
@@ -1449,6 +1386,14 @@ const [floatingButtonsTarget, setFloatingButtonsTarget] =
 
   const [horizontalPage, setHorizontalPage] =
   useState<-1 | 0 | 1 | 2 | 3>(0);
+
+  // Preserve community/player state after first visit; do not subscribe offscreen on first load.
+  const [hasOpenedGames, setHasOpenedGames] = useState(false);
+  const [hasOpenedMusic, setHasOpenedMusic] = useState(false);
+  useEffect(() => {
+    if (horizontalPage === 2) setHasOpenedGames(true);
+    if (horizontalPage === 3) setHasOpenedMusic(true);
+  }, [horizontalPage]);
 
   const isHorizontalAnimatingRef = useRef(false);
 
@@ -2077,26 +2022,7 @@ function closeMinigame() {
   setMinigameScreen("menu");
 }
 
-useEffect(() => {
-  if (minigameScreen !== "sudoku") {
-    return;
-  }
 
-  const previousBodyOverflow =
-    document.body.style.overflow;
-  const previousHtmlOverflow =
-    document.documentElement.style.overflow;
-
-  document.body.style.overflow = "hidden";
-  document.documentElement.style.overflow = "hidden";
-
-  return () => {
-    document.body.style.overflow =
-      previousBodyOverflow;
-    document.documentElement.style.overflow =
-      previousHtmlOverflow;
-  };
-}, [minigameScreen]);
 
 const [hoo2048Difficulty, setHoo2048Difficulty] =
   useState<Hoo2048Difficulty>("easy");
@@ -2109,39 +2035,28 @@ const [hoo2048BestScores, setHoo2048BestScores] =
     buddha: 0,
   });
 
-  /* 스도쿠 */
 
-  const [sudokuBestTimes, setSudokuBestTimes] =
-  useState<SudokuBestTimes>({
-    easy: null,
-    normal: null,
-    hard: null,
-  });
 
-  const [sudokuDifficulty, setSudokuDifficulty] =
-    useState<SudokuDifficulty>("easy");
 
-  const [sudokuPuzzle, setSudokuPuzzle] =
-    useState<SudokuBoard>([]);
 
-  const [sudokuBoard, setSudokuBoard] =
-    useState<SudokuBoard>([]);
 
-  const [sudokuSolution, setSudokuSolution] =
-    useState<SudokuBoard>([]);
 
-  const [selectedSudokuCell, setSelectedSudokuCell] =
-    useState<SudokuCell | null>(null);
 
-  const [sudokuHintCount, setSudokuHintCount] = useState(3);
-  const [sudokuSeconds, setSudokuSeconds] = useState(0);
-  const [isSudokuRunning, setIsSudokuRunning] = useState(false);
-  const [isSudokuCompleted, setIsSudokuCompleted] = useState(false);
-  const [sudokuPuzzleId, setSudokuPuzzleId] = useState("");
-  const [sudokuSaveMessage, setSudokuSaveMessage] = useState("");
-  const [isSudokuSaving, setIsSudokuSaving] = useState(false);
+
+
+
+
+
+
+
+
+
+
+
+
+
   const [communityRefreshKey, setCommunityRefreshKey] = useState(0);
-  const submittedSudokuIdRef = useRef<string | null>(null);
+
 
   /* 저장소 로딩 */
 
@@ -2486,36 +2401,14 @@ const savedSecretPin =
         FAVORITE_STORAGE_KEY,
       );
 
-      const savedSudokuBestTimes =
-  window.localStorage.getItem(
-    SUDOKU_BEST_TIMES_STORAGE_KEY,
-  );
+
 
   const savedHoo2048BestScores =
   window.localStorage.getItem(
     HOO2048_BEST_SCORES_STORAGE_KEY,
   );
 
-  if (savedSudokuBestTimes) {
-  const parsedBestTimes = JSON.parse(
-    savedSudokuBestTimes,
-  ) as Partial<SudokuBestTimes>;
 
-  setSudokuBestTimes({
-    easy:
-      typeof parsedBestTimes.easy === "number"
-        ? parsedBestTimes.easy
-        : null,
-    normal:
-      typeof parsedBestTimes.normal === "number"
-        ? parsedBestTimes.normal
-        : null,
-    hard:
-      typeof parsedBestTimes.hard === "number"
-        ? parsedBestTimes.hard
-        : null,
-  });
-}
 
 if (savedHoo2048BestScores) {
   const parsedBestScores = JSON.parse(
@@ -8379,38 +8272,15 @@ useEffect(() => {
   }, [favorites, isLoaded]);
 
   /* ─────────────────────────────
-     스도쿠 타이머
   ───────────────────────────── */
 
-  useEffect(() => {
-    if (!isSudokuRunning) {
-      return;
-    }
 
-    const sudokuInterval = window.setInterval(() => {
-      setSudokuSeconds((previous) => previous + 1);
-    }, 1000);
-
-    return () => {
-      window.clearInterval(sudokuInterval);
-    };
-  }, [isSudokuRunning]);
 
 
   /* ─────────────────────────────
-   스도쿠 최고기록 자동 저장
 ───────────────────────────── */
 
-useEffect(() => {
-  if (!isLoaded) {
-    return;
-  }
 
-  window.localStorage.setItem(
-    SUDOKU_BEST_TIMES_STORAGE_KEY,
-    JSON.stringify(sudokuBestTimes),
-  );
-}, [sudokuBestTimes, isLoaded]);
 
 
 useEffect(() => {
@@ -8425,89 +8295,9 @@ useEffect(() => {
 }, [hoo2048BestScores, isLoaded]);
 
   /* ─────────────────────────────
-     스도쿠 완료 기록 저장
   ───────────────────────────── */
 
-useEffect(() => {
-  if (!isSudokuCompleted || !sudokuPuzzleId) {
-    return;
-  }
 
-  setSudokuBestTimes((previousBestTimes) => {
-  const previousTime =
-    previousBestTimes[sudokuDifficulty];
-
-  if (
-    previousTime !== null &&
-    sudokuSeconds >= previousTime
-  ) {
-    return previousBestTimes;
-  }
-
-  return {
-    ...previousBestTimes,
-    [sudokuDifficulty]: sudokuSeconds,
-  };
-});
-
-  if (submittedSudokuIdRef.current === sudokuPuzzleId) {
-    return;
-  }
-
-  submittedSudokuIdRef.current = sudokuPuzzleId;
-
-  setMinigameCompletionCount((previous) => previous + 1);
-
-console.log("SAVE:", {
-  puzzleId: sudokuPuzzleId,
-  difficulty: sudokuDifficulty,
-});
-
-setIsSudokuSaving(true);
-setSudokuSaveMessage("기록을 저장하고 있어요...");
-
-void submitSudokuCompletion({
-  puzzleId: sudokuPuzzleId,
-  difficulty: sudokuDifficulty,
-  elapsedSeconds: sudokuSeconds,
-  hintsUsed: 3 - sudokuHintCount,
-})
-      .then((result) => {
-        if (result.alreadyCompleted) {
-          setSudokuSaveMessage("이미 점수를 받은 퍼즐이에요.");
-          return;
-        }
-
-        setSudokuSaveMessage(
-          `랭킹에 ${result.score}점이 저장됐어요!`,
-        );
-        setCommunityRefreshKey((previous) => previous + 1);
-      })
-      .catch((error: unknown) => {
-        const message =
-          error instanceof Error
-            ? error.message
-            : "기록을 저장하지 못했어요.";
-
-        if (message.includes("로그인이 필요")) {
-          setSudokuSaveMessage(
-            "로그인하면 이번 기록부터 랭킹 점수로 저장할 수 있어요.",
-          );
-          return;
-        }
-
-        setSudokuSaveMessage(message);
-      })
-      .finally(() => {
-        setIsSudokuSaving(false);
-      });
-  }, [
-    isSudokuCompleted,
-    sudokuDifficulty,
-    sudokuHintCount,
-    sudokuPuzzleId,
-    sudokuSeconds,
-  ]);
 
   /* ─────────────────────────────
      달력 날짜 생성
@@ -10487,95 +10277,11 @@ function toggleSearchBar() {
         null;
     }, 900);
 }
-  function startSudokuGame(difficulty: SudokuDifficulty) {
-      console.log("START SUDOKU:", difficulty);
-    const game = generateSudokuGame(difficulty);
-    const puzzleId = createPuzzleId(difficulty);
 
-    submittedSudokuIdRef.current = null;
-    setSudokuPuzzleId(puzzleId);
-    setSudokuSaveMessage("");
-    setIsSudokuSaving(false);
-    setSudokuDifficulty(difficulty);
-    setSudokuPuzzle(game.puzzle);
-    setSudokuBoard(copySudokuBoard(game.puzzle));
-    setSudokuSolution(game.solution);
-    setSelectedSudokuCell(null);
-    setSudokuHintCount(3);
-    setSudokuSeconds(0);
-    setIsSudokuCompleted(false);
-    setIsSudokuRunning(true);
-  }
 
-  function selectSudokuNumber(value: number) {
-    if (!selectedSudokuCell || isSudokuCompleted) {
-      return;
-    }
 
-    const { row, column } = selectedSudokuCell;
 
-    if (sudokuPuzzle[row]?.[column] !== 0) {
-      return;
-    }
 
-    const nextBoard = copySudokuBoard(sudokuBoard);
-    nextBoard[row][column] = value;
-    setSudokuBoard(nextBoard);
-
-    const completed = nextBoard.every((boardRow, rowIndex) =>
-      boardRow.every(
-        (cellValue, columnIndex) =>
-          cellValue === sudokuSolution[rowIndex][columnIndex],
-      ),
-    );
-
-    if (completed) {
-      setIsSudokuCompleted(true);
-      setIsSudokuRunning(false);
-    }
-  }
-
-  function useSudokuHint() {
-    if (sudokuHintCount <= 0 || isSudokuCompleted) {
-      return;
-    }
-
-    const availableCells: SudokuCell[] = [];
-
-    sudokuBoard.forEach((row, rowIndex) => {
-      row.forEach((value, columnIndex) => {
-        if (value !== sudokuSolution[rowIndex][columnIndex]) {
-          availableCells.push({ row: rowIndex, column: columnIndex });
-        }
-      });
-    });
-
-    if (availableCells.length === 0) {
-      return;
-    }
-
-    const target =
-      availableCells[Math.floor(Math.random() * availableCells.length)];
-    const nextBoard = copySudokuBoard(sudokuBoard);
-    nextBoard[target.row][target.column] =
-      sudokuSolution[target.row][target.column];
-
-    setSudokuBoard(nextBoard);
-    setSelectedSudokuCell(target);
-    setSudokuHintCount((previous) => previous - 1);
-
-    const completed = nextBoard.every((boardRow, rowIndex) =>
-      boardRow.every(
-        (cellValue, columnIndex) =>
-          cellValue === sudokuSolution[rowIndex][columnIndex],
-      ),
-    );
-
-    if (completed) {
-      setIsSudokuCompleted(true);
-      setIsSudokuRunning(false);
-    }
-  }
 
 
 async function submitFeedback() {
@@ -13745,83 +13451,7 @@ setSecretPinInput("");
             data-hoo-vertical-scroll="true"
             className="isolate mt-4 grid h-0 min-h-0 flex-1 touch-pan-y gap-4 overflow-y-scroll overscroll-contain pb-8 pr-0.5 sm:mt-7 sm:gap-5 sm:pr-1 lg:grid-cols-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
           >
-            {/* 스도쿠 카드 */}
-            <article className="rounded-[22px] border border-[#ded8ef] bg-[#faf9ff] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
-              <div className="flex items-center gap-4">
-                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#eeeafd] text-3xl">
-                  🧩
-                </span>
 
-                <div>
-                  <p className="text-[11px] font-black tracking-[0.16em] text-[#928ba8]">
-                    NUMBER PUZZLE
-                  </p>
-
-                  <h3 className="text-2xl font-black text-[#332f45]">
-                    스도쿠
-                  </h3>
-                </div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-3 gap-2 sm:mt-6">
-                {(["easy", "normal", "hard"] as SudokuDifficulty[]).map(
-                  (difficulty) => (
-                    <button
-                      key={difficulty}
-                      type="button"
-                      onClick={() =>
-                        setSudokuDifficulty(difficulty)
-                      }
-                      className={`rounded-xl py-2 text-xs font-black transition ${
-                        sudokuDifficulty === difficulty
-                          ? "bg-[#7467d8] text-white"
-                          : "bg-white text-[#827b95] hover:bg-[#eeeafd]"
-                      }`}
-                    >
-                      {getSudokuDifficultyLabel(difficulty)}
-                    </button>
-                  ),
-                )}
-              </div>
-
-              <div className="mt-4 space-y-3 rounded-2xl bg-white p-4 sm:mt-6">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#928ba8]">
-                    최고기록
-                  </span>
-
-                 <strong className="text-lg font-black text-[#332f45]">
-  {sudokuBestTimes[sudokuDifficulty] === null
-    ? "--:--"
-    : formatSudokuTime(
-        sudokuBestTimes[sudokuDifficulty] as number,
-      )}
-</strong>
-
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#928ba8]">
-                    타임어택
-                  </span>
-
-                  <strong className="text-sm font-black text-[#7467d8]">
-                    10:00
-                  </strong>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  startSudokuGame(sudokuDifficulty);
-                  openMinigame("sudoku");
-                }}
-                className="mt-4 w-full rounded-2xl bg-[#7467d8] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#6255c7] sm:mt-6"
-              >
-                스도쿠 플레이
-              </button>
-            </article>
 
            {/* 2048 카드 */}
 
@@ -14051,127 +13681,9 @@ setSecretPinInput("");
               </button>
             </article>
 
-            {/* 사천성 카드 */}
-            <article className="order-3 rounded-[22px] border border-[#ded8ef] bg-[#faf9ff] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
-              <div className="flex items-center gap-4">
-                <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#efe8ff] text-3xl">
-                  🀄
-                </span>
 
-                <div>
-                  <p className="text-[11px] font-black tracking-[0.16em] text-[#928ba8]">
-                    TILE CONNECT
-                  </p>
 
-                  <h3 className="text-2xl font-black text-[#332f45]">
-                    HOO 사천성
-                  </h3>
-                </div>
-              </div>
 
-              <div className="mt-4 rounded-2xl bg-white p-4 sm:mt-6">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#928ba8]">
-                    전체 스테이지
-                  </span>
-
-                  <strong className="text-lg font-black text-[#332f45]">
-                    100
-                  </strong>
-                </div>
-
-                <div className="mt-3 flex items-center justify-between">
-                  <span className="text-xs font-bold text-[#928ba8]">
-                    시작 보드
-                  </span>
-
-                  <strong className="text-sm font-black text-[#7467d8]">
-                    4×4
-                  </strong>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                data-game-id="shisen"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openMinigame("shisen");
-                }}
-                className="mt-4 w-full rounded-2xl bg-[#8b63dc] py-3.5 text-sm font-black text-white transition hover:scale-[1.02] hover:bg-[#7650c9] sm:mt-6"
-              >
-                HOO 사천성 플레이
-              </button>
-            </article>
-
-                      {/* HOO BUBBLE 카드 */}
-            <article className="relative z-20 order-5 flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#59634e] bg-[#141713] p-4 text-white shadow-sm sm:rounded-[28px] sm:p-6">
-              <div className="pointer-events-none absolute inset-0 opacity-[0.08] [background-image:repeating-linear-gradient(0deg,transparent,transparent_5px,#dfe7d2_6px)]" />
-
-              <div className="relative flex items-center gap-4">
-                <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-[#aab59a]/40 bg-[#252b22] text-3xl">
-                  🦎
-                </span>
-
-                <div>
-                  <p className="text-[11px] font-black tracking-[0.16em] text-[#aab59a]">
-                    CLASSIC BUBBLE ACTION
-                  </p>
-
-                  <h3 className="font-mono text-2xl font-black tracking-[0.06em] text-white">
-                    HOO BUBBLE
-                  </h3>
-                </div>
-              </div>
-
-              <div className="relative mt-4 space-y-3 rounded-2xl border border-[#aab59a]/20 bg-black/25 p-4 sm:mt-6">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-bold text-white/45">
-                    주인공
-                  </span>
-
-                  <strong className="text-right text-sm font-black text-[#dfe7d2]">
-                    하찮은 두 발 도마뱀
-                  </strong>
-                </div>
-
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-bold text-white/45">
-                    조작 방식
-                  </span>
-
-                  <strong className="text-right text-sm font-black text-white">
-                    4방향 · 버블 발사
-                  </strong>
-                </div>
-
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-bold text-white/45">
-                    플레이
-                  </span>
-
-                  <strong className="text-right text-sm font-black text-white">
-                    버블 포획 · 연속 스테이지
-                  </strong>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                data-game-id="bubble"
-                aria-label="HOO BUBBLE 게임 열기"
-                onPointerDown={(event) => {
-                  event.stopPropagation();
-                }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  openMinigame("bubble");
-                }}
-                className="relative z-30 mt-auto w-full touch-manipulation rounded-2xl border border-[#cfd8c2]/60 bg-[#59634e] py-3.5 font-mono text-sm font-black tracking-[0.08em] text-white transition hover:scale-[1.02] hover:bg-[#6b765e] active:scale-[0.98]"
-              >
-                HOO BUBBLE 플레이
-              </button>
-            </article>
 
             {/* HOO WORLD 카드 */}
             <article className="relative order-6 flex min-h-[360px] flex-col overflow-hidden rounded-[22px] border border-[#b8d6aa] bg-gradient-to-b from-[#f5fbef] to-[#e3f0d8] p-4 shadow-sm sm:rounded-[28px] sm:p-6">
@@ -14251,9 +13763,11 @@ setSecretPinInput("");
 
       <div className="hidden h-full min-h-0 xl:block">
         <div className="hoo-community-readable h-full">
-          <HooCommunityPanel
+          {hasOpenedGames && (
+            <HooCommunityPanel
             refreshKey={communityRefreshKey}
           />
+          )}
         </div>
       </div>
       </section>
@@ -14325,22 +13839,18 @@ setSecretPinInput("");
         </article>
 
         <div className="min-h-0">
-          <HooCommunityPanel
+          {hasOpenedGames && (
+            <HooCommunityPanel
             refreshKey={communityRefreshKey}
           />
+          )}
         </div>
       </section>
     )}
 
     {(() => {
       switch (minigameScreen) {
-        case "shisen":
-          return (
-            <HooShisenGame
-              key="hoo-shisen-game"
-              onExit={closeMinigame}
-            />
-          );
+
 
         case "1952":
           return (
@@ -14353,232 +13863,26 @@ setSecretPinInput("");
             />
           );
 
-        case "bubble":
-          return (
-            <HooBubbleGame
-              key="hoo-bubble-game"
-              onExit={closeMinigame}
-              onRecordSaved={() => {
-                setCommunityRefreshKey((previous) => previous + 1);
-              }}
-            />
-          );
+
 
         default:
           return null;
       }
     })()}
 
-    {minigameScreen === "sudoku" &&
-      createPortal(
-      <section className="fixed inset-0 z-[999999] h-[100dvh] w-[100dvw] overflow-y-auto overscroll-none bg-black text-white">
-        <div className="mx-auto min-h-full w-full max-w-[1100px] px-3 pb-[calc(20px+env(safe-area-inset-bottom))] pt-[calc(12px+env(safe-area-inset-top))] sm:px-6 sm:pb-8 sm:pt-5">
-        <header className="flex items-center justify-between gap-4 border-b border-white/10 pb-4 sm:pb-5">
-          <div>
-            <p className="text-[10px] font-black tracking-[0.2em] text-white/40 sm:text-xs">
-              HOO MINI GAME
-            </p>
 
-            <h2 className="mt-1 text-2xl font-black tracking-[0.08em] text-white sm:text-4xl">
-              스도쿠
-            </h2>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setIsSudokuRunning(false);
-              closeMinigame();
-            }}
-            className="flex min-h-11 items-center gap-2 rounded-full border border-white/25 bg-black px-4 py-2 text-sm font-black text-white transition active:scale-[0.97] sm:px-6 sm:py-3 sm:text-base md:hover:border-white/60 md:hover:bg-white/5"
-          >
-            나가기
-
-            <span className="text-xl font-light leading-none sm:text-2xl">
-              ×
-            </span>
-          </button>
-        </header>
-
-      <div className="mt-4 grid gap-4 sm:mt-6 sm:gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-  {/* 왼쪽: 스도쿠 게임판 */}
-  <article className="rounded-[28px] border border-[#ded8ef] bg-[#faf9ff] p-5 md:p-7">
-    <div className="mx-auto grid w-full max-w-[540px] grid-cols-9 overflow-hidden rounded-2xl border-4 border-[#4f4965] bg-[#4f4965]">
-      {sudokuBoard.map((row, rowIndex) =>
-        row.map((value, columnIndex) => {
-          const isFixed =
-            sudokuPuzzle[rowIndex]?.[columnIndex] !== 0;
-
-          const isSelected =
-            selectedSudokuCell?.row === rowIndex &&
-            selectedSudokuCell?.column === columnIndex;
-
-          const isIncorrect =
-            value !== 0 &&
-            value !==
-              sudokuSolution[rowIndex]?.[columnIndex];
-
-          const thickRightBorder =
-            columnIndex === 2 || columnIndex === 5;
-
-          const thickBottomBorder =
-            rowIndex === 2 || rowIndex === 5;
-
-          return (
-            <button
-              key={`${rowIndex}-${columnIndex}`}
-              type="button"
-              disabled={isFixed || isSudokuCompleted}
-              onClick={() =>
-                setSelectedSudokuCell({
-                  row: rowIndex,
-                  column: columnIndex,
-                })
-              }
-              className={`aspect-square border border-[#d9d4e7] text-base font-black transition md:text-xl ${
-                thickRightBorder
-                  ? "border-r-[3px] border-r-[#4f4965]"
-                  : ""
-              } ${
-                thickBottomBorder
-                  ? "border-b-[3px] border-b-[#4f4965]"
-                  : ""
-              } ${
-                isFixed
-                  ? "bg-[#eeeafd] text-[#3f3955]"
-                  : isSelected
-                    ? "bg-[#dcd5ff] text-[#6255c7]"
-                    : "bg-white text-[#7467d8] hover:bg-[#f5f2ff]"
-              } ${
-                isIncorrect
-                  ? "bg-[#ffe3e8] text-[#d94f6b]"
-                  : ""
-              }`}
-            >
-              {value === 0 ? "" : value}
-            </button>
-          );
-        }),
-      )}
-    </div>
-
-    {/* 숫자 선택 */}
-    <div className="mx-auto mt-6 grid w-full max-w-[540px] grid-cols-9 gap-2">
-      {SUDOKU_NUMBERS.map((number) => (
-        <button
-          key={number}
-          type="button"
-          disabled={
-            !selectedSudokuCell || isSudokuCompleted
-          }
-          onClick={() => selectSudokuNumber(number)}
-          className="aspect-square rounded-xl bg-[#7467d8] text-sm font-black text-white transition hover:scale-105 hover:bg-[#6255c7] disabled:cursor-not-allowed disabled:bg-[#c9c4d8]"
-        >
-          {number}
-        </button>
-      ))}
-    </div>
-  </article>
-
-  {/* 오른쪽: 게임 정보 */}
-  <aside className="rounded-[28px] border border-[#ded8ef] bg-[#f7f5ff] p-6">
-    <p className="text-xs font-black tracking-[0.18em] text-[#928ba8]">
-      GAME STATUS
-    </p>
-
-    <h3 className="mt-1 text-2xl font-black text-[#332f45]">
-      게임 정보
-    </h3>
-
-    <div className="mt-6 rounded-2xl bg-white p-5 text-center">
-      <p className="text-xs font-bold text-[#928ba8]">
-        진행 시간
-      </p>
-
-      <p className="mt-2 text-4xl font-black text-[#7467d8]">
-        {formatSudokuTime(sudokuSeconds)}
-      </p>
-    </div>
-
-    <div className="mt-4 space-y-3">
-      <div className="flex items-center justify-between rounded-2xl bg-white p-4">
-        <span className="text-xs font-bold text-[#928ba8]">
-          난이도
-        </span>
-
-        <strong className="text-sm font-black text-[#332f45]">
-          {getSudokuDifficultyLabel(sudokuDifficulty)}
-        </strong>
-      </div>
-
-      <div className="flex items-center justify-between rounded-2xl bg-white p-4">
-        <span className="text-xs font-bold text-[#928ba8]">
-          남은 힌트
-        </span>
-
-        <strong className="text-sm font-black text-[#f0a33a]">
-          {sudokuHintCount}개
-        </strong>
-      </div>
-    </div>
-
-    <button
-      type="button"
-      disabled={
-        sudokuHintCount <= 0 || isSudokuCompleted
-      }
-      onClick={useSudokuHint}
-      className="mt-5 w-full rounded-2xl bg-[#f0a33a] py-3.5 text-sm font-black text-white transition hover:bg-[#df9027] disabled:cursor-not-allowed disabled:bg-[#c9c4d8]"
-    >
-      힌트 사용
-    </button>
-
-    <button
-      type="button"
-      onClick={() =>
-        startSudokuGame(sudokuDifficulty)
-      }
-      className="mt-3 w-full rounded-2xl bg-[#eeeafd] py-3.5 text-sm font-black text-[#665e82] transition hover:bg-[#ddd7fa]"
-    >
-      다시 시작
-    </button>
-
-    {isSudokuCompleted && (
-      <div className="mt-5 rounded-2xl border border-[#8ce0af] bg-[#ecfff3] p-4 text-center">
-        <p className="text-xl font-black text-[#27955b]">
-          🎉 스도쿠 완료!
-        </p>
-
-        <p className="mt-2 text-xs font-bold text-[#557061]">
-          기록 {formatSudokuTime(sudokuSeconds)}
-        </p>
-      </div>
-    )}
-
-    {sudokuSaveMessage && (
-      <p className="mt-4 rounded-2xl bg-white px-4 py-3 text-center text-xs font-bold text-[#746d83]">
-        {isSudokuSaving
-          ? "기록 저장 중..."
-          : sudokuSaveMessage}
-      </p>
-    )}
-  </aside>
-</div>
-        </div>
-      </section>
-      ,
-      document.body,
-    )}
   </div>
 </section>
 
           {/* 네 번째 패널: 음악 커뮤니티 */}
           <section className="flex h-[100dvh] w-screen shrink-0 items-start overflow-x-hidden overflow-y-auto overscroll-y-contain px-3 pb-[calc(24px+var(--hoo-safe-bottom))] pt-[calc(92px+var(--hoo-safe-top))] sm:px-4 md:px-7 xl:items-center xl:py-16 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
             <div className="mx-auto w-full max-w-[1380px]">
-              <HooMusicCommunity
+              {hasOpenedMusic && (
+                <HooMusicCommunity
                 isLoggedIn={isLoggedIn}
                 nickname={loggedInNickname}
               />
+              )}
             </div>
           </section>
 
@@ -16190,9 +15494,6 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
         HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY,
       );
 
-      window.sessionStorage.removeItem(
-        HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
-      );
 
       const savedPermission =
         window.localStorage.getItem(

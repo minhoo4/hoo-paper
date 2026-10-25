@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 
 import Link from "next/link";
@@ -14,6 +14,7 @@ import {
 } from "react";
 
 import HooTradingDock, { HooTradingStatus } from "@/components/HooWorld/HooTradingDock";
+import HooShopV2StagePanel, { HOO_STAGE_GIFT_SELECT_EVENT } from "@/components/HooWorld/shop/HooShopV2StagePanel";
 
 import HooWorldPlayer, {
   type HooWorldPlayerFacing,
@@ -84,9 +85,6 @@ const HOO_WORLD_FOCUS_READY_KEY =
 
 const HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY =
   "hoo-world-focus-character-slot";
-
-const HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY =
-  "hoo-world-focus-operator-skin";
 
 const HOO_WORLD_FOCUS_REGION_KEY =
   "hoo-world-focus-world-region-id";
@@ -7407,6 +7405,19 @@ export default function HooWorldPage() {
     );
 
     async function loadConsumedFoodItems() {
+      // Only rows corresponding to food currently used by the HOO WORLD
+      // catalog can affect rendering. Retain historical IDs in localStorage
+      // and keep the Realtime INSERT subscription unchanged.
+      const relevantFoodItemIds =
+        HOO_WORLD_FIELD_FOOD_ITEMS.map(
+          (item) => item.itemId,
+        );
+
+      if (relevantFoodItemIds.length === 0) {
+        setIsConsumedFoodStateReady(true);
+        return;
+      }
+
       const {
         data,
         error,
@@ -7417,6 +7428,10 @@ export default function HooWorldPage() {
           )
           .select(
             "item_id",
+          )
+          .in(
+            "item_id",
+            relevantFoodItemIds,
           );
 
       if (cancelled) {
@@ -9686,9 +9701,6 @@ export default function HooWorldPage() {
         HOO_WORLD_FOCUS_CHARACTER_SLOT_KEY,
       );
 
-      window.sessionStorage.removeItem(
-        HOO_WORLD_FOCUS_OPERATOR_SKIN_KEY,
-      );
 
       console.error(
         "HOO WORLD 포커스모드 연결에 실패했습니다.",
@@ -11379,7 +11391,7 @@ export default function HooWorldPage() {
                                   adminCharacter.facing
                                 }
                                 characterSlot={4}
-                                isAdmin
+                                isAdmin={false}
                                 accessoryIds={[]}
                               />
                             )
@@ -11859,10 +11871,7 @@ export default function HooWorldPage() {
                       remotePlayer.characterSlot ??
                       4
                     }
-                    isAdmin={
-                      remotePlayer.operatorSkin ===
-                      true
-                    }
+                    isAdmin={false}
                     accessoryIds={[]}
                     hasCold={
                       remotePlayer.cold ===
@@ -11870,6 +11879,25 @@ export default function HooWorldPage() {
                     }
                   />
                 </div>
+                {process.env.NEXT_PUBLIC_HOO_SHOP_V2_STAGE_UI === "true" &&
+                  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(remotePlayer.userId) && (
+                    <button
+                      type="button"
+                      className="pointer-events-auto absolute -right-6 -top-3 z-[35] rounded-full border border-white/75 bg-[#f6f3dc] px-2 py-1 text-base shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+                      aria-label={`${remotePlayer.nickname}님에게 스테이징 선물 보내기`}
+                      title={`${remotePlayer.nickname} · 수신자 선택 (스테이징)`}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onPointerUp={(event) => event.stopPropagation()}
+                      onTouchStart={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        window.dispatchEvent(new CustomEvent(HOO_STAGE_GIFT_SELECT_EVENT, {
+                          detail: { userId: remotePlayer.userId },
+                        }));
+                      }}
+                    >🎁</button>
+                  )}
               </div>
             </div>
           );
@@ -12349,6 +12377,7 @@ export default function HooWorldPage() {
       </header>
 
       {/* 기존 포커스모드 버튼 바로 위: 별도 페이지 이동 없이 후월드 내부 거래 UI 오픈 */}
+      {process.env.NEXT_PUBLIC_HOO_SHOP_V2_STAGE_UI === 'true' && <HooShopV2StagePanel />}
       <HooTradingDock
         buttonBottom={84}
         walletHoo={hooCoinBalance}

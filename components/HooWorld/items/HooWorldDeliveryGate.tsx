@@ -1293,7 +1293,7 @@ export default function HooWorldDeliveryGate({
    * - hoo_world_delivery_world_state가 변경되면 즉시 다시 조회한다.
    * - 다른 이용자가 상자에서 아이템을 꺼내도
    *   남은 아이템 수 / 상자 사라짐이 모두에게 바로 반영된다.
-   * - Realtime이 잠깐 끊겨도 4초 polling으로 자동 복구한다.
+   * - Realtime이 잠깐 끊겨도 30초 polling으로 자동 복구한다.
    */
   useEffect(() => {
     void refreshDeliveryState();
@@ -1322,9 +1322,11 @@ export default function HooWorldDeliveryGate({
     const timer =
       window.setInterval(
         () => {
-          void refreshDeliveryState();
+          if (document.visibilityState === "visible") {
+            void refreshDeliveryState();
+          }
         },
-        4000,
+        30000,
       );
 
     function handleVisibilityChange() {

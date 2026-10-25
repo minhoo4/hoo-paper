@@ -28,20 +28,27 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
+    let body: Record<string, unknown>;
+    try {
+      const raw: unknown = await request.json();
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return NextResponse.json({ error: "올바른 요청 형식이 아닙니다." }, { status: 400 });
+      }
+      body = raw as Record<string, unknown>;
+    } catch {
+      return NextResponse.json({ error: "올바른 요청 형식이 아닙니다." }, { status: 400 });
+    }
 
     const difficulty =
       typeof body.difficulty === "string"
         ? body.difficulty
         : "";
 
-    const score = Number(body.score);
+    const score = typeof body.score === "number" ? body.score : NaN;
 
-    const elapsedSeconds = Number(
-      body.elapsedSeconds,
-    );
+    const elapsedSeconds = typeof body.elapsedSeconds === "number" ? body.elapsedSeconds : NaN;
 
-    const maxTile = Number(body.maxTile);
+    const maxTile = typeof body.maxTile === "number" ? body.maxTile : NaN;
 
     if (!DIFFICULTIES.has(difficulty)) {
       return NextResponse.json(
@@ -55,7 +62,7 @@ export async function POST(request: Request) {
     }
 
     if (
-      !Number.isInteger(score) ||
+      !Number.isSafeInteger(score) ||
       score < 0
     ) {
       return NextResponse.json(
@@ -69,7 +76,7 @@ export async function POST(request: Request) {
     }
 
     if (
-      !Number.isInteger(elapsedSeconds) ||
+      !Number.isSafeInteger(elapsedSeconds) ||
       elapsedSeconds < 0
     ) {
       return NextResponse.json(
@@ -84,7 +91,7 @@ export async function POST(request: Request) {
     }
 
     if (
-      !Number.isInteger(maxTile) ||
+      !Number.isSafeInteger(maxTile) ||
       maxTile < 2
     ) {
       return NextResponse.json(
@@ -133,19 +140,7 @@ export async function POST(request: Request) {
           },
         );
 
-        return NextResponse.json(
-          {
-            error:
-              insertError.message,
-            code: insertError.code,
-            details:
-              insertError.details,
-            hint: insertError.hint,
-          },
-          {
-            status: 500,
-          },
-        );
+        return NextResponse.json({ error: "게임 기록을 처리하지 못했습니다." }, { status: 500 });
       }
 
       const {
@@ -175,21 +170,7 @@ export async function POST(request: Request) {
           },
         );
 
-        return NextResponse.json(
-          {
-            error:
-              bestScoreError.message,
-            code:
-              bestScoreError.code,
-            details:
-              bestScoreError.details,
-            hint:
-              bestScoreError.hint,
-          },
-          {
-            status: 500,
-          },
-        );
+        return NextResponse.json({ error: "게임 기록을 처리하지 못했습니다." }, { status: 500 });
       }
 
       return NextResponse.json({
@@ -236,18 +217,7 @@ export async function POST(request: Request) {
         },
       );
 
-      return NextResponse.json(
-        {
-          error: rpcError.message,
-          code: rpcError.code,
-          details:
-            rpcError.details,
-          hint: rpcError.hint,
-        },
-        {
-          status: 500,
-        },
-      );
+      return NextResponse.json({ error: "게임 기록을 처리하지 못했습니다." }, { status: 500 });
     }
 
     const result = Array.isArray(data)

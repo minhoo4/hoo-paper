@@ -47,7 +47,21 @@ export async function POST(request: Request) {
     let body: CreateNoticeBody;
 
     try {
-      body = (await request.json()) as CreateNoticeBody;
+      const text = await request.text();
+      if (text.length > 20000) {
+        return NextResponse.json(
+          { error: "요청 크기 제한을 초과했습니다." },
+          { status: 413 },
+        );
+      }
+      const parsed: unknown = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return NextResponse.json(
+          { error: "올바른 요청 형식이 아닙니다." },
+          { status: 400 },
+        );
+      }
+      body = parsed as CreateNoticeBody;
     } catch {
       return NextResponse.json(
         { error: "올바른 요청 형식이 아닙니다." },
@@ -111,11 +125,7 @@ export async function POST(request: Request) {
       console.error("공지 저장 실패:", noticeError);
 
       return NextResponse.json(
-        {
-          error:
-            noticeError?.message ??
-            "공지를 저장하지 못했습니다.",
-        },
+        { error: "공지를 저장하지 못했습니다." },
         { status: 500 },
       );
     }

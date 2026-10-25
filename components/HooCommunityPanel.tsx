@@ -72,15 +72,10 @@ type MyStats = {
   nickname_tag: number;
   avatar_emoji: string;
   total_score: number;
-  completed_games: number;
-  easy_count: number;
-  normal_count: number;
-  hard_count: number;
-  current_streak: number;
-  best_streak: number;
   achievements: string[] | null;
   mini_game_total_score?: number;
   mini_game_scores?: LocalMiniGameScores;
+  score2048?: number;
 } | null;
 
 const PERIOD_LABEL: Record<RankingPeriod, string> = {
@@ -89,33 +84,12 @@ const PERIOD_LABEL: Record<RankingPeriod, string> = {
   all: "종합 점수",
 };
 
-type LocalMiniGameScores = {
-  shisen: number;
-  hoo1952: number;
-  bubble: number;
-};
-
-const LOCAL_MINIGAME_SCORE_KEYS = {
-  shisen: "hoo-shisen-ranking-score",
-  hoo1952: "hoo-1952-ranking-score",
-  bubble: "hoo-bubble-ranking-score",
-} as const;
+type LocalMiniGameScores = { hoo1952: number };
 
 function readLocalMiniGameScores(): LocalMiniGameScores {
-  if (typeof window === "undefined") {
-    return { shisen: 0, hoo1952: 0, bubble: 0 };
-  }
-
-  const readScore = (key: string) => {
-    const value = Number.parseInt(window.localStorage.getItem(key) ?? "0", 10);
-    return Number.isFinite(value) && value > 0 ? value : 0;
-  };
-
-  return {
-    shisen: readScore(LOCAL_MINIGAME_SCORE_KEYS.shisen),
-    hoo1952: readScore(LOCAL_MINIGAME_SCORE_KEYS.hoo1952),
-    bubble: readScore(LOCAL_MINIGAME_SCORE_KEYS.bubble),
-  };
+  if (typeof window === "undefined") return { hoo1952: 0 };
+  const score = Number.parseInt(window.localStorage.getItem("hoo-1952-ranking-score") ?? "0", 10);
+  return { hoo1952: Number.isSafeInteger(score) && score > 0 ? score : 0 };
 }
 
 type HooCommunityPanelProps = {
@@ -133,8 +107,7 @@ export default function HooCommunityPanel({
     "score" | "timeAttack"
   >("score");
 
-const [selectedGame, setSelectedGame] =
-  useState<"sudoku" | "2048">("sudoku");
+const selectedGame = "2048";
 
 
   const [timeAttackRankings, setTimeAttackRankings] =
@@ -152,7 +125,7 @@ const [selectedGame, setSelectedGame] =
   const [rankings, setRankings] = useState<RankingRow[]>([]);
   const [stats, setStats] = useState<MyStats>(null);
   const [localMiniGameScores, setLocalMiniGameScores] =
-    useState<LocalMiniGameScores>({ shisen: 0, hoo1952: 0, bubble: 0 });
+    useState<LocalMiniGameScores>({ hoo1952: 0 });
   const [loading, setLoading] = useState(true);
   const [authOpen, setAuthOpen] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "signup">("login");
@@ -224,7 +197,7 @@ const loadRanking = useCallback(async () => {
   const loadMe = useCallback(async () => {
     try {
       const response = await fetch(
-        "/api/sudoku/me",
+        "/api/community/me",
         {
           cache: "no-store",
         },
@@ -248,51 +221,21 @@ const loadRanking = useCallback(async () => {
   }, []);
 
   const syncMiniGameScores = useCallback(async () => {
-    const browserScores = readLocalMiniGameScores();
-
+    // 삭제된 게임의 브라우저 점수는 읽거나 서버로 다시 전송하지 않는다.
     if (!user) {
-      setLocalMiniGameScores(browserScores);
+      setLocalMiniGameScores(readLocalMiniGameScores());
       return;
     }
-
-    const hasBrowserScore =
-      browserScores.shisen > 0 ||
-      browserScores.hoo1952 > 0 ||
-      browserScores.bubble > 0;
-
     try {
-      const response = await fetch("/api/minigame-scores", {
-        method: hasBrowserScore ? "POST" : "GET",
-        headers: hasBrowserScore
-          ? { "Content-Type": "application/json" }
-          : undefined,
-        body: hasBrowserScore
-          ? JSON.stringify({ scores: browserScores })
-          : undefined,
-        cache: "no-store",
-      });
-
-      if (!response.ok) {
-        throw new Error("미니게임 점수 동기화 실패");
-      }
-
+      const response = await fetch("/api/minigame-scores", { cache: "no-store" });
+      if (!response.ok) throw new Error("기록 조회 실패");
       const data = await response.json();
-      const serverScores = data.scores as
-        | Partial<LocalMiniGameScores>
-        | undefined;
-
-      setLocalMiniGameScores({
-        shisen: Number(serverScores?.shisen ?? 0),
-        hoo1952: Number(serverScores?.hoo1952 ?? 0),
-        bubble: Number(serverScores?.bubble ?? 0),
-      });
-
-      await Promise.all([loadMe(), loadRanking()]);
+      setLocalMiniGameScores({ hoo1952: Number(data.scores?.hoo1952 ?? 0) });
     } catch (error) {
-      console.warn("미니게임 점수를 서버와 동기화하지 못했습니다.", error);
-      setLocalMiniGameScores(browserScores);
+      console.warn("1952 점수 조회 실패", error);
+      setLocalMiniGameScores(readLocalMiniGameScores());
     }
-  }, [loadMe, loadRanking, user]);
+  }, [user]);
 
 
   const getEmailRequestState = useCallback(() => {
@@ -444,7 +387,7 @@ const loadRanking = useCallback(async () => {
             ? { id: session.user.id, email: session.user.email }
             : null,
         );
-        void loadMe();
+
         void loadRanking();
       },
     );
@@ -467,34 +410,17 @@ const loadRanking = useCallback(async () => {
     void syncMiniGameScores();
 
     window.addEventListener("storage", handleMiniGameScoreChange);
-    window.addEventListener(
-      "hoo:shisen-ranking-score",
-      handleMiniGameScoreChange,
-    );
-    window.addEventListener(
+window.addEventListener(
       "hoo:1952-ranking-score",
       handleMiniGameScoreChange,
     );
-    window.addEventListener(
-      "hoo:bubble-ranking-score",
-      handleMiniGameScoreChange,
-    );
-
-    return () => {
+return () => {
       window.removeEventListener("storage", handleMiniGameScoreChange);
-      window.removeEventListener(
-        "hoo:shisen-ranking-score",
-        handleMiniGameScoreChange,
-      );
-      window.removeEventListener(
+  window.removeEventListener(
         "hoo:1952-ranking-score",
         handleMiniGameScoreChange,
       );
-      window.removeEventListener(
-        "hoo:bubble-ranking-score",
-        handleMiniGameScoreChange,
-      );
-    };
+  };
   }, [syncMiniGameScores]);
 
   useEffect(() => {
@@ -688,13 +614,8 @@ const loadRanking = useCallback(async () => {
     setStats(null);
   }
 
-  const localMiniGameTotal =
-    localMiniGameScores.shisen +
-    localMiniGameScores.hoo1952 +
-    localMiniGameScores.bubble;
-  const displayedTotalScore =
-  (stats?.total_score ?? 0) +
-  localMiniGameTotal;
+  const localMiniGameTotal = localMiniGameScores.hoo1952;
+  const displayedTotalScore = stats?.total_score ?? 0;
   const level = getLevelProgress(displayedTotalScore);
 
   const displayedRankings = rankings;
@@ -758,19 +679,17 @@ return (
               <p className="text-[#928ba8]">총점</p>
             </div>
             <div>
-              <p className="font-black text-[#332f45]">{stats.completed_games}</p>
-              <p className="text-[#928ba8]">완료</p>
+              <p className="font-black text-[#332f45]">{localMiniGameScores.hoo1952}</p>
+              <p className="text-[#928ba8]">1952 기록</p>
             </div>
             <div>
-              <p className="font-black text-[#332f45]">🔥 {stats.current_streak}</p>
-              <p className="text-[#928ba8]">연속일</p>
+              <p className="font-black text-[#332f45]">{stats.score2048 ?? 0}</p>
+              <p className="text-[#928ba8]">2048 점수</p>
             </div>
           </div>
           {localMiniGameTotal > 0 && (
             <div className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1 rounded-xl bg-[#f7f5ff] px-3 py-2 text-[10px] font-black text-[#746d88]">
-              <span>사천성 +{localMiniGameScores.shisen}</span>
               <span>HOO 1952 +{localMiniGameScores.hoo1952}</span>
-              <span>HOO BUBBLE +{localMiniGameScores.bubble}</span>
             </div>
           )}
         </div>
@@ -875,8 +794,7 @@ return (
                     </p>
 
                     <p className="text-[11px] font-bold text-[#9b94aa]">
-                      쉬움 {row.easyCount} · 보통 {row.normalCount} · 어려움{" "}
-                      {row.hardCount}
+                      HOO 1952 · HOO 2048
                     </p>
                   </div>
 
@@ -908,31 +826,7 @@ return (
             </p>
           </div>
 
-          <div className="mt-4">
-            <label
-              htmlFor="time-attack-game"
-              className="text-[11px] font-black text-[#8f88a3]"
-            >
-              게임 선택
-            </label>
-
-            <select
-              id="time-attack-game"
-              value={selectedGame}
-              
-             onChange={(event) =>
-  setSelectedGame(event.target.value as "sudoku" | "2048")
-}
-
-              className="mt-2 w-full rounded-xl border border-[#ded8ef] bg-[#f8f6ff] px-4 py-3 text-sm font-black text-[#403a54] outline-none focus:border-[#7467d8]"
-            >
-
-            <option value="sudoku">스도쿠</option>
-<option value="2048">HOO2048</option>
-
-
-            </select>
-          </div>
+          <div className="mt-4 text-xs font-bold text-[#8f88a3]">HOO 2048 타임어택</div>
 
           <div
             className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain pr-1 [&::-webkit-scrollbar]:hidden"
@@ -967,9 +861,7 @@ return (
                     </p>
 
                 <p className="text-[11px] font-bold text-[#9b94aa]">
-  {selectedGame === "sudoku"
-    ? `${row.difficulty} · 힌트 ${row.hintsUsed}회`
-    : row.difficulty}
+  {row.difficulty}
 </p>
                   </div>
 

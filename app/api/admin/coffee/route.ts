@@ -5,6 +5,7 @@ import {
 import {
   createClient,
 } from "@supabase/supabase-js";
+import { createClient as createSessionClient } from "@/lib/supabase/server";
 
 const KST_OFFSET_MS =
   9 * 60 * 60 * 1000;
@@ -99,47 +100,32 @@ function sumAmounts(
   );
 }
 
-async function verifyAdmin(
-  request: NextRequest,
-) {
-  const meUrl =
-    new URL(
-      "/api/admin/me",
-      request.url,
-    );
-
-  const cookie =
-    request.headers.get("cookie") ??
-    "";
-
-  const response =
-    await fetch(meUrl, {
-      cache: "no-store",
-      headers: {
-        cookie,
-      },
-    });
-
-  if (!response.ok) {
+async function verifyAdmin(_request: NextRequest): Promise<AdminStatus | null> {
+  // Same authenticated session + permission RPCs as /api/admin/me.
+  // Do not fetch a privileged decision via a request-derived URL.
+  try {
+    const session = await createSessionClient();
+    const { data: { user }, error: authError } = await session.auth.getUser();
+    if (authError || !user) return { isLoggedIn: false, isAdmin: false, canManage: false };
+    const [adminCheck, manageCheck] = await Promise.all([
+      session.rpc("is_admin"),
+      session.rpc("can_manage_admin_content"),
+    ]);
+    if (adminCheck.error || manageCheck.error) {
+      console.error("[admin/coffee] permission query failed", {
+        admin: adminCheck.error?.code, manage: manageCheck.error?.code,
+      });
+      return { isLoggedIn: true, isAdmin: false, canManage: false };
+    }
+    return {
+      isLoggedIn: true,
+      isAdmin: adminCheck.data === true,
+      canManage: manageCheck.data === true,
+    };
+  } catch (error) {
+    console.error("[admin/coffee] permission query failed", error);
     return null;
   }
-
-  const contentType =
-    response.headers.get(
-      "content-type",
-    ) ?? "";
-
-  if (
-    !contentType.includes(
-      "application/json",
-    )
-  ) {
-    return null;
-  }
-
-  return (
-    await response.json()
-  ) as AdminStatus;
 }
 
 export async function GET(

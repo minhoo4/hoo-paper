@@ -1,28 +1,3 @@
-import type { SudokuDifficulty } from "./community-types";
-
-export const SCORE_BY_DIFFICULTY: Record<
-  SudokuDifficulty,
-  number
-> = {
-  easy: 10,
-  normal: 25,
-  hard: 50,
-};
-
-export function createPuzzleId(
-  difficulty: SudokuDifficulty,
-): string {
-  const randomPart =
-    typeof crypto !== "undefined" &&
-    "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random()
-          .toString(36)
-          .slice(2)}`;
-
-  return `${difficulty}-${randomPart}`;
-}
-
 const MAX_LEVEL = 1500;
 
 function getRequiredXpForNextLevel(
@@ -128,38 +103,6 @@ export function getLevelProgress(totalXp: number) {
     neededXp,
     nextLevelXp,
     progressPercent,
-  };
-}
-
-export async function submitSudokuCompletion(input: {
-  puzzleId: string;
-  difficulty: SudokuDifficulty;
-  elapsedSeconds: number;
-  hintsUsed: number;
-}) {
-  const response = await fetch(
-    "/api/sudoku/complete",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(input),
-    },
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(
-      data.error ?? "기록 저장에 실패했습니다.",
-    );
-  }
-
-  return data as {
-    score: number;
-    totalScore: number;
-    alreadyCompleted: boolean;
   };
 }
 

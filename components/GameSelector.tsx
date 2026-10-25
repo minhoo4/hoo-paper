@@ -1,6 +1,6 @@
 "use client";
 
-export type HooGameId = "chess" | "sudoku";
+export type HooGameId = "chess";
 
 type GameSelectorProps = {
   activeGame: HooGameId;
@@ -19,12 +19,7 @@ const GAMES: Array<{
     title: "체스 퍼즐",
     description: "체크메이트 수를 찾아보세요.",
   },
-  {
-    id: "sudoku",
-    icon: "▦",
-    title: "스도쿠",
-    description: "숫자 퍼즐을 완성하세요.",
-  },
+
 ];
 
 export default function GameSelector({
