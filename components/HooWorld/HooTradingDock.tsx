@@ -63,6 +63,11 @@ const fmt=(v:number,d=2)=>Number(v||0).toLocaleString('ko-KR',{minimumFractionDi
 const signed=(v:number,d=2)=>(v>=0?'+':'')+fmt(v,d);
 const percent=(v:number)=>signed(v,2)+'%';
 function pformat(v:number){return fmt(v,v<.01?6:v<1?4:2);}
+// Never turn an unknown/loading price into a false 0 TC quote.
+function displayMarketPrice(value:unknown){
+ const number=Number(value);
+ return Number.isFinite(number)&&number>0?pformat(number):'—';
+}
 function getBrowserDb(){ return createClient(); }
 async function requestTrading(body?:Record<string,unknown>,frame=15):Promise<Snapshot> {
  const client=getBrowserDb();
@@ -89,6 +94,12 @@ async function requestTrading(body?:Record<string,unknown>,frame=15):Promise<Sna
  });
  const json=await res.json().catch(()=>{throw new Error('서버 응답이 불완전합니다. 마지막 요청 확인 버튼으로 결과를 확인해주세요.');});
  if(!res.ok){
+   // The account RPC may be blocked by economy maintenance. The public chart remains available.
+   if(res.status===423&&json.code==='ECONOMY_MAINTENANCE'){
+     const maintenanceError=new Error(json.error||'경제 점검 중: 거래와 계좌 조회가 일시 중단되었습니다.');
+     maintenanceError.name='EconomyMaintenance';
+     throw maintenanceError;
+   }
    // Explicit validation/DB rollback failures are terminal. Network and 5xx are uncertain.
    if(payload&&res.status>=400&&res.status<500)localStorage.removeItem(storageKey);
    throw new Error(`${json.error||'거래 요청 실패'}${payload?` (요청 ${payload.requestId})`:''}`);
@@ -167,6 +178,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [open,setOpen]=useState(false),[data,setData]=useState<Snapshot|null>(null);
  const [marketData,setMarketData]=useState<PublicMarket|null>(null);
  const [marketError,setMarketError]=useState<string|null>(null);
+ const [economyMaintenance,setEconomyMaintenance]=useState(false);
  const [historyBusy,setHistoryBusy]=useState(false);
  const [r4Demo,setR4Demo]=useState(false);
  const [symbol,setSymbol]=useState<SymbolCode>('HOO'),[frame,setFrame]=useState(15);
@@ -179,6 +191,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [working,setWorking]=useState(false),[error,setError]=useState<string|null>(null),[message,setMessage]=useState<string|null>(null);
  const fetching=useRef(false),marketFetching=useRef(false),isActive=useRef(false);
  const lastWalletSeen=useRef<number|null>(null);
+ // Last verified public prices survive coin/timeframe switches and in-flight requests.
+ const lastMarketPrices=useRef<Partial<Record<SymbolCode,number>>>({});
  const barsRef=useRef<Bar[]>([]),historyCursor=useRef<number|null|undefined>(undefined),historyFetching=useRef(false);
  // Ignore stale GET responses that started before a trade was submitted.
  const gate=useRef(new RequestGate());
@@ -190,11 +204,17 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    fetching.current=true;
    try{const next=await requestTrading(undefined,frame);
       if(!gate.current.accepts(token)||context!==requestContext.current)return;
-      setData(next);setError(null);
+      setData(next);setError(null);setEconomyMaintenance(false);
       if(Number.isFinite(next.walletHoo)&&lastWalletSeen.current!==next.walletHoo){
         lastWalletSeen.current=next.walletHoo;onWalletHooChange?.(next.walletHoo);
       }}
-   catch(e){if(gate.current.accepts(token)&&context===requestContext.current)setError(e instanceof Error?e.message:String(e));}
+   catch(e){
+     if(gate.current.accepts(token)&&context===requestContext.current){
+       const maintenance=e instanceof Error&&e.name==='EconomyMaintenance';
+       setEconomyMaintenance(maintenance);
+       setError(maintenance?null:e instanceof Error?e.message:String(e));
+     }
+   }
    finally{fetching.current=false;}
  },[frame,onWalletHooChange]);
  useEffect(()=>{
@@ -207,7 +227,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      if(open){document.documentElement.dataset.hooTrading='off';document.dispatchEvent(new CustomEvent('hoo:trading:change',{detail:{active:false}}));}
    };
  },[open,onActiveChange,refresh]);
- useEffect(()=>{if(!open)return;const poll=setInterval(()=>void refresh(),4500);return()=>clearInterval(poll);},[open,refresh]);
+ useEffect(()=>{if(!open)return;const poll=setInterval(()=>void refresh(),economyMaintenance?15000:4500);return()=>clearInterval(poll);},[open,refresh,economyMaintenance]);
  useEffect(()=>{
    if(!open)return;
    const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape')setOpen(false);};
@@ -219,7 +239,12 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    const context=`true:${symbol}:${frame}`;
    if(context!==requestContext.current||marketFetching.current||!isActive.current)return;
    marketFetching.current=true;
-   try{const next=await requestMarket(symbol,frame);if(context!==requestContext.current)return;const merged=new Map(barsRef.current.map(b=>[b.t,b]));for(const b of next.candles[symbol]||[])merged.set(b.t,b);
+   try{const next=await requestMarket(symbol,frame);if(context!==requestContext.current)return;
+     for(const code of SYMBOLS){
+       const price=Number(next.prices?.[code]);
+       if(Number.isFinite(price)&&price>0)lastMarketPrices.current[code]=price;
+     }
+     const merged=new Map(barsRef.current.map(b=>[b.t,b]));for(const b of next.candles[symbol]||[])merged.set(b.t,b);
      barsRef.current=[...merged.values()].sort((a,b)=>a.t-b.t).slice(-MAX_RETAINED_CANDLES);
      setMarketData({...next,candles:{[symbol]:barsRef.current}});setMarketError(null);
      if(historyCursor.current===undefined)historyCursor.current=next.historyBefore;
@@ -241,7 +266,9 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  },[symbol,frame]);
  useEffect(()=>{
    if(!open)return;
-   setMarketData(null);setMarketError(null);setHistoryBusy(false);barsRef.current=[];historyCursor.current=undefined;
+   // Reset candles for the NEW market context, never reset verified coin prices.
+   setMarketData(previous=>previous?{...previous,candles:{}}:null);
+   setMarketError(null);setHistoryBusy(false);barsRef.current=[];historyCursor.current=undefined;
    void refreshMarket();
    const ticker=window.setInterval(()=>void refreshMarket(),1000);
    return()=>window.clearInterval(ticker);
@@ -283,7 +310,11 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    finally{gate.current.endMutation();setWorking(false);void refresh();}
  },[frame,onWalletHooChange,refresh]);
  const latestMarket=marketData&&(!data||marketData.now>=data.market.now)?marketData:data?.market;
- const market=latestMarket?{...latestMarket,candles:marketData?.candles||data?.market.candles||{}}:undefined;
+ const market=latestMarket?{
+   ...latestMarket,
+   prices:{...latestMarket.prices,...lastMarketPrices.current},
+   candles:marketData?.candles||data?.market.candles||{}
+ }:undefined;
  const livePositions=(data?.positions||[]).map(p=>{const mark=Number(market?.prices[p.symbol]??p.mark);const unrealized=Number(p.side)*Number(p.qty)*(mark-Number(p.entry_price));return {...p,mark,unrealized};});
  const liveWallet=data?.walletHoo??walletHoo;
  const verifiedCash=Number(data?.account.cash_tc||0);
@@ -414,10 +445,10 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      <main className={styles.right} aria-label="공통 거래 화면">
        <div className={styles.symbols}>
          {SYMBOLS.map(s=><button type="button" key={s} className={symbol===s?styles.selectedSymbol:''} onClick={()=>{setSymbol(s);setStop('');setTake('');}}>
-           <span>{LABELS[s]}</span><strong>{pformat(Number(market?.prices[s]||0))} <small>TC</small></strong>
+           <span>{LABELS[s]}</span><strong>{displayMarketPrice(market?.prices[s])} <small>TC</small></strong>
          </button>)}
        </div>
-       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트</small></span><strong>{pformat(mark)} <small>TC</small></strong></div>
+       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트</small></span><strong>{displayMarketPrice(market?.prices[symbol])} <small>TC</small></strong></div>
        <div className={styles.intervals}>{[1,5,15,60,240,1440].map(s=><button type="button" key={s} className={frame===s?styles.selectedFrame:''} onClick={()=>setFrame(s)}>
           {{1:'1분',5:'5분',15:'15분',60:'1시간',240:'4시간',1440:'1일'}[s as 1|5|15|60|240|1440]}
         </button>)}</div>
@@ -510,12 +541,16 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
              </div>
              <div className={styles.miniNote}>청산 비율은 실행 시점의 <b>남은 수량</b> 기준이에요. 기존 포지션의 수량과 증거금이 같은 비율로 줄어듭니다.</div>
            </div>)}
-           {!data?.positions.length&&<span className={styles.miniNote}>현재 열린 포지션이 없습니다.</span>}
+           {!data&&<span className={styles.miniNote}>거래 계좌 조회 대기 중입니다. 미확인을 포지션 0개로 해석하지 마세요.</span>}
+           {data&&!data.positions.length&&<span className={styles.miniNote}>현재 열린 포지션이 없습니다.</span>}
          </div>:<div className={styles.positions}>
            {(data?.history||[]).slice(0,15).map(x=><div className={styles.pair} key={x.id}><span>{x.symbol} · {x.action} · {pformat(Number(x.fill_price))}</span><b className={Number(x.net_pnl_tc)>=0?styles.positive:styles.negative}>{signed(Number(x.net_pnl_tc))} TC</b></div>)}
          </div>}
        </div>
        {marketError&&Boolean(market?.candles[symbol]?.length)&&<div className={styles.error} role="status">차트 연결: {marketError}</div>}
+       {economyMaintenance&&<div className={styles.notice} role="status">
+         경제 시스템 점검 중 — 공통 차트는 이용할 수 있습니다. 거래 및 계좌 조회는 점검 해제 전까지 중단됩니다.
+       </div>}
        {(error||message)&&<div className={error?styles.error:styles.notice} role="status">{error||message}</div>}
        <div className={styles.foot}>후코인 1 = 1,000 TC · 공동 가상시장 · 부분청산 / 동일방향 추가 진입 가능 · 투자 결과는 후코인 게임자산에 반영</div>
        </>}

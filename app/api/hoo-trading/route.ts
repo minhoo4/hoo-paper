@@ -15,12 +15,14 @@ function canonical(value:unknown):string {
 function fail(e:unknown,requestId?:string){
  const detail=e instanceof Error?e.message:String(e);
  const auth=detail==='UNAUTHORIZED';
- // Detailed database/configuration errors stay in server logs, correlated by requestId.
- console.error('hoo-trading',requestId||'read',detail);
+ const maintenance=detail.includes('HOO_ECONOMY_MAINTENANCE_PAUSED');
+ // Expected maintenance is NOT a server failure. Keep the underlying guard enabled.
+ if(maintenance)console.info('hoo-trading',requestId||'read','economy maintenance: market chart remains public');
+ else console.error('hoo-trading',requestId||'read',detail);
  const known=['insufficient_hoo','insufficient_tc','hoo_wallet_missing','invalid_risk_prices_after_scale_in','invalid_risk_prices','additional_entry_requires_same_leverage','opposite_side_close_first','position_not_found','market_not_caught_up','partial_close_below_precision','idempotency_key_reused_with_different_payload'];
  const code=known.find(x=>detail.includes(x));
- const message=auth?'로그인이 필요합니다.':code||(/^INVALID_|^MISSING_/.test(detail)?detail:'거래 서버 오류입니다. 요청 ID로 서버 로그를 확인해주세요.');
- return NextResponse.json({error:message,requestId},{status:auth?401:code||/^INVALID_|^MISSING_/.test(detail)?400:500,headers});
+ const message=auth?'로그인이 필요합니다.':maintenance?'경제 시스템 점검 중입니다. 차트는 이용 가능하지만 거래와 계좌 조회는 일시 중단됩니다.':code||(/^INVALID_|^MISSING_/.test(detail)?detail:'거래 서버 오류입니다. 요청 ID로 서버 로그를 확인해주세요.');
+ return NextResponse.json({error:message,...(maintenance?{code:'ECONOMY_MAINTENANCE'}:{}),requestId},{status:auth?401:maintenance?423:code||/^INVALID_|^MISSING_/.test(detail)?400:500,headers});
 }
 export async function GET(req:Request){
  try{
