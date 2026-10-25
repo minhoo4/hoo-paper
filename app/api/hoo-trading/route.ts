@@ -34,6 +34,39 @@ async function readOnlyAssets(userId:string){
  if(!Number.isSafeInteger(openPositions)||openPositions<0)throw new Error('INVALID_READ_ONLY_ASSETS:openPositions');
  return {readOnly:true,walletHoo,account:tradingAccount,openPositions};
 }
+// Pure SELECT of existing, realized trading-account statistics. This intentionally
+// does not call snapshot/catchUp, recalculate settlements, or touch economy gates.
+async function readOnlyRanking(){
+ const {data, count, error}=await admin().from('hootrading_accounts')
+  .select('user_id,display_name,total_deposit_tc,realized_tc',{count:'exact'})
+  .gte('total_deposit_tc',1000)
+  .order('user_id',{ascending:true})
+  .range(0,999);
+ if(error)throw new Error(`READ_ONLY_RANKING_ERROR: ${error.message}`);
+ if(count===null||count===undefined||count>1000||!Array.isArray(data)||data.length!==count)
+  throw new Error('READ_ONLY_RANKING_INCOMPLETE');
+ const finite=(value:unknown,field:string)=>{
+  if(value===null||value===undefined||typeof value==='boolean'||(typeof value==='string'&&value.trim()===''))
+   throw new Error(`INVALID_READ_ONLY_RANKING:${field}`);
+  const n=Number(value);
+  // Never round an enormous bigint/numeric into a misleading ranking value.
+  if(!Number.isFinite(n)||Math.abs(n)>Number.MAX_SAFE_INTEGER)throw new Error(`INVALID_READ_ONLY_RANKING:${field}`);
+  return n;
+ };
+ const ranked=data.map(record=>{
+  const deposited=finite(record.total_deposit_tc,'total_deposit_tc');
+  const profit=finite(record.realized_tc,'realized_tc');
+  if(deposited<1000)throw new Error('INVALID_READ_ONLY_RANKING:deposit_threshold');
+  const roi=profit/deposited*100;
+  if(!Number.isFinite(roi))throw new Error('INVALID_READ_ONLY_RANKING:roi');
+  const userId=String(record.user_id??'');
+  if(!/^[0-9a-f-]{36}$/i.test(userId))throw new Error('INVALID_READ_ONLY_RANKING:user_id');
+  const display=typeof record.display_name==='string'?record.display_name.trim():'';
+  return {userId,name:(display||`추종자-${userId.slice(0,6)}`).slice(0,24),roi,profit};
+ });
+ ranked.sort((a,b)=>b.roi-a.roi||b.profit-a.profit||a.userId.localeCompare(b.userId));
+ return {readOnly:true,ranking:ranked.slice(0,10),eligibleCount:count,asOf:new Date().toISOString()};
+}
 // Compare replay payloads independent of JSONB key ordering; never run a different command with an old request ID.
 function canonical(value:unknown):string {
  if(value===null||typeof value!=='object')return JSON.stringify(value);
@@ -60,6 +93,10 @@ export async function GET(req:Request){
   if(url.searchParams.get('view')==='assets'){
    // This endpoint remains available during maintenance without opening trading.
    return NextResponse.json(await readOnlyAssets(user.id),{headers});
+  }
+  if(url.searchParams.get('view')==='ranking'){
+   // Existing rankings only; no market catch-up, transaction or maintenance unlock.
+   return NextResponse.json(await readOnlyRanking(),{headers});
   }
   const timeframe=Number(url.searchParams.get('timeframe')||15);
   if(!TIMESPANS.includes(timeframe as typeof TIMESPANS[number]))throw new Error('INVALID_TIMEFRAME');

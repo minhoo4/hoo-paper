@@ -60,6 +60,7 @@ type Snapshot={receipt?:{requestId:string;committed:boolean;replayed:boolean;pos
 type ReadOnlyAssets={readOnly:true;walletHoo:number;openPositions:number;account:null|{
  cash_tc:number;total_deposit_tc:number;realized_tc:number
 }};
+type ReadOnlyRanking={readOnly:true;ranking:Leader[];eligibleCount:number;asOf:string};
 const SYMBOLS:SymbolCode[]=['HOO','EGG','COAL'];
 const LABELS:Record<SymbolCode,string>={HOO:'🦉 후코인',EGG:'🥚 계란코인',COAL:'🪨 석탄코인'};
 const fmt=(v:number,d=2)=>Number(v||0).toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d});
@@ -133,6 +134,24 @@ async function requestReadOnlyAssets():Promise<ReadOnlyAssets>{
  return json as ReadOnlyAssets;
 }
 
+// Independently fetch rankings every 15 seconds even while trading snapshots are blocked.
+async function requestReadOnlyRanking():Promise<ReadOnlyRanking>{
+ const client=getBrowserDb();
+ const {data:{session},error}=await client.auth.getSession();
+ if(error||!session?.access_token)throw new Error('랭킹 조회에 로그인이 필요합니다.');
+ const response=await fetch('/api/hoo-trading?view=ranking',{
+  headers:{Authorization:`Bearer ${session.access_token}`},cache:'no-store'
+ });
+ const json=await response.json().catch(()=>({error:'랭킹 조회 응답 오류'}));
+ if(!response.ok)throw new Error(json.error||'랭킹을 조회하지 못했습니다.');
+ if(json.readOnly!==true||!Array.isArray(json.ranking)||!Number.isSafeInteger(json.eligibleCount)||
+    json.eligibleCount<json.ranking.length||json.ranking.length>10||typeof json.asOf!=='string'||
+    json.ranking.some((p:Leader)=>!p||typeof p.userId!=='string'||typeof p.name!=='string'||
+      !Number.isFinite(p.roi)||!Number.isFinite(p.profit)))
+  throw new Error('랭킹 응답 형식이 올바르지 않습니다.');
+ return json as ReadOnlyRanking;
+}
+
 type PublicMarket={now:number;virtualMinute:number;prices:Record<SymbolCode,number>;
  candles:Partial<Record<SymbolCode,Bar[]>>;news:News[];historyBefore?:number|null};
 async function requestMarket(symbol:SymbolCode,frame:number,before?:number):Promise<PublicMarket>{
@@ -202,6 +221,9 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [economyMaintenance,setEconomyMaintenance]=useState(false);
  const [readOnlyAssets,setReadOnlyAssets]=useState<ReadOnlyAssets|null>(null);
  const [readOnlyAssetError,setReadOnlyAssetError]=useState<string|null>(null);
+ const [readOnlyRanking,setReadOnlyRanking]=useState<ReadOnlyRanking|null>(null);
+ const [rankingError,setRankingError]=useState<string|null>(null);
+ const [rankingLoading,setRankingLoading]=useState(false);
  const [historyBusy,setHistoryBusy]=useState(false);
  const [r4Demo,setR4Demo]=useState(false);
  const [symbol,setSymbol]=useState<SymbolCode>('HOO'),[frame,setFrame]=useState(15);
@@ -213,6 +235,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [newsExpanded,setNewsExpanded]=useState(false),[rankingExpanded,setRankingExpanded]=useState(false);
  const [working,setWorking]=useState(false),[error,setError]=useState<string|null>(null),[message,setMessage]=useState<string|null>(null);
  const fetching=useRef(false),marketFetching=useRef(false),isActive=useRef(false);
+ const rankingFetching=useRef(false);
  const lastWalletSeen=useRef<number|null>(null);
  // Last verified public prices survive coin/timeframe switches and in-flight requests.
  const lastMarketPrices=useRef<Partial<Record<SymbolCode,number>>>({});
@@ -272,6 +295,26 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    };
  },[open,onActiveChange,refresh]);
  useEffect(()=>{if(!open)return;const poll=setInterval(()=>void refresh(),economyMaintenance?15000:4500);return()=>clearInterval(poll);},[open,refresh,economyMaintenance]);
+ const refreshRanking=useCallback(async()=>{
+   if(!isActive.current||rankingFetching.current)return;
+   rankingFetching.current=true;
+   setRankingLoading(true);
+   try{
+     const result=await requestReadOnlyRanking();
+     if(isActive.current){setReadOnlyRanking(result);setRankingError(null);}
+   }catch(e){
+     if(isActive.current)setRankingError(e instanceof Error?e.message:String(e));
+   }finally{
+     rankingFetching.current=false;
+     if(isActive.current)setRankingLoading(false);
+   }
+ },[]);
+ useEffect(()=>{
+   if(!open)return;
+   void refreshRanking();
+   const poll=window.setInterval(()=>void refreshRanking(),15000);
+   return()=>window.clearInterval(poll);
+ },[open,refreshRanking]);
  useEffect(()=>{
    if(!open)return;
    const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape')setOpen(false);};
@@ -402,7 +445,9 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const knownUnrealized=data?livePositions.reduce((sum,p)=>sum+p.unrealized,0)
    :readOnlyAssets?.openPositions===0?0:null;
  const newsList=market?.news||[];
- const leaderboard=data?.ranking||[];
+ // A known-empty database result differs from an unavailable ranking.
+ const leaderboard=readOnlyRanking?.ranking??data?.ranking??[];
+ const rankingIsKnown=readOnlyRanking!==null||data!==null;
  const riskSide:1|-1=selectedPosition?.side??(direction==='long'?1:-1);
  const riskLeverage=Number(selectedPosition?.leverage??leverage);
  // Entry estimate accounts for the same per-symbol entry slippage used by the server.
@@ -487,14 +532,17 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          {!newsList.length&&<small>시장 뉴스 준비 중</small>}
        </section>
        <section className={styles.card}>
-         <div className={styles.cardTitle}>🏆 후레이딩 랭킹 <button type="button" onClick={()=>setRankingExpanded(x=>!x)}>{rankingExpanded?'TOP 5':'TOP 10'}</button></div>
+         <div className={styles.cardTitle}>🏆 후레이딩 랭킹 <button type="button" onClick={()=>setRankingExpanded(x=>!x)}>{rankingExpanded?'TOP 5':'TOP 10'}</button><button type="button" onClick={()=>void refreshRanking()} disabled={rankingLoading} aria-label="랭킹 새로고침">{rankingLoading?'조회 중':'↻ 갱신'}</button></div>
          <div className={styles.rankHeader}><span>순위 · 추종자</span><span>수익률</span><span>수익금</span></div>
          {(rankingExpanded?leaderboard:leaderboard.slice(0,5)).map((p,i)=><div className={styles.rankRow} key={p.userId}>
            <span>{i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`} {p.name}</span>
            <b className={p.roi>=0?styles.positive:styles.negative}>{percent(p.roi)}</b>
            <b className={p.profit>=0?styles.positive:styles.negative}>{signed(p.profit)} <small>TC</small></b>
          </div>)}
-         {!leaderboard.length&&<div className={styles.miniNote}>첫 번째 트레이더가 되어보세요!</div>}
+         {!leaderboard.length&&rankingIsKnown&&<div className={styles.miniNote}>집계 대상 거래 기록이 없습니다. 후코인 보유량만으로는 순위가 생성되지 않습니다.</div>}
+         {!leaderboard.length&&!rankingIsKnown&&!rankingError&&<div className={styles.miniNote}>랭킹 조회 중입니다…</div>}
+         {rankingError&&<div className={styles.miniNote}>랭킹 최신 조회 실패: {rankingError}{readOnlyRanking?' · 이전 조회 결과를 유지합니다.':''}</div>}
+         {readOnlyRanking&&<div className={styles.miniNote}>DB 기록 조회 완료 · 집계 대상 {readOnlyRanking.eligibleCount}명 · 15초마다 자동 갱신 (읽기 전용)</div>}
          <div className={styles.miniNote}>전체 기간 · 실현손익 ÷ 누적 입금액 · 누적 입금 1,000 TC 이상</div>
        </section>
      </aside>
