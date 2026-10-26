@@ -1212,6 +1212,7 @@ function scheduleReconnect() {
       );
     }
 
+    let verifiedJoinUser: { id: string; email?: string } | null = null; // HOO_JOIN_AUTH_REUSE_V1
     async function makePayload(
       nextFieldId: number,
     ): Promise<HooWorldPresencePlayer | null> {
@@ -1223,11 +1224,13 @@ function scheduleReconnect() {
       }
 
       const {
-        data: {
-          user,
-        },
-      } =
-        await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession(); // HOO_JOIN_SESSION_GUARD_V1
+
+      const user =
+        session !== null && verifiedJoinUser !== null && session.user.id === verifiedJoinUser.id
+          ? session.user
+          : null;
 
       if (
         !user ||
@@ -1724,6 +1727,7 @@ function scheduleReconnect() {
       }
 
       connecting = true;
+      verifiedJoinUser = null;
 
       try {
         await clearCurrentChannels();
@@ -1750,6 +1754,7 @@ function scheduleReconnect() {
 
         userIdRef.current =
           user.id;
+        verifiedJoinUser = { id: user.id, email: user.email };
 
         if (
           !joinedAtRef.current
