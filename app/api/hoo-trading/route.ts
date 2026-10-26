@@ -101,7 +101,29 @@ export async function GET(req:Request){
   }
   const timeframe=Number(url.searchParams.get('timeframe')||15);
   if(!TIMESPANS.includes(timeframe as typeof TIMESPANS[number]))throw new Error('INVALID_TIMEFRAME');
-  const clock=await catchUp(90);
+  const {data: clockData,error: clockError}=await admin()
+  .from('hootrading_market_state')
+  .select('last_second')
+  .eq('id',1)
+  .single();
+
+if(clockError||!clockData)
+  throw new Error('MARKET_CLOCK_READ_FAILED');
+
+const lastSecond=Number(clockData.last_second);
+if(!Number.isSafeInteger(lastSecond))
+  throw new Error('INVALID_MARKET_CLOCK');
+
+const remaining=Math.max(
+  0,
+  Math.floor(Date.now()/1000)-lastSecond
+);
+
+const clock={
+  caughtUp:remaining<=1,
+  remaining,
+  lastSecond
+};
   const data=await snapshot(user.id,user.name,timeframe);
   return NextResponse.json({...data,clock},{headers});
  }catch(e){return fail(e);}
