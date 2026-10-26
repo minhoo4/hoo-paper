@@ -233,7 +233,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [stop,setStop]=useState(''),[take,setTake]=useState('');
  const [stopMode,setStopMode]=useState<RiskMode>('percent'),[takeMode,setTakeMode]=useState<RiskMode>('percent');
  const [positionTab,setPositionTab]=useState<'position'|'history'>('position');
- const [newsExpanded,setNewsExpanded]=useState(false),[rankingExpanded,setRankingExpanded]=useState(false);
+ const [rankingExpanded,setRankingExpanded]=useState(false);
  const [working,setWorking]=useState(false),[error,setError]=useState<string|null>(null),[message,setMessage]=useState<string|null>(null);
  const fetching=useRef(false),marketFetching=useRef(false),isActive=useRef(false);
  const rankingFetching=useRef(false);
@@ -455,7 +455,9 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const shownRoi=shownRealized!=null?returnOnInitialCapital(Number(shownRealized)):null;
  const knownUnrealized=data?livePositions.reduce((sum,p)=>sum+p.unrealized,0)
    :readOnlyAssets?.openPositions===0?0:null;
- const newsList=market?.news||[];
+ // News is supplied by the account snapshot on V6. The 1s chart endpoint
+ // intentionally returns news: []; do not let a fresher quote response hide it.
+ const newsList=(market?.news?.length ? market.news : data?.market.news) ?? [];
  // A known-empty database result differs from an unavailable ranking.
  const leaderboard=readOnlyRanking?.ranking??data?.ranking??[];
  const rankingIsKnown=readOnlyRanking!==null||data!==null;
@@ -535,8 +537,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          <div className={styles.miniNote}>공용 후코인 지갑 · 체결 후 자동 정산 (1 HOO 미만은 TC 잔액으로 유지) · 수익률은 초기 500 HOO 대비 누적 실현손익 추정치로, 외부 지급·지출을 반영한 전체 자산 수익률과 다를 수 있습니다.</div>
        </section>
        <section className={styles.card}>
-         <div className={styles.cardTitle}>📣 오늘의 소식 <button type="button" onClick={()=>setNewsExpanded(x=>!x)}>{newsExpanded?'접기':'더보기'}</button></div>
-         {(newsExpanded?newsList:newsList.slice(0,3)).map(n=><div className={styles.newsRow} key={n.id}>
+         <div className={styles.cardTitle}>📣 오늘의 소식</div>
+         {newsList.map(n=><div className={styles.newsRow} key={n.id}>
            <span className={n.sentiment==='호재'?styles.newsGood:styles.newsBad}>{n.sentiment}</span>
            <div><b>{n.symbol}</b> {n.headline}<small>{Math.max(0,Math.floor(((market?.now||0)-n.second)/60))}시간 전 (시장 기준)</small></div>
          </div>)}
