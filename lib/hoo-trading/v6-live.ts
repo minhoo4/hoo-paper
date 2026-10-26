@@ -3,6 +3,7 @@
  * chart bars commit in the SAME PostgreSQL transaction as position settlement.
  */
 import 'server-only';
+import { randomUUID } from 'node:crypto';
 import { V6Engine, type Checkpoint } from './v6-engine';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { marketSecond } from './market';
@@ -38,6 +39,36 @@ function parsedStream(value:unknown):{last:number;start:number;checkpoint:Checkp
 }
 /** Replay all unsaved minutes. Do not fast-forward, omit OHLCV, or use legacy quotes. */
 export async function catchUpV6(db:SupabaseClient,maxTicks:number):Promise<{caughtUp:boolean;remaining:number;lastSecond:number}> {
+ // HOO_V6_SINGLE_WRITER_V1
+ const leaseToken=randomUUID();
+
+ const lease=await db.rpc('hootrading_v6_try_lease',{
+  p_token:leaseToken
+ });
+
+ if(lease.error)
+  throw new Error(`V6_LEASE_FAILED:${lease.error.message}`);
+
+ if(lease.data!==true){
+  const {data,error}=await db.from('hootrading_v6_stream')
+   .select('last_second').eq('id',1).single();
+
+  if(error)throw new Error(`V6_CLOCK_FAILED:${error.message}`);
+
+  const last=Number(data.last_second);
+  const target=marketSecond();
+
+  if(!Number.isSafeInteger(last)||last<0||last>target+2)
+   throw new Error('V6_INVALID_CLOCK');
+
+  return {
+   caughtUp:last>=target-1,
+   remaining:Math.max(0,target-last),
+   lastSecond:last
+  };
+ }
+
+ try {
  const budget=Math.min(720,Math.max(1,Math.trunc(maxTicks)));
  const deadline=Date.now()+5000;
  let produced=0,completed=0;
@@ -78,4 +109,12 @@ export async function catchUpV6(db:SupabaseClient,maxTicks:number):Promise<{caug
   completed=Number(data.last_second);
  }
  return {caughtUp:completed>=target-1,remaining:Math.max(0,target-completed),lastSecond:completed};
+ } finally {
+  const {error:releaseError}=await db.rpc(
+   'hootrading_v6_release_lease',
+   {p_token:leaseToken}
+  );
+  if(releaseError)
+   console.error('V6_LEASE_RELEASE_FAILED',releaseError.message);
+ }
 }
