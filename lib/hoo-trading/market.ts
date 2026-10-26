@@ -18,7 +18,7 @@ const parsedRebase = RAW_REBASE_UTC ? Date.parse(RAW_REBASE_UTC) : NaN;
 if(RAW_REBASE_UTC && !Number.isFinite(parsedRebase))throw new Error('INVALID_HOO_MARKET_REBASE_UTC');
 export const REBASE_AT_SECOND:number|null=Number.isFinite(parsedRebase)?Math.floor(parsedRebase/1000):null;
 export const BASE_EPOCH = Math.floor(Date.parse(process.env.HOO_MARKET_EPOCH_UTC || '2026-10-19T00:00:00.000Z') / 1000);
-export const TIMESPANS = [1,5,15,60,240,1440] as const; // simulated minute bars in real seconds
+export const TIMESPANS = [30,60,240] as const; // simulated minute bars in real seconds
 const SECRET = process.env.HOO_MARKET_SECRET;
 // Compatibility ONLY for history recorded before the private-seed cutover.
 // Existing production quotes were generated with this older public seed.
@@ -322,7 +322,7 @@ function legacySecondBar(symbol:SymbolCode,absSecond:number):MarketBar {
 }
 /** Exact hierarchy: no subsampling, no volume extrapolation. Cache only closed buckets. */
 const aggregateCache=new Map<string,MarketBar>();
-const CHILD:Record<number,number>={5:1,15:5,60:15,240:60,1440:240};
+const CHILD:Record<number,number>={5:1,15:5,30:15,60:15,240:60,1440:240};
 function mergeBars(bars:MarketBar[],t:number):MarketBar {
  return {t,open:bars[0].open,close:bars[bars.length-1].close,
   high:Math.max(...bars.map(b=>b.high)),low:Math.min(...bars.map(b=>b.low)),

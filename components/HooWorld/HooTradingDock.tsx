@@ -74,7 +74,7 @@ function displayMarketPrice(value:unknown){
  return Number.isFinite(number)&&number>0?pformat(number):'—';
 }
 function getBrowserDb(){ return createClient(); }
-async function requestTrading(body?:Record<string,unknown>,frame=15):Promise<Snapshot> {
+async function requestTrading(body?:Record<string,unknown>,frame=30):Promise<Snapshot> {
  const client=getBrowserDb();
  const {data:{session},error}=await client.auth.getSession();
  if(error||!session?.access_token)throw new Error('후월드 로그인이 필요합니다.');
@@ -229,7 +229,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [rankingLoading,setRankingLoading]=useState(false);
  const [historyBusy,setHistoryBusy]=useState(false);
  const [r4Demo,setR4Demo]=useState(false);
- const [symbol,setSymbol]=useState<SymbolCode>('HOO'),[frame,setFrame]=useState(15);
+ const [symbol,setSymbol]=useState<SymbolCode>('HOO'),[frame,setFrame]=useState(30);
  const [direction,setDirection]=useState<'long'|'short'>('long');
  const [leverage,setLeverage]=useState(3),[margin,setMargin]=useState('100');
  const [stop,setStop]=useState(''),[take,setTake]=useState('');
@@ -598,8 +598,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          </button>)}
        </div>
        <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트</small></span><strong>{displayMarketPrice(market?.prices[symbol])} <small>TC</small></strong></div>
-       <div className={styles.intervals}>{[1,5,15,60,240,1440].map(s=><button type="button" key={s} className={frame===s?styles.selectedFrame:''} onClick={()=>setFrame(s)}>
-          {{1:'1분',5:'5분',15:'15분',60:'1시간',240:'4시간',1440:'1일'}[s as 1|5|15|60|240|1440]}
+       <div className={styles.intervals}>{[30,60,240].map(s=><button type="button" key={s} className={frame===s?styles.selectedFrame:''} onClick={()=>setFrame(s)}>
+          {{30:'30분',60:'1시간',240:'4시간'}[s as 30|60|240]}
         </button>)}</div>
         {allowR4SrDemo&&<div style={{display:'flex',justifyContent:'flex-end',padding:'6px 0'}}>
           <button type="button" aria-pressed={r4Demo} onClick={()=>setR4Demo(v=>!v)}
@@ -612,8 +612,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
             ⚠ 개발용 고정 샘플 가격입니다. HOO WORLD 실제 시세·주문·지갑과 연결되지 않습니다.
             이 화면에서는 거래 조작을 표시하지 않습니다.
           </div>
-          <R4SrDemoChart symbol={symbol} timeframe={([1,5,15,60] as number[]).includes(frame)?frame:60}/>
-          {![1,5,15,60].includes(frame)&&<p>해당 봉 주기는 샘플 미지원이므로 60분봉으로 표시합니다.</p>}
+          <R4SrDemoChart symbol={symbol} timeframe={60}/>
+          <p>개발용 샘플은 1시간봉으로만 표시됩니다.</p>
         </section>:<>
         <div className={styles.chartBox}>
          {chartStale&&shownBars.length>0&&

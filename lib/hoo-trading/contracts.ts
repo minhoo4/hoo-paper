@@ -23,8 +23,8 @@ export function validateCommand(body:unknown):{requestId:string;command:Command;
    if((stop!==null&&stop<0)||(take!==null&&take<0))throw new Error('INVALID_RISK');Object.assign(command,{stop,take});
   }
  }
- const timeframe=b.timeframe===undefined?15:Number(b.timeframe);
- if(![1,5,15,60,240,1440].includes(timeframe))throw new Error('INVALID_TIMEFRAME');
+ const timeframe=b.timeframe===undefined?30:Number(b.timeframe);
+ if(![30,60,240].includes(timeframe))throw new Error('INVALID_TIMEFRAME');
  return {requestId:b.requestId,command,timeframe};
 }
 /** Guard both sides of a mutation; reject polls launched during a pending mutation. */

@@ -99,7 +99,7 @@ export async function GET(req:Request){
    // Existing rankings only; no market catch-up, transaction or maintenance unlock.
    return NextResponse.json(await readOnlyRanking(),{headers});
   }
-  const timeframe=Number(url.searchParams.get('timeframe')||15);
+  const timeframe=Number(url.searchParams.get('timeframe')||30);
   if(!TIMESPANS.includes(timeframe as typeof TIMESPANS[number]))throw new Error('INVALID_TIMEFRAME');
   const {data: clockData,error: clockError}=await admin()
   .from('hootrading_market_state')

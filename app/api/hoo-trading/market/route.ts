@@ -21,7 +21,7 @@ function publicError(error:unknown):{code:string;error:string}{
 /** Read only: never show an unprocessed future mark while account liquidation lags. */
 export async function GET(req:Request){
  try{
-  const q=new URL(req.url).searchParams,symbol=(q.get('symbol')||'HOO') as SymbolCode,timeframe=Number(q.get('timeframe')||15);
+  const q=new URL(req.url).searchParams,symbol=(q.get('symbol')||'HOO') as SymbolCode,timeframe=Number(q.get('timeframe')||30);
   if(!SYMBOLS.includes(symbol)||!TIMESPANS.includes(timeframe as typeof TIMESPANS[number]))return NextResponse.json({error:'종목 또는 시간봉 오류'},{status:400});
   // Read prices and their clock in one DB query. During a transaction all three advance together.
   const {data,error}=await admin().from('hootrading_prices').select('symbol,price,tick_second');
