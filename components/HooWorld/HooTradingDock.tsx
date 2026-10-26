@@ -153,6 +153,7 @@ async function requestReadOnlyRanking():Promise<ReadOnlyRanking>{
  return json as ReadOnlyRanking;
 }
 
+type ChartBackup={key:string;at:number;bars:Bar[]}; // HOO_CHART_DIRECT_FIX_V1
 type PublicMarket={now:number;virtualMinute:number;prices:Record<SymbolCode,number>;
  candles:Partial<Record<SymbolCode,Bar[]>>;news:News[];historyBefore?:number|null;cacheMode?:string};
 async function requestMarket(symbol:SymbolCode,frame:number,before?:number):Promise<PublicMarket>{
@@ -219,6 +220,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [open,setOpen]=useState(false),[data,setData]=useState<Snapshot|null>(null);
  const [marketData,setMarketData]=useState<PublicMarket|null>(null);
  const [marketError,setMarketError]=useState<string|null>(null);
+ const [chartBackup,setChartBackup]=useState<ChartBackup|null>(null);
  const [economyMaintenance,setEconomyMaintenance]=useState(false);
  const [readOnlyAssets,setReadOnlyAssets]=useState<ReadOnlyAssets|null>(null);
  const [readOnlyAssetError,setReadOnlyAssetError]=useState<string|null>(null);
@@ -323,6 +325,21 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    window.addEventListener('keydown',onKey);
    return()=>window.removeEventListener('keydown',onKey);
  },[open]);
+ useEffect(()=>{
+  if(!open)return;
+  const key=`${symbol}:${frame}`;
+  try{
+   const raw=localStorage.getItem('hoo-last-chart:'+key);
+   const saved=raw?JSON.parse(raw) as ChartBackup:null;
+   const valid=Boolean(saved&&saved.key===key&&
+    saved.at<=Date.now()&&Date.now()-saved.at<7*86400000&&
+    Array.isArray(saved.bars)&&saved.bars.length>0&&
+    saved.bars.length<=78&&saved.bars.every((b:Bar)=>
+      Number.isSafeInteger(b.t)&&b.close>0&&b.low>0&&
+      [b.open,b.high,b.low,b.close,b.volume].every(Number.isFinite)));
+   setChartBackup(valid?saved:null);
+  }catch{setChartBackup(null);}
+ },[open,symbol,frame]);
  const refreshMarket=useCallback(async()=>{
    // An old interval callback can fire after the next render but before effect cleanup.
    const context=`true:${symbol}:${frame}`;
@@ -344,6 +361,16 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      const merged=new Map(barsRef.current.map(b=>[b.t,b]));for(const b of next.candles[symbol]||[])merged.set(b.t,b);
      barsRef.current=[...merged.values()].sort((a,b)=>a.t-b.t).slice(-MAX_RETAINED_CANDLES);
      setMarketData({...next,candles:{[symbol]:barsRef.current}});setMarketError(null);
+     if(next.cacheMode==='v6-database'&&barsRef.current.length){
+      const saved:ChartBackup={
+       key:`${symbol}:${frame}`,at:Date.now(),
+       bars:barsRef.current.slice(-78)
+      };
+      setChartBackup(saved);
+      try{
+       localStorage.setItem('hoo-last-chart:'+saved.key,JSON.stringify(saved));
+      }catch{}
+     }
      if(historyCursor.current===undefined)historyCursor.current=next.historyBefore;
      if(!historyFetching.current&&historyCursor.current!=null&&barsRef.current.length<78){
        historyFetching.current=true;
@@ -414,6 +441,11 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    prices:{...latestMarket.prices,...lastMarketPrices.current},
    candles:marketData?.candles||data?.market.candles||{}
  }:undefined;
+ const currentBars=market?.candles[symbol]||[];
+ const cachedBars=chartBackup?.key===`${symbol}:${frame}`?chartBackup.bars:[];
+ const shownBars=currentBars.length?currentBars:cachedBars;
+ const marketLag=market?.now?Math.max(0,Math.floor(Date.now()/1000)-market.now):null;
+ const chartStale=Boolean(marketError)||(!currentBars.length&&cachedBars.length>0)||(marketLag!==null&&marketLag>3);
  const livePositions=(data?.positions||[]).map(p=>{const mark=Number(market?.prices[p.symbol]??p.mark);const unrealized=Number(p.side)*Number(p.qty)*(mark-Number(p.entry_price));return {...p,mark,unrealized};});
  const liveWallet=data?.walletHoo??walletHoo;
  const verifiedCash=Number(data?.account.cash_tc||0);
@@ -583,9 +615,14 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
           <R4SrDemoChart symbol={symbol} timeframe={([1,5,15,60] as number[]).includes(frame)?frame:60}/>
           {![1,5,15,60].includes(frame)&&<p>해당 봉 주기는 샘플 미지원이므로 60분봉으로 표시합니다.</p>}
         </section>:<>
-        <div className={styles.chartBox}>{marketError&&!(market?.candles[symbol]?.length)
+        <div className={styles.chartBox}>
+         {chartStale&&shownBars.length>0&&
+          <div role="status" style={{fontSize:12,color:'#d97706',padding:8}}>
+           ⚠ 실시간 시세 지연 · 마지막 확인 차트 표시 중 (거래용 최신 가격 아님)
+          </div>}
+         {marketError&&!shownBars.length
          ?<div className={styles.chartEmpty} role="status">차트 연결 실패: {marketError}<div style={{marginTop:12,fontSize:13}}>서버 설정 또는 SQL 적용 상태를 확인해주세요. 연결되면 자동으로 다시 불러옵니다.</div></div>
-         :<CandleChart key={`${symbol}:${frame}`} bars={market?.candles[symbol]||[]} symbol={symbol} timeframe={frame} onLoadOlder={loadOlder} olderLoading={historyBusy} hasOlder={historyCursor.current!=null&&barsRef.current.length<MAX_RETAINED_CANDLES}/>}</div>
+         :<CandleChart key={`${symbol}:${frame}`} bars={shownBars} symbol={symbol} timeframe={frame} onLoadOlder={loadOlder} olderLoading={historyBusy} hasOlder={historyCursor.current!=null&&barsRef.current.length<MAX_RETAINED_CANDLES}/>}</div>
        <div className={styles.tradeForm}>
          <div className={styles.tradeRow}><b>매매 방향</b><div className={styles.segment}>
            <button className={direction==='long'?styles.activeLong:''} onClick={()=>setDirection('long')} type="button" disabled={Boolean(selectedPosition&&selectedPosition.side!==1)}>▲ LONG</button>
