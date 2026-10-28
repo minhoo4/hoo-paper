@@ -209,6 +209,17 @@ function canonicalStudyCloudValue(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+// 0004D: Same-version notes are never reposted by initial-load/reconnect.
+// Explicit browser edits continue to be eligible for writes.
+function shouldSkipStudyNoteCloudUpsert(
+  hasRemote: boolean,
+  localVersion: number,
+  remoteVersion: number,
+  changedExplicitly: boolean,
+): boolean {
+  return hasRemote && localVersion === remoteVersion && !changedExplicitly;
+}
+
 type FocusStudyNoteSession = {
   version: 1;
   goal: string;
@@ -1287,6 +1298,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const previousActiveRef = useRef(active);
   const syncInProgressRef = useRef(false);
   const syncQueuedRef = useRef(false);
+  // 0004D: Keep explicit changed IDs if a sync starts while another runs.
+  const syncQueuedChangedIdsRef = useRef<Set<string>>(new Set());
   const notesRef = useRef<StudyNoteRecord[]>([]);
   // 0004C: IndexedDB is read once on hydration; later syncs use memory.
   // Keep the original disk-read fallback if initial hydration failed.
@@ -1447,6 +1460,16 @@ export default function StudyNote({ active }: StudyNoteProps) {
     const capturedRevision = localMutationRevisionRef.current;
     const capturedNotes = notesRef.current;
     const previousSignatures = lastPersistedNotesRef.current;
+    // 0004D: Record the exact changed note IDs before updating the cache.
+    // Syncing all notes after editing only one caused needless cloud writes.
+    const changedLocalIds = new Set(
+      capturedNotes
+        .filter((note) => previousSignatures.get(note.id) !== JSON.stringify(note))
+        .map((note) => note.id),
+    );
+    const removedLocalNote = [...previousSignatures.keys()].some(
+      (id) => !capturedNotes.some((note) => note.id === id),
+    );
     setSaveLabel("저장 중...");
 
     const pending = persistChangedStudyNotes(capturedNotes, previousSignatures)
@@ -1455,7 +1478,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
         persistedMutationRevisionRef.current = capturedRevision;
         if (localMutationRevisionRef.current === capturedRevision) {
           setSaveLabel(navigator.onLine ? "로컬 저장됨" : "오프라인 저장됨");
-          if (navigator.onLine) void syncStudyNotes(capturedNotes);
+          // 0004D: Never schedule a network sync for unchanged editor state.
+          if (navigator.onLine && (changedLocalIds.size > 0 || removedLocalNote)) {
+            void syncStudyNotes(capturedNotes, changedLocalIds);
+          }
         }
         return true;
       })
@@ -11470,6 +11496,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
   async function syncStudyNotes(
     preferredLocalNotes?: StudyNoteRecord[],
+    changedLocalIds?: ReadonlySet<string>,
   ) {
     // Never upload while edits are waiting for their 60s local save.
     if (localMutationRevisionRef.current > persistedMutationRevisionRef.current) return;
@@ -11479,6 +11506,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
     if (syncInProgressRef.current) {
       syncQueuedRef.current = true;
+      changedLocalIds?.forEach((id) => syncQueuedChangedIdsRef.current.add(id));
       return;
     }
 
@@ -12129,6 +12157,20 @@ export default function StudyNote({ active }: StudyNoteProps) {
         const remote = remoteById.get(note.id);
         const localVersion = Number(note.version) || 1;
         const remoteVersion = Number(remote?.version) || 0;
+        // 0004D hard network-write gate:
+        // Background reconnect/initial hydration must not re-upload a remote
+        // note with the same version merely because updatedAt differs.
+        // Explicitly edited notes are exempt, preserving legitimate writes.
+        // New notes and offline changes with higher versions remain eligible.
+        if (shouldSkipStudyNoteCloudUpsert(
+          Boolean(remote),
+          localVersion,
+          remoteVersion,
+          changedLocalIds?.has(note.id) ?? false,
+        )) {
+          syncedNotes.push(note);
+          continue;
+        }
         const remoteIsCurrent = !!remote && (
           localVersion < remoteVersion ||
           (localVersion === remoteVersion &&
@@ -12510,9 +12552,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
         navigator.onLine
       ) {
         syncQueuedRef.current = false;
+        const queuedChangedIds = new Set(syncQueuedChangedIdsRef.current);
+        syncQueuedChangedIdsRef.current.clear();
 
         window.setTimeout(() => {
-          void syncStudyNotes(notesRef.current);
+          void syncStudyNotes(notesRef.current, queuedChangedIds);
         }, 150);
       }
     }
