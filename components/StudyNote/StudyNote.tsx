@@ -1288,6 +1288,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const syncInProgressRef = useRef(false);
   const syncQueuedRef = useRef(false);
   const notesRef = useRef<StudyNoteRecord[]>([]);
+  // 0004C: IndexedDB is read once on hydration; later syncs use memory.
+  // Keep the original disk-read fallback if initial hydration failed.
+  const localCacheLoadedRef = useRef(false);
+  const tombstonesRef = useRef<StudyNoteTombstone[]>([]);
   const activeFontSizeRef = useRef(14);
   const typingFontSizeRef = useRef(14);
   const undoHistoryRef = useRef<
@@ -1385,7 +1389,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
           return;
         }
 
+        localCacheLoadedRef.current = true;
         notesRef.current = savedNotes;
+        tombstonesRef.current = savedTombstones;
         lastPersistedNotesRef.current = new Map(
           savedNotes.map((note) => [note.id, JSON.stringify(note)]),
         );
@@ -1417,6 +1423,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
   useEffect(() => {
     notesRef.current = notes;
   }, [notes]);
+
+  useEffect(() => {
+    tombstonesRef.current = tombstones;
+  }, [tombstones]);
 
   /**
    * The only automatic local save entry point. Dirty edits wait for 60 seconds
@@ -3991,7 +4001,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     );
 
     const nextTombstones = [
-      ...tombstones.filter(
+      ...tombstonesRef.current.filter(
         (item) => !deletedIdSet.has(item.id),
       ),
       ...noteIds.map((id) => ({
@@ -4002,6 +4012,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
     localMutationRevisionRef.current += 1;
     notesRef.current = nextNotes;
+    tombstonesRef.current = nextTombstones;
     setNotes(nextNotes);
     setTombstones(nextTombstones);
 
@@ -10846,13 +10857,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
       throw remoteLoadError;
     }
 
-    const currentLocalNotes =
-      notesRef.current.length > 0
-        ? notesRef.current
-        : await loadNotesFromIndexedDb();
+    const currentLocalNotes = localCacheLoadedRef.current
+      ? notesRef.current
+      : await loadNotesFromIndexedDb();
 
-    const currentTombstones =
-      await loadStudyNoteTombstones();
+    const currentTombstones = localCacheLoadedRef.current
+      ? tombstonesRef.current
+      : await loadStudyNoteTombstones();
 
     const tombstoneById = new Map(
       currentTombstones.map((item) => [
@@ -11406,6 +11417,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
       return mergedNotes[0]?.id ?? null;
     });
 
+    tombstonesRef.current = remainingTombstones;
     setTombstones(
       remainingTombstones,
     );
@@ -11496,7 +11508,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
       const sourceNotes =
         preferredLocalNotes ??
-        (notesRef.current.length > 0
+        (localCacheLoadedRef.current
           ? notesRef.current
           : await loadNotesFromIndexedDb());
 
@@ -11548,7 +11560,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
         });
       }
 
-      const currentTombstones = await loadStudyNoteTombstones();
+      const currentTombstones = localCacheLoadedRef.current
+        ? tombstonesRef.current
+        : await loadStudyNoteTombstones();
       const remainingTombstones: StudyNoteTombstone[] = [];
 
       for (const tombstone of currentTombstones) {
@@ -12451,6 +12465,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
         });
       }
 
+      tombstonesRef.current = remainingTombstones;
       setTombstones(remainingTombstones);
 
       if (failedCount === 0) {
