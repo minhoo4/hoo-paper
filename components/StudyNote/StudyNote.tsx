@@ -1290,7 +1290,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const selectionRangeRef = useRef<Range | null>(null);
   const selectedBlockIdsRef = useRef<string[]>([]);
   const lastSelectedTextBlockIdRef = useRef<string | null>(null);
-  const saveTimerRef = useRef<number | null>(null);
+  // 0004F: The editor never autosaves on a timer. Changes remain in memory
+  // until editor/page exit or the user's explicit Save action.
   const lastPersistedNotesRef = useRef<Map<string, string>>(new Map());
   const persistedMutationRevisionRef = useRef(0);
   const saveInFlightRef = useRef<Promise<boolean> | null>(null);
@@ -1315,6 +1316,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
   >(new Map());
   const localMutationRevisionRef = useRef(0);
   const cloudPullInProgressRef = useRef(false);
+  // 0004F: One PostgREST notes SELECT per mounted editor session.
+  // Reuse its snapshot on save, never read the entire table a second time.
+  const cloudFirstReadEmailRef = useRef<string | null>(null);
+  const cloudFirstReadUserIdRef = useRef<string | null>(null);
+  const cloudFirstReadRowsRef = useRef<Array<Record<string, unknown>> | null>(null);
   /* 복수파일에서 공용 편집 도구가 수정할 현재 파일 */
   const activeEditorNoteIdRef = useRef<string | null>(null);
 
@@ -1442,9 +1448,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }, [tombstones]);
 
   /**
-   * The only automatic local save entry point. Dirty edits wait for 60 seconds
-   * of inactivity; changing tabs or rerendering is not a new save event.
-   * A confirmed editor close (or explicit Ctrl+S) flushes once immediately.
+   * 0004F: Save only on editor/page exit or explicit Ctrl+S.
+   * A dirty draft stays in memory while typing; no timed DB reads or writes.
    */
   function flushStudyNoteDraft(): Promise<boolean> {
     if (!isHydrated) return Promise.resolve(false);
@@ -1452,11 +1457,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
     if (localMutationRevisionRef.current <= persistedMutationRevisionRef.current) {
       return Promise.resolve(false);
     }
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
-
     const capturedRevision = localMutationRevisionRef.current;
     const capturedNotes = notesRef.current;
     const previousSignatures = lastPersistedNotesRef.current;
@@ -1498,21 +1498,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
   useEffect(() => {
     if (!isHydrated) return;
     if (localMutationRevisionRef.current <= persistedMutationRevisionRef.current) return;
-    setSaveLabel("저장 대기 · 입력 종료 60초 후");
-    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
-    // A fresh edit cancels the previous countdown. Offline uses the same rule.
-    saveTimerRef.current = window.setTimeout(() => {
-      saveTimerRef.current = null;
-      void flushStudyNoteDraft();
-    }, 60_000);
-    return () => {
-      if (saveTimerRef.current !== null) {
-        window.clearTimeout(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-    };
-    // Every local mutation updates notes; a remote pull does not increment its revision.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setSaveLabel("수정됨 · 페이지를 나갈 때 저장");
+    // 0004F: No autosave timer. Saving is invoked only from explicit navigation,
+    // pagehide, component deactivation, or the user pressing Ctrl+S.
   }, [isHydrated, notes]);
 
   useEffect(() => {
@@ -1537,9 +1525,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
       void flushStudyNoteDraft();
     };
     const warnBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (localMutationRevisionRef.current > persistedMutationRevisionRef.current) {
+      const dirty = localMutationRevisionRef.current > persistedMutationRevisionRef.current;
+      // Native browser exit cannot await network/IndexedDB; begin best-effort
+      // save AND warn so the user can stay until it is done.
+      if (dirty) void flushStudyNoteDraft();
+      if (dirty || saveInFlightRef.current || syncInProgressRef.current) {
         event.preventDefault();
-        event.returnValue = ""; // Ask before losing a pending draft.
+        event.returnValue = "";
       }
     };
     window.addEventListener("pagehide", onPageHide);
@@ -1608,70 +1600,28 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }, [supabase]);
 
   useEffect(() => {
-    if (!isHydrated || !signedInEmail) {
-      return;
-    }
-
-    const syncFromCloud = () => {
-      if (localMutationRevisionRef.current > persistedMutationRevisionRef.current) return;
-      if (!navigator.onLine) {
-        return;
-      }
-
-      /*
-       * 서버 -> 로컬 복원을 먼저 독립적으로 완료한다.
-       * 그 뒤 기존 양방향 sync를 실행하므로 사진 처리나 upsert가
-       * 느려도 서버에 존재하는 노트 목록은 먼저 화면에 나타난다.
-       */
-      void pullStudyNotesFromCloud()
-        .catch((error) => {
-          console.warn(
-            "HOO터디 노트 클라우드 우선 복원 실패:",
-            error,
-          );
-        })
-        .finally(() => {
-          void syncStudyNotes();
-        });
-    };
-
-    let eventSyncTimer: number | null = null;
+    if (!isHydrated || !signedInEmail) return;
+    if (cloudFirstReadEmailRef.current === signedInEmail) return;
+    cloudFirstReadEmailRef.current = signedInEmail;
+    cloudFirstReadRowsRef.current = null;
+    cloudFirstReadUserIdRef.current = null;
     let disposed = false;
-
-    const scheduleSyncFromCloud = () => {
-      if (disposed || !navigator.onLine) {
-        return;
-      }
-
-      if (eventSyncTimer !== null) {
-        window.clearTimeout(eventSyncTimer);
-      }
-
-      eventSyncTimer = window.setTimeout(() => {
-        eventSyncTimer = null;
-
-        if (!disposed) {
-          syncFromCloud();
-        }
-      }, 500);
+    const readOnce = () => {
+      if (disposed || !navigator.onLine) return;
+      window.removeEventListener("online", readOnce);
+      // 0004F: Only one initial server SELECT. No secondary full sync,
+      // and no repeated pull on focus or later reconnections.
+      void pullStudyNotesFromCloud().catch((error) => {
+        console.warn("HOO터디 노트 최초 클라우드 조회 실패:", error);
+        setSaveLabel("서버 조회 실패 · 로컬 노트 보존");
+      });
     };
-
-    const initialSyncTimer = window.setTimeout(scheduleSyncFromCloud, 0);
-    // Avoid focus/pageshow polling. Reconnect is a meaningful revalidation event.
-    window.addEventListener("online", scheduleSyncFromCloud);
-
+    if (navigator.onLine) readOnce();
+    else window.addEventListener("online", readOnce); // No request until first connectivity
     return () => {
       disposed = true;
-      window.clearTimeout(initialSyncTimer);
-
-      if (eventSyncTimer !== null) {
-        window.clearTimeout(eventSyncTimer);
-      }
-
-      window.removeEventListener("online", scheduleSyncFromCloud);
+      window.removeEventListener("online", readOnce);
     };
-
-    // cloud pull/sync 함수는 현재 render의 최신 ref/state를 사용한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHydrated, signedInEmail]);
 
@@ -9341,7 +9291,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
   function saveStudyNotesNow() {
-    // Ctrl+S intentionally saves before the 60-second idle deadline.
+    // Ctrl+S is an explicit user-requested save, independent of page exit.
     void flushStudyNoteDraft();
   }
 
@@ -10870,18 +10820,17 @@ export default function StudyNote({ active }: StudyNoteProps) {
         category,
         blocks,
         version,
-        updated_at
+        updated_at,
+        deleted_at
       `)
       .eq("user_id", user.id)
-      .is("deleted_at", null)
-      .order("updated_at", {
-        ascending: false,
-      })
+      .order("updated_at", { ascending: false })
       .limit(1000);
 
-    if (remoteLoadError) {
-      throw remoteLoadError;
-    }
+    if (remoteLoadError) throw remoteLoadError;
+    // Reuse this exact server snapshot for a later changed-only save.
+    cloudFirstReadRowsRef.current = (remoteRows ?? []) as Array<Record<string, unknown>>;
+    cloudFirstReadUserIdRef.current = user.id;
 
     const currentLocalNotes = localCacheLoadedRef.current
       ? notesRef.current
@@ -10913,7 +10862,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
       if (
         !rawRow ||
         typeof rawRow.id !== "string" ||
-        !rawRow.id
+        !rawRow.id ||
+        rawRow.deleted_at != null
       ) {
         continue;
       }
@@ -11533,6 +11483,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
       }
 
       const userId = user.id;
+      if (cloudFirstReadRowsRef.current === null ||
+          cloudFirstReadUserIdRef.current !== userId) {
+        setSaveLabel("로컬 저장됨 · 본인 서버 조회 후 저장 가능");
+        return;
+      }
 
       const sourceNotes =
         preferredLocalNotes ??
@@ -11619,31 +11574,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
         }
       }
 
-      /*
-       * 중요: 서버 기록을 먼저 내려받아 로컬 기록과 양방향 병합한다.
-       * 기존 코드는 로컬 -> Supabase 업로드만 수행했기 때문에
-       * 다른 컴퓨터에서 작성한 기록을 새 기기로 가져올 수 없었다.
-       */
-      const {
-        data: remoteRows,
-        error: remoteLoadError,
-      } = await supabase
-        .from("hoo_study_notes")
-        .select(`
-          id,
-          note_date,
-          title,
-          category,
-          blocks,
-          version,
-          updated_at,
-          deleted_at
-        `)
-        .eq("user_id", userId)
-        .limit(1000);
-
-      if (remoteLoadError) {
-        throw remoteLoadError;
+      // 0004F: No second SELECT on save. The initial authenticated pull
+      // already fetched the remote note versions/payloads into memory.
+      // Never upload blind when that initial read was unavailable.
+      const remoteRows = cloudFirstReadRowsRef.current;
+      if (!remoteRows) {
+        throw new Error("최초 클라우드 조회가 완료되지 않았습니다. 로컬 기록은 유지됩니다.");
       }
 
       const localById = new Map(
@@ -12154,6 +12090,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
       const syncedNotes: StudyNoteRecord[] = [];
 
       for (const note of mergedSourceNotes) {
+        // 0004F: Only notes changed by an actual user edit this session.
+        // No full background push of recovered/unchanged notes.
+        if (!changedLocalIds?.has(note.id)) {
+          syncedNotes.push(note);
+          continue;
+        }
         const remote = remoteById.get(note.id);
         const localVersion = Number(note.version) || 1;
         const remoteVersion = Number(remote?.version) || 0;
@@ -12307,36 +12249,62 @@ export default function StudyNote({ active }: StudyNoteProps) {
             Number(note.version) || 1,
           );
 
-          const {
-            data: verifiedRow,
-            error: upsertError,
-          } = await supabase
-            .from("hoo_study_notes")
-            .upsert(
-              {
-                id: note.id,
-                user_id: userId,
-                note_date: note.date,
-                title: note.title,
-                category: note.category,
-                blocks: remoteBlocks,
-                version: nextVersion,
-                deleted_at: null,
-              },
-              { onConflict: "id" },
-            )
-            .select("id")
-            .single();
-
-          if (upsertError) {
-            throw upsertError;
+          // One write per changed note, no extra SELECT. If another device
+          // modified this row since our sole initial read, refuse overwrite.
+          const payload = {
+            id: note.id,
+            user_id: userId,
+            note_date: note.date,
+            title: note.title,
+            category: note.category,
+            blocks: remoteBlocks,
+            version: nextVersion,
+            deleted_at: null,
+          };
+          const knownRemote = remotePayloadById.get(note.id);
+          let verifiedId: string | null = null;
+          if (knownRemote) {
+            const result = await supabase
+              .from("hoo_study_notes")
+              .update(payload)
+              .eq("id", note.id)
+              .eq("user_id", userId)
+              .eq("version", Number(knownRemote.version) || 1)
+              .eq("updated_at", String(knownRemote.updated_at ?? ""))
+              .is("deleted_at", null)
+              .select("id, updated_at")
+              .maybeSingle();
+            if (result.error) throw result.error;
+            verifiedId = result.data?.id ?? null;
+            if (verifiedId) remotePayloadById.set(note.id, { ...payload, updated_at: result.data?.updated_at });
+            if (!verifiedId) {
+              throw new Error("다른 기기에서 노트가 변경되었습니다. 로컬 기록은 유지됩니다.");
+            }
+          } else {
+            const result = await supabase
+              .from("hoo_study_notes")
+              .insert(payload)
+              .select("id, updated_at")
+              .single();
+            if (result.error) throw result.error;
+            verifiedId = result.data?.id ?? null;
+            if (verifiedId) remotePayloadById.set(note.id, { ...payload, updated_at: result.data?.updated_at });
+            if (!verifiedId) throw new Error("신규 노트 저장 검증 결과가 없습니다.");
           }
-
-          if (!verifiedRow?.id) {
-            throw new Error("Supabase 저장 검증 결과가 없습니다.");
-          }
+          // The returned timestamp was cached above; no refresh SELECT.
 
           pushedCount += 1;
+          // Update the ref snapshot using the successful RETURNING timestamp.
+          // This preserves idempotence across later explicit editor exits.
+          const latestPayload = remotePayloadById.get(note.id);
+          if (latestPayload) {
+            const cached: Array<Record<string, unknown>> | null = cloudFirstReadRowsRef.current;
+            if (cached) {
+              const priorIndex = cached.findIndex((row) => row.id === note.id);
+              if (priorIndex >= 0) cached[priorIndex] = latestPayload;
+              else cached.push(latestPayload);
+            }
+          }
 
           syncedNotes.push({
             ...note,
@@ -12547,18 +12515,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
     } finally {
       syncInProgressRef.current = false;
 
-      if (
-        syncQueuedRef.current &&
-        navigator.onLine
-      ) {
-        syncQueuedRef.current = false;
-        const queuedChangedIds = new Set(syncQueuedChangedIdsRef.current);
-        syncQueuedChangedIdsRef.current.clear();
-
-        window.setTimeout(() => {
-          void syncStudyNotes(notesRef.current, queuedChangedIds);
-        }, 150);
-      }
+      // 0004F: No queued background retry/read/write. Later edits remain
+      // dirty until another explicit save or editor/page exit.
+      syncQueuedRef.current = false;
+      syncQueuedChangedIdsRef.current.clear();
     }
   }
 
