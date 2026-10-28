@@ -194,6 +194,21 @@ type StudyNoteProps = {
   active: boolean;
 };
 
+// HOO-CHANGE-0004B: compare stored JSONB payloads by content, not key order.
+// This must not change the user's blocks, note versions, or DB values.
+function canonicalStudyCloudValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalStudyCloudValue).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalStudyCloudValue(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 type FocusStudyNoteSession = {
   version: 1;
   goal: string;
@@ -11911,6 +11926,14 @@ export default function StudyNote({ active }: StudyNoteProps) {
         ]),
       );
 
+      // Retain the actual server payload for the final idempotent-write gate.
+      // Reconstructed editor notes contain local-only fields and filler lines.
+      const remotePayloadById = new Map(
+        (remoteRows ?? [])
+          .filter((row) => typeof row.id === "string")
+          .map((row) => [row.id, row] as const),
+      );
+
       function mergeImageState(
         primary: StudyNoteRecord,
         secondary: StudyNoteRecord,
@@ -12197,6 +12220,31 @@ export default function StudyNote({ active }: StudyNoteProps) {
             html: note.lastPageHtml ?? "",
             role: "last-page",
           });
+
+          // The editor may have changed while awaiting image storage.
+          // Never send the previous editor snapshot after a newer edit.
+          if (localMutationRevisionRef.current !== mutationRevisionAtStart) {
+            syncedNotes.push(note);
+            continue;
+          }
+
+          // An older remote updated_at/version does not justify an UPSERT if
+          // the server already contains exactly the same user content.
+          // Avoids repeatedly writing identical notes across reconnects.
+          const storedPayload = remotePayloadById.get(note.id);
+          const contentIsAlreadyStored = Boolean(
+            storedPayload &&
+            storedPayload.deleted_at == null &&
+            storedPayload.note_date === note.date &&
+            storedPayload.title === note.title &&
+            storedPayload.category === note.category &&
+            canonicalStudyCloudValue(storedPayload.blocks) ===
+              canonicalStudyCloudValue(remoteBlocks)
+          );
+          if (contentIsAlreadyStored) {
+            syncedNotes.push({ ...note, blocks: localBlocks });
+            continue;
+          }
 
           const nextVersion = Math.max(
             1,
