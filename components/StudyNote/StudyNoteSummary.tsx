@@ -268,6 +268,17 @@ function getContinuousReaderBlocks(blocks: StudyBlock[]) {
   return continuousBlocks;
 }
 
+/** Compare actual note content, not updated_at (which also changes on no-op UPSERTs). */
+function getSummaryNoteSignature(note: Record<string, unknown>): string {
+  return JSON.stringify([
+    note.note_date ?? null,
+    note.title ?? null,
+    note.category ?? null,
+    note.blocks ?? null,
+    Number(note.version) || 1,
+  ]);
+}
+
 export default function StudyNoteSummary() {
   const supabase = useMemo(() => createClient(), []);
 
@@ -283,6 +294,40 @@ export default function StudyNoteSummary() {
   useEffect(() => {
     let isCancelled = false;
     let realtimeChannel: ReturnType<typeof supabase.channel> | null = null;
+    let lastRemoteSignatures = new Map<string, string>();
+    let refreshTimer: number | null = null;
+    let refreshInFlight = false;
+    let refreshQueued = false;
+    let knownUserId: string | null | undefined = undefined;
+
+    // Multiple Realtime events from a single edit must never fan out into N reads.
+    function scheduleRefresh() {
+      if (isCancelled || refreshTimer !== null) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        void refreshOnce();
+      }, 400);
+    }
+
+    async function refreshOnce() {
+      if (isCancelled) return;
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+      refreshInFlight = true;
+      try {
+        await loadNotes();
+      } catch (error) {
+        console.warn("후터디노트 정리본 변경 조회 실패:", error);
+      } finally {
+        refreshInFlight = false;
+        if (refreshQueued && !isCancelled) {
+          refreshQueued = false;
+          scheduleRefresh();
+        }
+      }
+    }
 
     async function clearRealtimeChannel() {
       if (!realtimeChannel) {
@@ -470,6 +515,17 @@ export default function StudyNoteSummary() {
             details: error.details,
             hint: error.hint,
           },
+        );
+      }
+
+      // Fingerprints are sourced from the server response, before local merge.
+      // Repeated no-op updates (same version/content, newer updated_at) are ignored.
+      if (!error && Array.isArray(data) && !isCancelled) {
+        lastRemoteSignatures = new Map(
+          data.map((row) => [
+            row.id,
+            getSummaryNoteSignature(row as Record<string, unknown>),
+          ]),
         );
       }
 
@@ -699,6 +755,9 @@ export default function StudyNoteSummary() {
       await clearRealtimeChannel();
 
       const user = await loadNotes();
+      if (!isCancelled && startSequence === realtimeStartSequence) {
+        knownUserId = user?.id ?? null;
+      }
 
       if (
         !user ||
@@ -720,8 +779,21 @@ export default function StudyNoteSummary() {
           table: "hoo_study_notes",
           filter: `user_id=eq.${user.id}`,
         },
-        () => {
-          void loadNotes();
+        (payload) => {
+          const row = payload.new as Record<string, unknown> | undefined;
+          const noteId = typeof row?.id === "string" ? row.id : null;
+          if (
+            payload.eventType === "UPDATE" &&
+            noteId &&
+            row?.deleted_at == null &&
+            row !== undefined &&
+            lastRemoteSignatures.get(noteId) === getSummaryNoteSignature(row)
+          ) {
+            // Server timestamp changed, but note content/version did not.
+            return;
+          }
+          // Real edits, creation, deletion: one batched refresh, not one per row.
+          scheduleRefresh();
         },
       );
 
@@ -739,41 +811,27 @@ export default function StudyNoteSummary() {
 
     void startRealtime();
 
-    function refreshSummaryFromLocal() {
-      if (isCancelled) {
-        return;
-      }
-
-      /*
-       * 후터디노트 작성 탭/페이지에서 HOO 메인으로 돌아오는 순간
-       * IndexedDB를 다시 읽는다.
-       *
-       * Supabase 동기화가 실패해도 2페이지, 사진, 최신 본문이
-       * 현재 기기 정리본에 즉시 반영된다.
-       */
-      void loadNotes();
+    // A normal navigation mounts this component and already loads the notes.
+    // Refresh only when the browser actually restores the page from bfcache.
+    function handlePageShow(event: PageTransitionEvent) {
+      if (event.persisted) scheduleRefresh();
     }
-
-    function handleVisibilityChange() {
-      if (document.visibilityState === "visible") {
-        refreshSummaryFromLocal();
-      }
-    }
-
-    window.addEventListener("focus", refreshSummaryFromLocal);
-    window.addEventListener("pageshow", refreshSummaryFromLocal);
-    document.addEventListener(
-      "visibilitychange",
-      handleVisibilityChange,
-    );
+    window.addEventListener("pageshow", handlePageShow);
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(() => {
-      if (isCancelled) {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (
+        isCancelled ||
+        event === "INITIAL_SESSION" ||
+        event === "TOKEN_REFRESHED" ||
+        event === "USER_UPDATED"
+      ) {
         return;
       }
-
+      const nextUserId = session?.user?.id ?? null;
+      if (nextUserId === knownUserId) return;
+      knownUserId = nextUserId;
       setIsLoading(true);
       setSelectedNoteId(null);
       setSelectedCategory("전체");
@@ -784,23 +842,9 @@ export default function StudyNoteSummary() {
     return () => {
       isCancelled = true;
       subscription.unsubscribe();
-
-      window.removeEventListener(
-        "focus",
-        refreshSummaryFromLocal,
-      );
-      window.removeEventListener(
-        "pageshow",
-        refreshSummaryFromLocal,
-      );
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange,
-      );
-
-      if (realtimeChannel) {
-        void supabase.removeChannel(realtimeChannel);
-      }
+      window.removeEventListener("pageshow", handlePageShow);
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      if (realtimeChannel) void supabase.removeChannel(realtimeChannel);
     };
   }, [supabase]);
 
