@@ -35,6 +35,47 @@ async function readOnlyAssets(userId:string){
  if(!Number.isSafeInteger(openPositions)||openPositions<0)throw new Error('INVALID_READ_ONLY_ASSETS:openPositions');
  return {readOnly:true,walletHoo,account:tradingAccount,openPositions};
 }
+// HOO_CHANGE_0010_A_V1: position/account monitor only. This endpoint MUST NOT
+// read the HOO wallet, advance the market, settle trades or change any DB row.
+async function readOnlyPositionMonitor(userId:string){
+ const db=admin();
+ const [positions,account]=await Promise.all([
+  db.from('hootrading_positions')
+   .select('id,symbol,side,leverage,qty,entry_price,margin_tc,stop_price,take_price')
+   .eq('user_id',userId),
+  db.from('hootrading_accounts')
+   .select('cash_tc,total_deposit_tc,realized_tc')
+   .eq('user_id',userId).maybeSingle()
+ ]);
+ if(positions.error||!Array.isArray(positions.data))throw new Error('POSITION_MONITOR_READ_FAILED');
+ if(account.error||!account.data)throw new Error('ACCOUNT_MONITOR_READ_FAILED');
+ if(positions.data.length>100)throw new Error('POSITION_MONITOR_LIMIT');
+ const finite=(v:unknown,field:string,min:number)=>{
+  if(v===null||v===undefined||typeof v==='boolean'||(typeof v==='string'&&v.trim()===''))
+   throw new Error(`POSITION_MONITOR_INVALID:${field}`);
+  const n=Number(v);
+  if(!Number.isFinite(n)||n<min)throw new Error(`POSITION_MONITOR_INVALID:${field}`);
+  return n;
+ };
+ const rows=positions.data.map((p,index)=>{
+  if(typeof p.id!=='string'||!['HOO','EGG','COAL'].includes(String(p.symbol)))
+   throw new Error(`POSITION_MONITOR_INVALID:row_${index}`);
+  const side=finite(p.side,'side',-1),leverage=finite(p.leverage,'leverage',1);
+  if((side!==1&&side!==-1)||!Number.isInteger(leverage)||leverage>20)
+   throw new Error('POSITION_MONITOR_INVALID:direction_or_leverage');
+  const risk=(v:unknown,key:string)=>v===null?null:finite(v,key,0);
+  return {id:p.id,symbol:p.symbol,side,leverage,
+   qty:finite(p.qty,'qty',Number.MIN_VALUE),
+   entry_price:finite(p.entry_price,'entry_price',Number.MIN_VALUE),
+   margin_tc:finite(p.margin_tc,'margin_tc',0),
+   stop_price:risk(p.stop_price,'stop_price'),take_price:risk(p.take_price,'take_price')};
+ });
+ const a=account.data;
+ return {readOnly:true,positionMonitor:true,positions:rows,
+  account:{cash_tc:finite(a.cash_tc,'cash_tc',0),
+   total_deposit_tc:finite(a.total_deposit_tc,'total_deposit_tc',0),
+   realized_tc:finite(a.realized_tc,'realized_tc',-Number.MAX_VALUE)}};
+}
 // Pure SELECT of existing, realized trading-account statistics. This intentionally
 // does not call snapshot/catchUp, recalculate settlements, or touch economy gates.
 async function readOnlyRanking(){
@@ -94,6 +135,10 @@ export async function GET(req:Request){
   if(url.searchParams.get('view')==='assets'){
    // This endpoint remains available during maintenance without opening trading.
    return NextResponse.json(await readOnlyAssets(user.id),{headers});
+  }
+  if(url.searchParams.get('view')==='position-monitor'){
+   // Authenticated account and open positions only; never query HOO wallet.
+   return NextResponse.json(await readOnlyPositionMonitor(user.id),{headers});
   }
   if(url.searchParams.get('view')==='ranking'){
    // Existing rankings only; no market catch-up, transaction or maintenance unlock.

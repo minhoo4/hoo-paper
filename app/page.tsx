@@ -1709,6 +1709,9 @@ const contextMessageTimerRef =
 const contextMessageLoadInFlightRef =
   useRef(false);
 
+// HOO-CHANGE-0007-A: serialize read/dismiss actions across rapid clicks.
+const contextMessageMutationInFlightRef = useRef(false);
+
 
 /*
  * HOO 반복 생활 후보
@@ -1872,6 +1875,10 @@ const [
 ] = useState<string | null>(null);
 
 const todoOrderDuringDragRef =
+  useRef<TodoItem[] | null>(null);
+
+// 0008: Preserve pre-drag order for no-op and partial index updates.
+const todoOrderBeforeDragRef =
   useRef<TodoItem[] | null>(null);
 
 const [isRecommendedTodoCompleted, setIsRecommendedTodoCompleted] =
@@ -3306,10 +3313,11 @@ useEffect(() => {
     return;
   }
 
-  window.localStorage.setItem(
-    SCHEDULE_STORAGE_KEY,
-    JSON.stringify(schedules),
-  );
+  // 0008: Cache only when the serialized record actually changed.
+  const serialized = JSON.stringify(schedules);
+  if (window.localStorage.getItem(SCHEDULE_STORAGE_KEY) !== serialized) {
+    window.localStorage.setItem(SCHEDULE_STORAGE_KEY, serialized);
+  }
 }, [
   schedules,
   isLoaded,
@@ -3578,10 +3586,11 @@ useEffect(() => {
     return;
   }
 
-  window.localStorage.setItem(
-    MEMO_STORAGE_KEY,
-    JSON.stringify(memos),
-  );
+  // 0008: Cache only when the serialized record actually changed.
+  const serialized = JSON.stringify(memos);
+  if (window.localStorage.getItem(MEMO_STORAGE_KEY) !== serialized) {
+    window.localStorage.setItem(MEMO_STORAGE_KEY, serialized);
+  }
 }, [
   memos,
   isLoaded,
@@ -4396,6 +4405,11 @@ if (
 
 useEffect(() => {
   let cancelled = false;
+  // HOO-CHANGE-0007-B: avoid requests while the tab is hidden,
+  // coalesce overlapping refreshes and suppress rapid focus refetches.
+  let checkOnVisible = false;
+  let lastAttemptAt = 0;
+  let nextScheduledAt = 0;
 
   function clearContextMessageTimer() {
     if (
@@ -4435,11 +4449,16 @@ useEffect(() => {
         2_147_000_000,
       );
 
+    nextScheduledAt = Date.now() + safeDelay;
     contextMessageTimerRef.current =
       window.setTimeout(() => {
-        contextMessageTimerRef.current =
-          null;
-
+        contextMessageTimerRef.current = null;
+        nextScheduledAt = 0;
+        if (cancelled) return;
+        if (document.visibilityState === "hidden") {
+          checkOnVisible = true;
+          return;
+        }
         void loadContextMessage();
       }, safeDelay);
   }
@@ -4574,23 +4593,25 @@ function normalizeContextMessageType(
 
 
 async function loadContextMessage() {
-  clearContextMessageTimer();
+  if (cancelled) return;
 
-  if (cancelled) {
+  if (document.visibilityState === "hidden") {
+    checkOnVisible = true;
     return;
   }
+  checkOnVisible = false;
+  clearContextMessageTimer();
+  nextScheduledAt = 0;
 
   /*
    * 아침·저녁 브리핑이 열려 있으면
    * 예약 메시지는 브리핑이 닫힌 뒤 표시한다.
    */
   if (isBriefingModalOpen) {
+    // isBriefingModalOpen is a dependency of this effect: when
+    // the briefing closes, the effect immediately checks again.
+    // A 30-second recheck while the modal is open adds no value.
     setIsContextMessageLoading(false);
-
-    scheduleContextMessageLoad(
-      30 * 1000,
-    );
-
     return;
   }
 
@@ -4614,11 +4635,10 @@ async function loadContextMessage() {
    * 개발 모드, 탭 복귀, 예약 타이머가
    * 동시에 실행돼도 DB 조회는 한 번만 수행한다.
    */
-  if (
-    contextMessageLoadInFlightRef.current
-  ) {
-    scheduleContextMessageLoad(500);
-
+  if (contextMessageLoadInFlightRef.current) {
+    // Another lifecycle may own the active request. Keep just one
+    // short retry timer, without starting concurrent SQL requests.
+    scheduleContextMessageLoad(2000);
     return;
   }
 
@@ -4667,6 +4687,7 @@ async function loadContextMessage() {
       return;
     }
 
+    lastAttemptAt = Date.now();
     const nowIso =
       new Date().toISOString();
 
@@ -4887,6 +4908,7 @@ async function loadContextMessage() {
     );
 
     if (!cancelled) {
+      lastAttemptAt = 0;
       setIsContextMessageLoading(false);
 
       /*
@@ -4898,18 +4920,30 @@ async function loadContextMessage() {
       );
     }
   } finally {
-    contextMessageLoadInFlightRef.current =
-      false;
+    contextMessageLoadInFlightRef.current = false;
   }
 }
 
-
   function handleContextMessageVisibilityChange() {
+    if (document.visibilityState !== "visible") return;
+    const now = Date.now();
+    const timedCheckDue =
+      nextScheduledAt > 0 && now >= nextScheduledAt;
     if (
-      document.visibilityState ===
-      "visible"
+      checkOnVisible ||
+      timedCheckDue ||
+      lastAttemptAt === 0 ||
+      now - lastAttemptAt >= 60_000
     ) {
       void loadContextMessage();
+    }
+  }
+
+  function handleContextMessageReconnect() {
+    if (document.visibilityState === "visible") {
+      void loadContextMessage();
+    } else {
+      checkOnVisible = true;
     }
   }
 
@@ -4919,16 +4953,16 @@ async function loadContextMessage() {
     "visibilitychange",
     handleContextMessageVisibilityChange,
   );
+  window.addEventListener("online", handleContextMessageReconnect);
 
   return () => {
     cancelled = true;
-
     clearContextMessageTimer();
-
     document.removeEventListener(
       "visibilitychange",
       handleContextMessageVisibilityChange,
     );
+    window.removeEventListener("online", handleContextMessageReconnect);
   };
 
 }, [
@@ -5164,13 +5198,17 @@ useEffect(() => {
   let isRefreshInFlight = false;
 
   async function refreshCurrentWeather() {
+    // HOO-CHANGE-0009: one automatic weather refresh per KST date.
     if (
       !isEffectActive ||
-      isRefreshInFlight
+      isRefreshInFlight ||
+      document.visibilityState !== "visible" ||
+      weatherRefreshDateRef.current === getTodayStorageDate()
     ) {
       return;
     }
 
+    const refreshStartedAt = Date.now();
     isRefreshInFlight = true;
 
     try {
@@ -5182,7 +5220,7 @@ useEffect(() => {
 
       if (
         isEffectActive &&
-        lastWeatherRefreshAtRef.current > 0
+        lastWeatherRefreshAtRef.current >= refreshStartedAt
       ) {
         weatherRefreshDateRef.current =
           getTodayStorageDate();
@@ -5206,13 +5244,23 @@ useEffect(() => {
     }, 1_000);
 
  /*
- * HOO를 실행 중인 동안 5분마다
- * 날씨·기온·체감온도를 갱신한다.
- */
- const weatherRefreshInterval =
-  window.setInterval(() => {
-    void refreshCurrentWeather();
-  }, 5 * 60 * 1000);
+  * HOO-CHANGE-0009: do not repeatedly poll the browser location
+  * or upsert preferences every five minutes. Schedule one event at
+  * the next KST midnight, and recheck only on date/connection changes.
+  */
+  let weatherDayTimer: number | null = null;
+  function scheduleNextWeatherDate() {
+    const dayMs = 86_400_000;
+    const koreaOffsetMs = 9 * 60 * 60 * 1000;
+    const shiftedNow = Date.now() + koreaOffsetMs;
+    const delayMs = dayMs - (shiftedNow % dayMs) + 1_000;
+    weatherDayTimer = window.setTimeout(() => {
+      weatherDayTimer = null;
+      void refreshCurrentWeather();
+      if (isEffectActive) scheduleNextWeatherDate();
+    }, delayMs);
+  }
+  scheduleNextWeatherDate();
 
   /*
    * 다른 화면에서 HOO로 돌아왔을 때도
@@ -5232,6 +5280,7 @@ useEffect(() => {
     "visibilitychange",
     handleVisibilityChange,
   );
+  window.addEventListener("online", refreshCurrentWeather);
 
   return () => {
     isEffectActive = false;
@@ -5240,14 +5289,15 @@ useEffect(() => {
       initialRefreshTimer,
     );
 
-    window.clearInterval(
-      weatherRefreshInterval,
-    );
+    if (weatherDayTimer !== null) {
+      window.clearTimeout(weatherDayTimer);
+    }
 
     document.removeEventListener(
       "visibilitychange",
       handleVisibilityChange,
     );
+    window.removeEventListener("online", refreshCurrentWeather);
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
 }, [
@@ -5862,69 +5912,81 @@ async function enableHooWeatherWithCurrentLocation() {
         consentedAt,
       };
 
-    const {
-      error,
-    } = await supabase
-      .from(
-        "hoo_weather_preferences",
-      )
-      .upsert(
-        {
-          user_id:
-            authData.user.id,
+    // HOO-CHANGE-0009: persist only when settings/coarse location change.
+    const shouldPersistWeatherPreference =
+      !weatherPreference?.weatherEnabled ||
+      weatherPreference.latitude !== coarseLocation.latitude ||
+      weatherPreference.longitude !== coarseLocation.longitude ||
+      weatherPreference.locationSource !== "device_coarse" ||
+      weatherPreference.backgroundWeatherEnabled !== true ||
+      weatherPreference.locationProcessingMode !== "persisted_coarse" ||
+      weatherPreference.timezone !== timezone;
 
-          weather_enabled:
-            true,
+    if (shouldPersistWeatherPreference) {
+      const {
+        error,
+      } = await supabase
+        .from(
+          "hoo_weather_preferences",
+        )
+        .upsert(
+          {
+            user_id:
+              authData.user.id,
 
-          /*
-           * 정확한 원본 위치가 아닌
-           * 약 1km 단위 좌표만 저장한다.
-           */
-          latitude:
-            coarseLocation.latitude,
+            weather_enabled:
+              true,
 
-          longitude:
-            coarseLocation.longitude,
+            /*
+             * 정확한 원본 위치가 아닌
+             * 약 1km 단위 좌표만 저장한다.
+             */
+            latitude:
+              coarseLocation.latitude,
 
-          location_name:
-            "대략적인 현재 위치",
+            longitude:
+              coarseLocation.longitude,
 
-          timezone,
+            location_name:
+              "대략적인 현재 위치",
 
-          location_source:
-            "device_coarse",
+            timezone,
 
-          background_weather_enabled:
-            true,
+            location_source:
+              "device_coarse",
 
-          location_processing_mode:
-            "persisted_coarse",
+            background_weather_enabled:
+              true,
 
-          raw_location_retention_seconds:
-            60,
+            location_processing_mode:
+              "persisted_coarse",
 
-          store_location_history:
-            false,
+            raw_location_retention_seconds:
+              60,
 
-          consented_at:
-            consentedAt,
+            store_location_history:
+              false,
 
-          updated_at:
-            consentedAt,
-        },
-        {
-          onConflict:
-            "user_id",
-        },
+            consented_at:
+              consentedAt,
+
+            updated_at:
+              consentedAt,
+          },
+          {
+            onConflict:
+              "user_id",
+          },
+        );
+
+      if (error) {
+        throw error;
+      }
+
+      setWeatherPreference(
+        enabledPreference,
       );
-
-    if (error) {
-      throw error;
     }
-
-    setWeatherPreference(
-      enabledPreference,
-    );
 
     setWeatherPermissionStatus(
       "granted",
@@ -8230,10 +8292,11 @@ useEffect(() => {
     return;
   }
 
-  window.localStorage.setItem(
-    TODO_STORAGE_KEY,
-    JSON.stringify(todos),
-  );
+  // 0008: Cache only when the serialized record actually changed.
+  const serialized = JSON.stringify(todos);
+  if (window.localStorage.getItem(TODO_STORAGE_KEY) !== serialized) {
+    window.localStorage.setItem(TODO_STORAGE_KEY, serialized);
+  }
 
 }, [
   todos,
@@ -8933,6 +8996,17 @@ async function addSchedule(
       return;
     }
 
+    // 0008: No DB UPDATE or cache churn when no stored field changed.
+    if (
+      targetSchedule.title === title &&
+      targetSchedule.content === content &&
+      (targetSchedule.stickerColor ?? "yellow") === scheduleStickerColor &&
+      targetSchedule.isSecret === isScheduleSecret
+    ) {
+      cancelScheduleEditing();
+      return;
+    }
+
     const updatedSchedule: Schedule = {
       ...targetSchedule,
       title,
@@ -9518,6 +9592,16 @@ async function saveMemo(
       );
 
     if (!previousMemo) {
+      cancelMemoEditing();
+      return;
+    }
+
+    // 0008: Avoid rewriting identical memo content / updated_at.
+    if (
+      previousMemo.title === (title || "제목 없는 메모") &&
+      previousMemo.content === content &&
+      previousMemo.isSecret === isMemoSecret
+    ) {
       cancelMemoEditing();
       return;
     }
@@ -10199,7 +10283,15 @@ async function deleteTodo(
 
 async function saveTodoOrder(
   orderedTodos: TodoItem[],
+  previousTodos: TodoItem[],
 ) {
+  // 0008: Ignore unchanged positions; keep original final array indices.
+  const changedPositions = orderedTodos
+    .map((todo, index) => ({ todo, index }))
+    .filter(({ todo, index }) => previousTodos[index]?.id !== todo.id);
+
+  if (changedPositions.length === 0) return;
+
   try {
     const {
       data: { user },
@@ -10220,8 +10312,8 @@ async function saveTodoOrder(
 
     const updateResults =
       await Promise.all(
-        orderedTodos.map(
-          async (todo, index) => {
+        changedPositions.map(
+          async ({ todo, index }) => {
             const { error } =
               await supabase
                 .from("todos")
@@ -10277,6 +10369,7 @@ function handleTodoDragStart(
   setDraggingTodoId(todoId);
   setDragOverTodoId(todoId);
 
+  todoOrderBeforeDragRef.current = [...todos];
   todoOrderDuringDragRef.current = [
     ...todos,
   ];
@@ -10347,24 +10440,23 @@ function handleTodoDragEnter(
 }
 
 function finishTodoDrag() {
-  const orderedTodos =
-    todoOrderDuringDragRef.current;
+  const orderedTodos = todoOrderDuringDragRef.current;
+  const previousTodos = todoOrderBeforeDragRef.current;
 
   setDraggingTodoId(null);
   setDragOverTodoId(null);
   todoOrderDuringDragRef.current = null;
+  todoOrderBeforeDragRef.current = null;
 
-  if (!orderedTodos) {
-    return;
-  }
+  if (!orderedTodos || !previousTodos) return;
 
-  /*
-   * 화면에는 이미 순서가 반영되어 있으므로
-   * 드래그 종료 시 서버 순서만 저장한다.
-   */
-  void saveTodoOrder(
-    orderedTodos,
-  );
+  // 0008: Ended without moving: no auth request and no DB UPDATE.
+  if (
+    orderedTodos.length === previousTodos.length &&
+    orderedTodos.every((todo, index) => todo.id === previousTodos[index].id)
+  ) return;
+
+  void saveTodoOrder(orderedTodos, previousTodos);
 }
 
 function handleTodoDrop(
@@ -10806,9 +10898,10 @@ async function updateContextMessageStatus(
     | "read"
     | "dismissed",
 ) {
-  if (!contextMessage) {
+  if (!contextMessage || contextMessageMutationInFlightRef.current) {
     return;
   }
+  contextMessageMutationInFlightRef.current = true;
 
   const targetMessageId =
     contextMessage.id;
@@ -10848,6 +10941,9 @@ async function updateContextMessageStatus(
         "user_id",
         user.id,
       )
+      // Only change the state while still delivered.
+      // Concurrent clicks or a second tab cannot overwrite read/dismissed.
+      .eq("status", "delivered")
       .select(`
         id,
         status,
@@ -10883,6 +10979,8 @@ async function updateContextMessageStatus(
     window.alert(
       "메시지를 처리하지 못했어요. 잠시 후 다시 시도해 주세요.",
     );
+  } finally {
+    contextMessageMutationInFlightRef.current = false;
   }
 }
 
@@ -10899,9 +10997,10 @@ async function handleContextMessageDismiss() {
 }
 
 async function handleContextMessageDoNotShowAgain() {
-  if (!contextMessage) {
+  if (!contextMessage || contextMessageMutationInFlightRef.current) {
     return;
   }
+  contextMessageMutationInFlightRef.current = true;
 
   const targetMessageDate =
     contextMessage.messageDate;
@@ -10992,6 +11091,8 @@ async function handleContextMessageDoNotShowAgain() {
     window.alert(
       "오늘의 메시지를 숨기지 못했어요. 잠시 후 다시 시도해 주세요.",
     );
+  } finally {
+    contextMessageMutationInFlightRef.current = false;
   }
 }
 

@@ -198,6 +198,95 @@ function parseItemRow(
 }
 
 /*
+ * 0005: 월드 아이템의 최초 SELECT와 Realtime 구독을 공유한다.
+ * 각 컴포넌트가 독립적으로 서버에 조회/구독하는 폭주를 방지한다.
+ * 채널 구독 해제는 마지막 아이템이 unmount될 때 한 번만 수행한다.
+ */
+type WorldItemClient = ReturnType<typeof createClient>;
+type WorldItemChannel = ReturnType<WorldItemClient["channel"]>;
+type WorldItemListener = (row: HooWorldItemRow) => void;
+
+const worldItemListeners = new Map<string, Set<WorldItemListener>>();
+let worldItemChannel: WorldItemChannel | null = null;
+let worldItemChannelOwner: WorldItemClient | null = null;
+let worldItemSnapshotPromise: Promise<Map<string, HooWorldItemRow> | null> | null = null;
+
+function subscribeWorldItem(
+  client: WorldItemClient,
+  itemId: string,
+  listener: WorldItemListener,
+) {
+  let listeners = worldItemListeners.get(itemId);
+  if (!listeners) {
+    listeners = new Set();
+    worldItemListeners.set(itemId, listeners);
+  }
+  listeners.add(listener);
+
+  if (!worldItemChannel) {
+    worldItemChannelOwner = client;
+    worldItemChannel = client
+      .channel("hoo-world-items:shared")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "hoo_world_item_states",
+        },
+        (payload) => {
+          const row = parseItemRow(payload.new);
+          if (!row) return;
+          worldItemListeners.get(row.item_id)?.forEach((fn) => fn(row));
+        },
+      )
+      .subscribe();
+  }
+
+  return () => {
+    const current = worldItemListeners.get(itemId);
+    current?.delete(listener);
+    if (current?.size === 0) worldItemListeners.delete(itemId);
+    if (worldItemListeners.size === 0) {
+      const oldChannel = worldItemChannel;
+      const owner = worldItemChannelOwner;
+      worldItemChannel = null;
+      worldItemChannelOwner = null;
+      worldItemSnapshotPromise = null;
+      if (oldChannel && owner) void owner.removeChannel(oldChannel);
+    }
+  };
+}
+
+function readWorldItemSnapshot(client: WorldItemClient) {
+  if (!worldItemSnapshotPromise) {
+    worldItemSnapshotPromise = (async () => {
+      const { data: sessionData, error: authError } =
+        await client.auth.getSession();
+      if (authError || !sessionData.session) return null;
+
+      const { data, error } = await client
+        .from("hoo_world_item_states")
+        .select("item_id, item_type, x, y, is_movable, is_installed, revision");
+
+      // 조회 실패를 '아이템 없음'으로 오인하여 등록 RPC를 남발하지 않는다.
+      if (error || !data) {
+        console.warn("HOO WORLD 아이템 일괄 조회 실패:", error);
+        return null;
+      }
+
+      const rows = new Map<string, HooWorldItemRow>();
+      for (const raw of data) {
+        const row = parseItemRow(raw);
+        if (row) rows.set(row.item_id, row);
+      }
+      return rows;
+    })();
+  }
+  return worldItemSnapshotPromise;
+}
+
+/*
  * 현재 이 브라우저에서 X 이동모드를 사용 중인 아이템.
  *
  * 각 HooWorldItem은 독립 컴포넌트지만,
@@ -504,6 +593,9 @@ const HooWorldItem = forwardRef<
     const revisionRef =
       useRef(0);
 
+     // 초기 SELECT보다 먼저 도착한 Realtime 이벤트의 revision을 보호한다.
+     const realtimeRevisionRef = useRef(-1);
+
     const hydratedItemIdRef =
       useRef<string | null>(
         null,
@@ -535,7 +627,7 @@ const HooWorldItem = forwardRef<
      *
      * 부모 컴포넌트의 별도 이동 로직 없이도
      * X 이동모드가 직접 이 함수를 사용해 Supabase에 저장한다.
-     * 80ms trailing으로 연속 방향키 입력의 RPC 폭주를 막는다.
+     * X 이동모드 종료 시점에만 1회 호출한다 (기존 외부 좌표 변경도 지원).
      */
     const queuePositionSave =
       useCallback(
@@ -548,6 +640,11 @@ const HooWorldItem = forwardRef<
             hydratedItemIdRef.current !==
               itemId
           ) {
+            return;
+          }
+
+          // 미변경 위치는 RPC/로컬 복구 기록을 생성하지 않는다.
+          if (isSamePosition(serverPositionRef.current, requestedPosition)) {
             return;
           }
 
@@ -708,7 +805,7 @@ const HooWorldItem = forwardRef<
       );
 
     /*
-     * 공용 DB 등록 + 최초 위치 복원 + Realtime 구독.
+     * 공용 최초 일괄 SELECT + 필요 시 새 아이템 등록 + 공용 Realtime 구독.
      *
      * 새 아이템:
      * - itemId가 DB에 없으면 x/y를 기본 좌표로 자동 등록.
@@ -727,6 +824,7 @@ const HooWorldItem = forwardRef<
 
       revisionRef.current =
         0;
+       realtimeRevisionRef.current = -1;
 
       const fallbackPosition =
         normalizePosition(
@@ -750,6 +848,7 @@ const HooWorldItem = forwardRef<
       function applyItemRow(
         row: HooWorldItemRow,
       ) {
+        if (row.revision < realtimeRevisionRef.current) return;
         const nextPosition =
           normalizePosition(
             row.x,
@@ -789,7 +888,7 @@ const HooWorldItem = forwardRef<
       }
 
       /*
-       * 초기 위치는 먼저 SELECT로 확인한다.
+       * 초기 위치는 공유 일괄 SELECT로 확인한다.
        *
        * 이미 등록된 아이템이라면 ensure RPC를 매번 호출할 필요가 없고,
        * 로그인 세션이 브라우저에서 복원되기 전 RPC가 먼저 실행되어
@@ -821,70 +920,20 @@ const HooWorldItem = forwardRef<
           }
         }
 
-        const {
-          data: sessionData,
-        } =
-          await supabase.auth.getSession();
+        const snapshot = await readWorldItemSnapshot(supabase);
+        if (cancelled || snapshot === null) {
+          // 로그인 없음/조회 오류 시 새 아이템을 임의 등록하지 않는다.
+          return;
+        }
 
-        if (
-          cancelled
-        ) {
+        const existingRow = snapshot.get(itemId);
+        if (existingRow) {
+          applyItemRow(existingRow);
           return;
         }
 
         /*
-         * 세션 복원 전에는 RPC를 호출하지 않는다.
-         * onAuthStateChange에서 세션이 준비되는 즉시 다시 실행된다.
-         */
-        if (
-          !sessionData.session
-        ) {
-          return;
-        }
-
-        const {
-          data: existingData,
-          error: existingError,
-        } =
-          await supabase
-            .from(
-              "hoo_world_item_states",
-            )
-            .select(
-              "item_id, item_type, x, y, is_movable, is_installed, revision",
-            )
-            .eq(
-              "item_id",
-              itemId,
-            )
-            .maybeSingle();
-
-        if (
-          cancelled
-        ) {
-          return;
-        }
-
-        if (
-          !existingError &&
-          existingData
-        ) {
-          const existingRow =
-            parseItemRow(
-              existingData,
-            );
-
-          if (existingRow) {
-            applyItemRow(
-              existingRow,
-            );
-
-            return;
-          }
-        }
-
-        /*
-         * SELECT가 실패했거나 아직 행이 없을 때만
+         * 정상적인 일괄 SELECT에서 아이템이 없는 경우에만
          * 최초 등록 RPC를 호출한다.
          */
         const {
@@ -967,43 +1016,11 @@ const HooWorldItem = forwardRef<
         );
       }
 
-      const channel =
-        supabase
-          .channel(
-            `hoo-world-item:${itemId}`,
-          )
-          .on(
-            "postgres_changes",
-            {
-              event:
-                "UPDATE",
-              schema:
-                "public",
-              table:
-                "hoo_world_item_states",
-              filter:
-                `item_id=eq.${itemId}`,
-            },
-            (payload) => {
-              if (
-                cancelled
-              ) {
-                return;
-              }
-
-              const row =
-                parseItemRow(
-                  payload.new,
-                );
-
-              if (
-                !row ||
-                row.item_id !==
-                  itemId
-              ) {
-                return;
-              }
-
+      const unsubscribeItem = subscribeWorldItem(
+        supabase,
+        itemId,
+        (row) => {
+        if (cancelled || row.item_id !== itemId) return;
               /*
                * 늦게 도착한 예전 이벤트가
                * 최신 좌표를 덮어쓰지 않도록 revision 비교.
@@ -1015,6 +1032,8 @@ const HooWorldItem = forwardRef<
                 return;
               }
 
+              realtimeRevisionRef.current =
+                Math.max(realtimeRevisionRef.current, row.revision);
               revisionRef.current =
                 row.revision;
 
@@ -1094,9 +1113,8 @@ const HooWorldItem = forwardRef<
               onPositionChangeRef.current?.(
                 nextPosition,
               );
-            },
-          )
-          .subscribe();
+        },
+      );
 
       /*
        * getSession() 자체가 Supabase Auth 초기화 완료를 기다린다.
@@ -1128,9 +1146,7 @@ const HooWorldItem = forwardRef<
         pendingMovePositionRef.current =
           null;
 
-        void supabase.removeChannel(
-          channel,
-        );
+        unsubscribeItem();
       };
     }, [
       itemId,
@@ -1584,13 +1600,7 @@ const HooWorldItem = forwardRef<
             nextPosition,
           );
 
-          /*
-           * 연속 이동 중에는 trailing save가 계속 최신 좌표로 갱신되고,
-           * 키를 놓거나 이동모드를 끝낸 뒤 최종 좌표가 저장된다.
-           */
-          queuePositionSave(
-            nextPosition,
-          );
+          // 화면/부모 좌표는 매 프레임 갱신하지만 DB 저장은 X 종료 때만 한다.
 
           /*
            * 아이템이 실제로 움직인 만큼

@@ -484,6 +484,33 @@ async function replaceNotesInIndexedDb(notes: StudyNoteRecord[]) {
 }
 
 
+/** Store only locally changed notes. Never clear the entire notes store for an edit. */
+async function persistChangedStudyNotes(
+  notes: StudyNoteRecord[],
+  lastPersisted: Map<string, string>,
+): Promise<Map<string, string>> {
+  const next = new Map(notes.map((note) => [note.id, JSON.stringify(note)]));
+  const changed = notes.filter((note) => lastPersisted.get(note.id) !== next.get(note.id));
+  const removed = [...lastPersisted.keys()].filter((id) => !next.has(id));
+  if (changed.length === 0 && removed.length === 0) return next;
+
+  const database = await openStudyNoteDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(STUDY_NOTE_STORE, "readwrite");
+      const store = transaction.objectStore(STUDY_NOTE_STORE);
+      for (const note of changed) store.put(note);
+      for (const id of removed) store.delete(id);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error("변경 노트 저장 실패"));
+      transaction.onabort = () => reject(transaction.error ?? new Error("변경 노트 저장 중단"));
+    });
+  } finally {
+    database.close();
+  }
+  return next;
+}
+
 async function loadStudyNoteTombstones() {
   const database = await openStudyNoteDb();
 
@@ -1238,7 +1265,11 @@ export default function StudyNote({ active }: StudyNoteProps) {
   const selectedBlockIdsRef = useRef<string[]>([]);
   const lastSelectedTextBlockIdRef = useRef<string | null>(null);
   const saveTimerRef = useRef<number | null>(null);
-  const syncTimerRef = useRef<number | null>(null);
+  const lastPersistedNotesRef = useRef<Map<string, string>>(new Map());
+  const persistedMutationRevisionRef = useRef(0);
+  const saveInFlightRef = useRef<Promise<boolean> | null>(null);
+  const previousEditorViewRef = useRef<"home" | "category" | "editor">("home");
+  const previousActiveRef = useRef(active);
   const syncInProgressRef = useRef(false);
   const syncQueuedRef = useRef(false);
   const notesRef = useRef<StudyNoteRecord[]>([]);
@@ -1340,6 +1371,10 @@ export default function StudyNote({ active }: StudyNoteProps) {
         }
 
         notesRef.current = savedNotes;
+        lastPersistedNotesRef.current = new Map(
+          savedNotes.map((note) => [note.id, JSON.stringify(note)]),
+        );
+        persistedMutationRevisionRef.current = localMutationRevisionRef.current;
         setNotes(savedNotes);
         setTombstones(savedTombstones);
         setSelectedNoteId(savedNotes[0]?.id ?? null);
@@ -1368,43 +1403,101 @@ export default function StudyNote({ active }: StudyNoteProps) {
     notesRef.current = notes;
   }, [notes]);
 
-  useEffect(() => {
-    if (!isHydrated) {
-      return;
+  /**
+   * The only automatic local save entry point. Dirty edits wait for 60 seconds
+   * of inactivity; changing tabs or rerendering is not a new save event.
+   * A confirmed editor close (or explicit Ctrl+S) flushes once immediately.
+   */
+  function flushStudyNoteDraft(): Promise<boolean> {
+    if (!isHydrated) return Promise.resolve(false);
+    if (saveInFlightRef.current) return saveInFlightRef.current;
+    if (localMutationRevisionRef.current <= persistedMutationRevisionRef.current) {
+      return Promise.resolve(false);
     }
-
-    setSaveLabel("저장 중...");
-
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
     }
 
-    saveTimerRef.current = window.setTimeout(() => {
-      void replaceNotesInIndexedDb(notes)
-        .then(() => {
+    const capturedRevision = localMutationRevisionRef.current;
+    const capturedNotes = notesRef.current;
+    const previousSignatures = lastPersistedNotesRef.current;
+    setSaveLabel("저장 중...");
+
+    const pending = persistChangedStudyNotes(capturedNotes, previousSignatures)
+      .then((signatures) => {
+        lastPersistedNotesRef.current = signatures;
+        persistedMutationRevisionRef.current = capturedRevision;
+        if (localMutationRevisionRef.current === capturedRevision) {
           setSaveLabel(navigator.onLine ? "로컬 저장됨" : "오프라인 저장됨");
+          if (navigator.onLine) void syncStudyNotes(capturedNotes);
+        }
+        return true;
+      })
+      .catch((error) => {
+        console.error("HOO터디 노트 변경사항 저장 실패:", error);
+        setSaveLabel("저장 실패 · 다시 시도하세요");
+        return false;
+      })
+      .finally(() => { saveInFlightRef.current = null; });
+    saveInFlightRef.current = pending;
+    return pending;
+  }
 
-          if (navigator.onLine) {
-            if (syncTimerRef.current !== null) {
-              window.clearTimeout(syncTimerRef.current);
-            }
-
-            syncTimerRef.current = window.setTimeout(() => {
-              void syncStudyNotes(notesRef.current);
-            }, 900);
-          }
-        })
-        .catch((error) => {
-          console.error("HOO터디 노트 IndexedDB 저장 실패:", error);
-          setSaveLabel("저장 실패");
-        });
-    }, 350);
-
+  useEffect(() => {
+    if (!isHydrated) return;
+    if (localMutationRevisionRef.current <= persistedMutationRevisionRef.current) return;
+    setSaveLabel("저장 대기 · 입력 종료 60초 후");
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
+    // A fresh edit cancels the previous countdown. Offline uses the same rule.
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      void flushStudyNoteDraft();
+    }, 60_000);
     return () => {
       if (saveTimerRef.current !== null) {
         window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
       }
     };
+    // Every local mutation updates notes; a remote pull does not increment its revision.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHydrated, notes]);
+
+  useEffect(() => {
+    const previous = previousEditorViewRef.current;
+    previousEditorViewRef.current = viewMode;
+    if (isHydrated && previous === "editor" && viewMode !== "editor") {
+      void flushStudyNoteDraft();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, isHydrated]);
+
+  useEffect(() => {
+    const previouslyActive = previousActiveRef.current;
+    previousActiveRef.current = active;
+    if (isHydrated && previouslyActive && !active) void flushStudyNoteDraft();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, isHydrated]);
+
+  useEffect(() => {
+    const onPageHide = () => {
+      // Best effort: browsers may stop asynchronous IndexedDB work on hard shutdown.
+      void flushStudyNoteDraft();
+    };
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (localMutationRevisionRef.current > persistedMutationRevisionRef.current) {
+        event.preventDefault();
+        event.returnValue = ""; // Ask before losing a pending draft.
+      }
+    };
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", warnBeforeUnload);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHydrated, notes]);
 
   useEffect(() => {
@@ -1455,9 +1548,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       if (cancelled) return;
       setSignedInEmail(session?.user?.email ?? null);
-      if (session?.user && navigator.onLine) {
-        window.setTimeout(() => { void syncStudyNotes(); }, 0);
-      }
     });
 
     return () => {
@@ -1472,6 +1562,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
     }
 
     const syncFromCloud = () => {
+      if (localMutationRevisionRef.current > persistedMutationRevisionRef.current) return;
       if (!navigator.onLine) {
         return;
       }
@@ -1514,33 +1605,9 @@ export default function StudyNote({ active }: StudyNoteProps) {
       }, 500);
     };
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        scheduleSyncFromCloud();
-      }
-    };
-
-    const initialSyncTimer = window.setTimeout(
-      scheduleSyncFromCloud,
-      0,
-    );
-
-    window.addEventListener(
-      "focus",
-      scheduleSyncFromCloud,
-    );
-    window.addEventListener(
-      "pageshow",
-      scheduleSyncFromCloud,
-    );
-    window.addEventListener(
-      "online",
-      scheduleSyncFromCloud,
-    );
-    document.addEventListener(
-      "visibilitychange",
-      handleVisibilityChange,
-    );
+    const initialSyncTimer = window.setTimeout(scheduleSyncFromCloud, 0);
+    // Avoid focus/pageshow polling. Reconnect is a meaningful revalidation event.
+    window.addEventListener("online", scheduleSyncFromCloud);
 
     return () => {
       disposed = true;
@@ -1550,22 +1617,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
         window.clearTimeout(eventSyncTimer);
       }
 
-      window.removeEventListener(
-        "focus",
-        scheduleSyncFromCloud,
-      );
-      window.removeEventListener(
-        "pageshow",
-        scheduleSyncFromCloud,
-      );
-      window.removeEventListener(
-        "online",
-        scheduleSyncFromCloud,
-      );
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange,
-      );
+      window.removeEventListener("online", scheduleSyncFromCloud);
     };
 
     // cloud pull/sync 함수는 현재 render의 최신 ref/state를 사용한다.
@@ -1848,11 +1900,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
         setAuthPassword("");
         setIsLoginOpen(false);
 
-        if (navigator.onLine) {
-          window.setTimeout(() => {
-            void syncStudyNotes();
-          }, 0);
-        }
 
         return;
       }
@@ -1880,11 +1927,6 @@ export default function StudyNote({ active }: StudyNoteProps) {
       );
       setIsLoginOpen(false);
 
-      if (navigator.onLine) {
-        window.setTimeout(() => {
-          void syncStudyNotes();
-        }, 0);
-      }
     } finally {
       setIsSigningIn(false);
     }
@@ -3259,31 +3301,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
       ),
     );
 
-    void replaceNotesInIndexedDb(nextNotes)
-      .then(() => {
-        setSaveLabel(
-          navigator.onLine
-            ? "로컬 저장됨"
-            : "오프라인 저장됨",
-        );
+    // New notes are included in the same 60-second idle save as edits.
 
-        if (navigator.onLine) {
-          if (syncTimerRef.current !== null) {
-            window.clearTimeout(syncTimerRef.current);
-          }
-
-          syncTimerRef.current = window.setTimeout(() => {
-            void syncStudyNotes(nextNotes);
-          }, 900);
-        }
-      })
-      .catch((error) => {
-        console.error(
-          "새 HOO터디 노트 저장 실패:",
-          error,
-        );
-        setSaveLabel("저장 실패");
-      });
   }
 
   function requestCreateNote(category: string) {
@@ -3971,26 +3990,13 @@ export default function StudyNote({ active }: StudyNoteProps) {
     setNotes(nextNotes);
     setTombstones(nextTombstones);
 
-    void Promise.all([
-      replaceNotesInIndexedDb(nextNotes),
-      replaceStudyNoteTombstones(
-        nextTombstones,
-      ),
-    ])
-      .then(() => {
-        if (navigator.onLine) {
-          window.setTimeout(() => {
-            void syncStudyNotes(nextNotes);
-          }, 150);
-        }
-      })
-      .catch((error) => {
-        console.error(
-          "HOO터디 노트 삭제 저장 실패:",
-          error,
-        );
-        setSaveLabel("삭제 저장 실패");
-      });
+    // Keep deletion tombstones durable immediately. The note-list change itself
+    // is persisted with the next idle/close save, not every keystroke.
+    void replaceStudyNoteTombstones(nextTombstones).catch((error) => {
+      console.error("HOO터디 노트 삭제 기록 보존 실패:", error);
+      setSaveLabel("삭제 저장 실패");
+    });
+
   }
 
   function deleteNoteById(noteId: string) {
@@ -4173,38 +4179,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
         : current,
     );
 
-    void replaceNotesInIndexedDb(nextNotes)
-      .then(() => {
-        setSaveLabel(
-          navigator.onLine
-            ? "로컬 저장됨"
-            : "오프라인 저장됨",
-        );
+    // Removing an image schedules the same idle save; no immediate full DB rewrite.
 
-        if (navigator.onLine) {
-          if (
-            syncTimerRef.current !== null
-          ) {
-            window.clearTimeout(
-              syncTimerRef.current,
-            );
-          }
-
-          syncTimerRef.current =
-            window.setTimeout(() => {
-              void syncStudyNotes(
-                notesRef.current,
-              );
-            }, 900);
-        }
-      })
-      .catch((error) => {
-        console.error(
-          "HOO터디 노트 사진 삭제 저장 실패:",
-          error,
-        );
-        setSaveLabel("삭제 저장 실패");
-      });
   }
 
   function beginDeleteDrag(
@@ -9313,32 +9289,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
   function saveStudyNotesNow() {
-    const currentNotes =
-      notesRef.current.length > 0
-        ? notesRef.current
-        : notes;
-
-    setSaveLabel("저장 중...");
-
-    void replaceNotesInIndexedDb(
-      currentNotes,
-    )
-      .then(() => {
-        setSaveLabel("로컬 저장됨");
-        if (navigator.onLine) {
-          return syncStudyNotes(
-            currentNotes,
-          );
-        }
-        return undefined;
-      })
-      .catch((error) => {
-        console.error(
-          "수동 저장 실패:",
-          error,
-        );
-        setSaveLabel("저장 실패");
-      });
+    // Ctrl+S intentionally saves before the 60-second idle deadline.
+    void flushStudyNoteDraft();
   }
 
   function jumpToEditorLineNumber(
@@ -10806,6 +10758,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
   }
 
   async function pullStudyNotesFromCloud() {
+    if (localMutationRevisionRef.current > persistedMutationRevisionRef.current) return;
     if (!navigator.onLine) {
       return;
     }
@@ -11419,6 +11372,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
      * 이전 구현은 IndexedDB 저장을 await한 뒤 setNotes를 실행해서,
      * 로컬 DB 저장 문제가 있으면 정리본에는 있지만 HOO노트에는 0개로 남을 수 있었다.
      */
+    const cloudNotesChanged =
+      JSON.stringify(notesRef.current) !== JSON.stringify(mergedNotes);
     notesRef.current = mergedNotes;
     setNotes(mergedNotes);
 
@@ -11442,13 +11397,16 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
     try {
       await Promise.all([
-        replaceNotesInIndexedDb(
-          mergedNotes,
-        ),
-        replaceStudyNoteTombstones(
-          remainingTombstones,
-        ),
+        cloudNotesChanged
+          ? replaceNotesInIndexedDb(mergedNotes)
+          : Promise.resolve(),
+        replaceStudyNoteTombstones(remainingTombstones),
       ]);
+      if (cloudNotesChanged) {
+        lastPersistedNotesRef.current = new Map(
+          mergedNotes.map((note) => [note.id, JSON.stringify(note)]),
+        );
+      }
     } catch (localSaveError) {
       console.warn(
         "HOO터디 노트 클라우드 복원 후 로컬 캐시 저장 실패:",
@@ -11486,6 +11444,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
   async function syncStudyNotes(
     preferredLocalNotes?: StudyNoteRecord[],
   ) {
+    // Never upload while edits are waiting for their 60s local save.
+    if (localMutationRevisionRef.current > persistedMutationRevisionRef.current) return;
     if (!isHydrated || !navigator.onLine) {
       return;
     }
@@ -12087,10 +12047,15 @@ export default function StudyNote({ active }: StudyNoteProps) {
           ...notesRef.current,
         );
       } else {
+        const remoteMergeChanged =
+          JSON.stringify(notesRef.current) !== JSON.stringify(mergedSourceNotes);
+        if (remoteMergeChanged) {
+          await replaceNotesInIndexedDb(mergedSourceNotes);
+          lastPersistedNotesRef.current = new Map(
+            mergedSourceNotes.map((note) => [note.id, JSON.stringify(note)]),
+          );
+        }
         notesRef.current = mergedSourceNotes;
-        await replaceNotesInIndexedDb(
-          mergedSourceNotes,
-        );
 
         setNotes((previousNotes) => {
           const previousSignature =
@@ -12124,6 +12089,24 @@ export default function StudyNote({ active }: StudyNoteProps) {
       const syncedNotes: StudyNoteRecord[] = [];
 
       for (const note of mergedSourceNotes) {
+        const remote = remoteById.get(note.id);
+        const localVersion = Number(note.version) || 1;
+        const remoteVersion = Number(remote?.version) || 0;
+        const remoteIsCurrent = !!remote && (
+          localVersion < remoteVersion ||
+          (localVersion === remoteVersion &&
+            (Date.parse(note.updatedAt) || 0) <= (Date.parse(remote.updatedAt) || 0))
+        );
+        if (remoteIsCurrent) {
+          syncedNotes.push(note);
+          continue;
+        }
+        // A background sync may have started before fresh typing began.
+        // Stop before any remote writes and leave the new draft for its idle flush.
+        if (localMutationRevisionRef.current !== mutationRevisionAtStart) {
+          syncedNotes.push(note);
+          continue;
+        }
         try {
           const localBlocks: StudyBlock[] = [];
           const remoteBlocks: Array<Record<string, unknown>> = [];
@@ -12399,9 +12382,12 @@ export default function StudyNote({ active }: StudyNoteProps) {
         mutationRevisionBeforeFinalApply ===
         localMutationRevisionRef.current
       ) {
-        await replaceNotesInIndexedDb(
-          reconciledNotes,
-        );
+        if (JSON.stringify(notesRef.current) !== JSON.stringify(reconciledNotes)) {
+          await replaceNotesInIndexedDb(reconciledNotes);
+          lastPersistedNotesRef.current = new Map(
+            reconciledNotes.map((note) => [note.id, JSON.stringify(note)]),
+          );
+        }
 
         notesRef.current = reconciledNotes;
 

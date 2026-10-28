@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 
 import Link from "next/link";
@@ -72,6 +72,7 @@ import {
 import {
   createClient,
 } from "@/lib/supabase/client";
+import { HooWalletSync } from "@/lib/hoo-coin/HooWalletSync";
 import {
   loadRecoveryRecord,
   saveRecoveryRecord,
@@ -1525,6 +1526,92 @@ export default function HooWorldPage() {
     useRef<string | null>(
       null,
     );
+
+  // HOO-CHANGE-0001: one wallet state for WORLD, stall and trading.
+  // This controller is display-only. All spending is still verified on the server.
+  const walletControllerRef = useRef<HooWalletSync | null>(null);
+  useEffect(() => {
+    const controller = new HooWalletSync({
+      readWallet: async (uid) => {
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        if (authError || user?.id !== uid) throw new Error("WALLET_SESSION_CHANGED");
+        const { data, error } = await supabase.from("hoo_coin_wallets")
+          .select("balance").eq("user_id", uid).maybeSingle();
+        if (error || !data) throw new Error("WALLET_READ_FAILED");
+        const balance = Number(data.balance);
+        if (!Number.isFinite(balance) || balance < 0) throw new Error("INVALID_BALANCE");
+        return balance;
+      },
+      readOpenPositionCount: async (uid) => {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (error || session?.user.id !== uid || !session.access_token)
+          throw new Error("POSITION_SESSION_CHANGED");
+        const result = await fetch("/api/hoo-trading?view=position-monitor", {
+          headers: { Authorization: `Bearer ${session.access_token}` }, cache: "no-store",
+        });
+        if (!result.ok) throw new Error("POSITION_CONFIRMATION_BLOCKED");
+        const data = await result.json();
+        if (data.readOnly !== true || data.positionMonitor !== true ||
+            !Array.isArray(data.positions) || data.authUserId !== uid)
+          throw new Error("POSITION_CONFIRMATION_INVALID");
+        return data.positions.length;
+      },
+      onBalance: (uid, balance) => {
+        if (currentUserIdRef.current !== uid) return;
+        setHooCoinBalance(balance);
+        void saveRecoveryRecord("world-wallet", uid, { balance }, "hoo-wallet-verified-sync");
+      },
+    });
+    walletControllerRef.current = controller;
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") controller.resume();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        controller.setUser(null);
+        currentUserIdRef.current = null;
+        setCurrentUserId(null);
+        setHooCoinBalance(0); // Logged-out UI only; never writes a zero to the DB.
+      } else if (event === "SIGNED_IN" && session?.user.id &&
+                 currentUserIdRef.current && currentUserIdRef.current !== session.user.id) {
+        const uid = session.user.id;
+        currentUserIdRef.current = uid;
+        controller.setUser(uid);
+        setCurrentUserId(uid);
+        setHooCoinBalance(0); // Do not display a previous user's balance.
+        // Supabase auth callbacks must not await DB calls internally.
+        queueMicrotask(() => { void (async () => {
+          try {
+            const { data: { user }, error: authError } = await supabase.auth.getUser();
+            if (authError || user?.id !== uid) return;
+            const { data, error } = await supabase.from("hoo_coin_wallets")
+              .select("balance").eq("user_id", uid).maybeSingle();
+            if (!error && data && currentUserIdRef.current === uid)
+              controller.acceptInitial(uid, Number(data.balance));
+          } catch (error) { console.warn("Wallet user switch verification deferred", error); }
+        })(); });
+      }
+    });
+    // No automatic polling is started on mount or merely on re-render.
+    return () => {
+      subscription.unsubscribe();
+      document.removeEventListener("visibilitychange", onVisibility);
+      controller.dispose();
+      if (walletControllerRef.current === controller) walletControllerRef.current = null;
+    };
+  }, [supabase]);
+
+  const handleHooCoinBalanceChange = useCallback((nextBalance: number) => {
+    const uid = currentUserIdRef.current;
+    if (uid && Number.isFinite(nextBalance) && nextBalance >= 0)
+      walletControllerRef.current?.commit(uid, nextBalance);
+  }, []);
+
+  const handleTradingConfirmedPositions = useCallback((count: number, userId: string) => {
+    if (currentUserIdRef.current === userId)
+      walletControllerRef.current?.reportPositions(userId, count);
+  }, []);
 
   
     const [
@@ -4085,6 +4172,7 @@ export default function HooWorldPage() {
         if (!user) {
           if (!cachedPlayer?.value) {
             currentUserIdRef.current = null;
+            walletControllerRef.current?.setUser(null);
 
             if (!cancelled) {
               setCurrentUserId(null);
@@ -4101,6 +4189,7 @@ export default function HooWorldPage() {
 
         currentUserIdRef.current =
           user.id;
+        walletControllerRef.current?.setUser(user.id);
 
         setCurrentUserId(
           user.id,
@@ -4133,7 +4222,7 @@ export default function HooWorldPage() {
             .maybeSingle(),
         ]);
 
-        if (cancelled) {
+        if (cancelled || currentUserIdRef.current !== user.id) {
           return;
         }
 
@@ -4164,13 +4253,14 @@ export default function HooWorldPage() {
             ? String(savedAccessorySlot)
             : null;
 
-        const resolvedBalance = Number(
-          walletResult.data?.balance ?? 0,
-        );
+        // Missing/blocked wallet reads must never be displayed as a fake zero.
+        const rawBalance = Number(walletResult.data?.balance);
+        const resolvedBalance = !walletResult.error && walletResult.data &&
+          Number.isFinite(rawBalance) && rawBalance >= 0 ? rawBalance : null;
 
         setNickname(resolvedNickname);
         setSelectedAccessoryId(resolvedAccessoryId);
-        setHooCoinBalance(resolvedBalance);
+        if (resolvedBalance !== null) walletControllerRef.current?.acceptInitial(user.id, resolvedBalance);
 
         void saveRecoveryRecord(
           "world-player",
@@ -4180,17 +4270,12 @@ export default function HooWorldPage() {
             email: user.email ?? null,
             nickname: resolvedNickname,
             selectedAccessoryId: resolvedAccessoryId,
-            hooCoinBalance: resolvedBalance,
+            hooCoinBalance: resolvedBalance ?? cachedPlayer?.value?.hooCoinBalance ?? 0,
           },
           "supabase-world-player",
         );
 
-        void saveRecoveryRecord(
-          "world-wallet",
-          user.id,
-          { balance: resolvedBalance },
-          "supabase-world-wallet",
-        );
+
       } catch (error) {
         console.warn(
           "HOO WORLD 사용자 서버 정보 조회 실패: 로컬 복구본을 유지합니다.",
@@ -4212,24 +4297,6 @@ export default function HooWorldPage() {
     supabase,
   ]);
 
-  function handleHooCoinBalanceChange(nextBalance: number) {
-    const safeBalance = Number.isFinite(nextBalance)
-      ? nextBalance
-      : 0;
-
-    setHooCoinBalance(safeBalance);
-
-    const userId = currentUserIdRef.current;
-
-    if (userId) {
-      void saveRecoveryRecord(
-        "world-wallet",
-        userId,
-        { balance: safeBalance },
-        "hoo-world-balance-change",
-      );
-    }
-  }
 
   async function saveAccessorySlot(
     accessoryId: string | null,
@@ -10315,6 +10382,7 @@ export default function HooWorldPage() {
     HooWorldStall.tsx가 직접 소유한다.
 ───────────────────────── */}
 <HooWorldStall
+  walletHoo={hooCoinBalance}
   x={77}
   y={58}
   playerPositionRef={
@@ -12382,6 +12450,7 @@ export default function HooWorldPage() {
         buttonBottom={84}
         walletHoo={hooCoinBalance}
         onWalletHooChange={handleHooCoinBalanceChange}
+        onConfirmedPositionCount={handleTradingConfirmedPositions}
         disabled={
           !isClientReady ||
           isUserLoading ||

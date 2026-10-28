@@ -3,15 +3,32 @@
 import {
   type MutableRefObject,
   useEffect,
+  useCallback,
   useMemo,
   useRef,
   useState,
 } from "react";
 
+import { StallTotalCache } from "@/lib/hoo-world/StallTotalCache";
+
 import HooWorldItem from "@/components/HooWorld/items/HooWorldItem";
 import {
   createClient,
 } from "@/lib/supabase/client";
+
+// Prevent duplicate initial RPCs during React StrictMode effect replays.
+// Stall state is public; the in-flight promise contains no user wallet data.
+let sharedStallRead: Promise<{ data: unknown; error: unknown }> | null = null;
+function readStallStateSingleFlight(client: ReturnType<typeof createClient>) {
+  if (sharedStallRead !== null) return sharedStallRead;
+  const pending = Promise.resolve(client.rpc('get_hoo_world_stall_state'))
+    .then(({ data, error }) => ({ data: data as unknown, error: error as unknown }));
+  const tracked = pending.finally(() => {
+    if (sharedStallRead === tracked) sharedStallRead = null;
+  });
+  sharedStallRead = tracked;
+  return tracked;
+}
 
 type HooWorldPosition = {
   x: number;
@@ -26,6 +43,7 @@ type HooWorldStallProps = {
   onBalanceChange?: (
     nextBalance: number,
   ) => void;
+  walletHoo: number;
 };
 
 export default function HooWorldStall({
@@ -34,6 +52,7 @@ export default function HooWorldStall({
   playerPositionRef,
   onBeforeOpen,
   onBalanceChange,
+  walletHoo,
 }: HooWorldStallProps) {
   const supabase = useMemo(
     () => createClient(),
@@ -55,15 +74,28 @@ export default function HooWorldStall({
       null,
     );
 
-  const [
-    hooCoinBalance,
-    setHooCoinBalance,
-  ] = useState(0);
+  // Display the wallet that WORLD already verified. Never query it twice.
+  const hooCoinBalance = walletHoo;
 
   const [
     hooWorldStallTotal,
     setHooWorldStallTotal,
   ] = useState(0);
+  const [stallState, setStallState] = useState<'loading' | 'verified' | 'stale'>('loading');
+  const totalCacheRef = useRef<StallTotalCache | null>(null);
+  if (totalCacheRef.current === null) totalCacheRef.current = new StallTotalCache();
+  const refreshStallOnOpenRef = useRef<() => void>(() => {});
+
+  const publishStallCache = useCallback(() => {
+    const state = totalCacheRef.current!.snapshot();
+    if (state.total !== null) setHooWorldStallTotal(state.total);
+    setStallState(state.dirty ? 'stale' : 'verified');
+  }, []);
+
+  const acceptConfirmedStallTotal = useCallback((raw: unknown) => {
+    totalCacheRef.current!.acceptPush(raw);
+    publishStallCache();
+  }, [publishStallCache]);
 
   const [
     hooWorldStallDonationAmount,
@@ -104,200 +136,108 @@ export default function HooWorldStall({
     null,
   );
 
-  /*
-   * 가판대가 자기 지갑 정보도 직접 관리한다.
-   * 맵(page.tsx)의 고정 좌표/상태에 의존하지 않는다.
+  /* HOO-CHANGE-0002: one initial state RPC, no timer, no visibility polling.
+   * A valid Realtime row may update the display at zero additional RPC cost.
+   * Without a trusted revision, missing/descending events invalidate the UI;
+   * next explicit dialog open can recover with a single server read.
    */
   useEffect(() => {
-    let cancelled = false;
+    let closed = false;
+    let reading = false;
+    let hadConnection = false;
+    let lostConnection = false;
+    let startedInitial = false;
 
-    async function loadWallet() {
+    async function readStallOnce() {
+      if (closed || reading || (!totalCacheRef.current!.snapshot().dirty && startedInitial)) return;
+      reading = true;
+      startedInitial = true;
+      const epoch = totalCacheRef.current!.beginRead();
       try {
-        const {
-          data: {
-            user,
-          },
-        } =
-          await supabase.auth.getUser();
-
-        if (
-          cancelled ||
-          !user
-        ) {
-          return;
-        }
-
-        const {
-          data,
-          error,
-        } =
-          await supabase
-            .from(
-              "hoo_coin_wallets",
-            )
-            .select("balance")
-            .eq(
-              "user_id",
-              user.id,
-            )
-            .maybeSingle();
-
-        if (
-          cancelled
-        ) {
-          return;
-        }
-
-        if (error) {
-          console.error(
-            "HOO WORLD 가판대 지갑 정보를 불러오지 못했습니다.",
-            error,
-          );
-
-          return;
-        }
-
-        const nextBalance =
-          Number(
-            data?.balance ?? 0,
-          );
-
-        const normalizedBalance =
-          Number.isFinite(
-            nextBalance,
-          )
-            ? Math.max(
-                0,
-                Math.floor(
-                  nextBalance,
-                ),
-              )
-            : 0;
-
-        setHooCoinBalance(
-          normalizedBalance,
-        );
-
-        onBalanceChange?.(
-          normalizedBalance,
-        );
-      } catch (error) {
-        console.error(
-          "HOO WORLD 가판대 지갑 정보를 불러오는 중 오류가 발생했습니다.",
-          error,
-        );
-      }
-    }
-
-    void loadWallet();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    onBalanceChange,
-    supabase,
-  ]);
-
-  /*
-   * 공동 모금액 역시 가판대 자체가 동기화한다.
-   */
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadStallState() {
-      const {
-        data,
-        error,
-      } =
-        await supabase.rpc(
-          "get_hoo_world_stall_state",
-        );
-
-      if (cancelled) {
-        return;
-      }
-
-      if (error) {
-        console.warn(
-          "HOO WORLD 가판대 모금액 동기화를 잠시 건너뜁니다.",
-          error,
-        );
-
-        return;
-      }
-
-      const result =
-        data &&
-        typeof data ===
-          "object" &&
-        !Array.isArray(data)
-          ? (
-              data as {
-                total_hoo_coin?: unknown;
-              }
-            )
+        const { data, error } = await readStallStateSingleFlight(supabase);
+        if (closed) return;
+        if (error) throw error;
+        const row = Array.isArray(data) ? data[0] : data;
+        const total = row && typeof row === 'object'
+          ? (row as { total_hoo_coin?: unknown }).total_hoo_coin
           : null;
-
-      const nextTotal =
-        Number(
-          result?.total_hoo_coin ??
-            0,
-        );
-
-      setHooWorldStallTotal(
-        Number.isFinite(
-          nextTotal,
-        )
-          ? Math.max(
-              0,
-              Math.floor(
-                nextTotal,
-              ),
-            )
-          : 0,
-      );
+        const accepted = totalCacheRef.current!.acceptRead(total, epoch);
+        if (accepted !== 'outdated') publishStallCache();
+      } catch (error) {
+        if (closed) return;
+        console.warn('HOO WORLD 공동 모금액 확인 실패 (자동 재시도 없음)', error);
+        totalCacheRef.current!.invalidate();
+        publishStallCache();
+      } finally {
+        reading = false;
+      }
     }
 
-    void loadStallState();
+    refreshStallOnOpenRef.current = () => {
+      if (totalCacheRef.current!.snapshot().dirty) void readStallOnce();
+    };
+    void readStallOnce();
 
-    // Recovery polling; foreground users get a refresh at most every 30s.
-    // Keep the existing donation flow and all database mutations unchanged.
-    const refreshTimer =
-      window.setInterval(
-        () => {
-          if (document.visibilityState === "visible") {
-            void loadStallState();
+    let channel: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        channel = new BroadcastChannel('hoo:stall-total:v1');
+        channel.onmessage = (event: MessageEvent) => {
+          if (closed) return;
+          const info = event.data as { type?: unknown; total?: unknown } | null;
+          if (info?.type !== 'confirmed-stall-total') return;
+          acceptConfirmedStallTotal(info.total);
+        };
+      } catch { channel = null; }
+    }
+
+    // Delivery depends on publication/RLS, which must be verified before rollout.
+    // Realtime never changes the server ledger or authorizes payment.
+    const realtime = supabase
+      .channel('hoo-world-stall-total-v1')
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'hoo_world_stall_state',
+      }, (payload) => {
+        if (closed) return;
+        const next = payload.new;
+        const total = next && typeof next === 'object'
+          ? (next as { total_hoo_coin?: unknown }).total_hoo_coin
+          : null;
+        acceptConfirmedStallTotal(total);
+      })
+      .subscribe((status) => {
+        if (closed) return;
+        if (status === 'SUBSCRIBED') {
+          if (hadConnection && lostConnection) {
+            totalCacheRef.current!.invalidate();
+            publishStallCache();
           }
-        },
-        30000,
-      );
+          hadConnection = true;
+          lostConnection = false;
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          lostConnection = true;
+          totalCacheRef.current!.invalidate();
+          publishStallCache();
+        }
+      });
 
-    // Resync immediately after returning from a background tab.
-    const handleStallVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void loadStallState();
+    // On reconnect, invalidate only. Never poll when changing tab visibility.
+    function markResumeStale() {
+      if (document.visibilityState !== 'visible' || closed) return;
+      if (lostConnection) {
+        totalCacheRef.current!.invalidate();
+        publishStallCache();
       }
-    };
-    document.addEventListener(
-      "visibilitychange",
-      handleStallVisibilityChange,
-    );
-
+    }
+    document.addEventListener('visibilitychange', markResumeStale);
     return () => {
-      cancelled = true;
-
-      window.clearInterval(
-        refreshTimer,
-      );
-      document.removeEventListener(
-        "visibilitychange",
-        handleStallVisibilityChange,
-      );
+      closed = true;
+      refreshStallOnOpenRef.current = () => {};
+      document.removeEventListener('visibilitychange', markResumeStale);
+      channel?.close();
+      void supabase.removeChannel(realtime);
     };
-  }, [
-    supabase,
-  ]);
+  }, [supabase, acceptConfirmedStallTotal, publishStallCache]);
 
   async function submitDonation() {
     if (
@@ -449,10 +389,6 @@ export default function HooWorldStall({
               ),
             );
 
-          setHooCoinBalance(
-            normalizedBalance,
-          );
-
           onBalanceChange?.(
             normalizedBalance,
           );
@@ -463,14 +399,14 @@ export default function HooWorldStall({
             nextStallTotal,
           )
         ) {
-          setHooWorldStallTotal(
-            Math.max(
-              0,
-              Math.floor(
-                nextStallTotal,
-              ),
-            ),
-          );
+          acceptConfirmedStallTotal(nextStallTotal);
+          if (typeof BroadcastChannel !== 'undefined') {
+            try {
+              const notification = new BroadcastChannel('hoo:stall-total:v1');
+              notification.postMessage({ type: 'confirmed-stall-total', total: nextStallTotal });
+              notification.close();
+            } catch { /* same-tab UI already updated */ }
+          }
         }
       }
 
@@ -898,6 +834,8 @@ export default function HooWorldStall({
 
       onBeforeOpen?.();
 
+      // A stale cache is revalidated only on this explicit user action.
+      refreshStallOnOpenRef.current();
       activeDialogElement.showModal();
     }
 
@@ -1069,7 +1007,7 @@ export default function HooWorldStall({
               </span>
 
               <span className="text-[11px] font-black tabular-nums text-[#ffe291]">
-                {hooWorldStallTotal.toLocaleString()}
+                {stallState === 'loading' ? '조회 중' : hooWorldStallTotal.toLocaleString()}
               </span>
             </div>
 
@@ -1232,8 +1170,9 @@ export default function HooWorldStall({
                 </span>
 
                 <strong className="mt-1 block text-lg font-black tabular-nums text-[#6d7d4f]">
-                  {hooWorldStallTotal.toLocaleString()}
+                  {stallState === 'loading' ? '조회 중' : hooWorldStallTotal.toLocaleString()}
                 </strong>
+                {stallState === 'stale' && <span className="text-[9px] font-bold text-amber-700">모금액 재확인 필요</span>}
               </div>
             </div>
 

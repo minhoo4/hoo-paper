@@ -57,11 +57,15 @@ type News={id:string;second:number;symbol:SymbolCode;headline:string;sentiment:'
 type Snapshot={receipt?:{requestId:string;committed:boolean;replayed:boolean;positionId:string|null};statePending?:boolean;market:{now:number;virtualMinute:number;prices:Record<SymbolCode,number>;candles:Record<SymbolCode,Bar[]>;news:News[]},
  walletHoo:number;totalHooEquivalent:number;account:{cash_tc:number;total_deposit_tc:number;total_withdraw_tc:number;realized_tc:number;equity_tc:number},
  positions:Position[];history:{id:number;symbol:string;action:string;side:number;net_pnl_tc:number;fill_price:number;happened_second:number}[];
- ranking:Leader[];clock:{caughtUp:boolean;remaining:number};timeframe:number};
+ ranking:Leader[];clock:{caughtUp:boolean;remaining:number};timeframe:number;authUserId?:string};
 type ReadOnlyAssets={readOnly:true;walletHoo:number;openPositions:number;account:null|{
  cash_tc:number;total_deposit_tc:number;realized_tc:number
 }};
-type ReadOnlyRanking={readOnly:true;ranking:Leader[];eligibleCount:number;asOf:string};
+type ReadOnlyRanking={readOnly:true;ranking:Leader[];eligibleCount:number;asOf:string;authUserId:string};
+// No wallet in this response. Quotes remain on the separate, existing market loop.
+type MonitorPosition=Pick<Position,'id'|'symbol'|'side'|'leverage'|'qty'|'entry_price'|'margin_tc'|'stop_price'|'take_price'>;
+type PositionMonitor={readOnly:true;positionMonitor:true;positions:MonitorPosition[];authUserId:string;
+ account:Pick<Snapshot['account'],'cash_tc'|'total_deposit_tc'|'realized_tc'>};
 const SYMBOLS:SymbolCode[]=['HOO','EGG','COAL'];
 const LABELS:Record<SymbolCode,string>={HOO:'🦉 후코인',EGG:'🥚 계란코인',COAL:'🪨 석탄코인'};
 const fmt=(v:number,d=2)=>Number(v||0).toLocaleString('ko-KR',{minimumFractionDigits:d,maximumFractionDigits:d});
@@ -112,9 +116,11 @@ async function requestTrading(body?:Record<string,unknown>,frame=30):Promise<Sna
  if(payload){
    if(!json.receipt?.committed||json.receipt.requestId!==payload.requestId)throw new Error('체결 확인 기록이 없습니다. 마지막 요청 확인 버튼을 눌러주세요.');
    localStorage.removeItem(storageKey);
+   // No tokens or balances shared: another tab can re-check its own position state.
+   try{localStorage.setItem('hoo:trading:position-invalidation',crypto.randomUUID());}catch{}
  }
  if(!json.statePending&&(!Array.isArray(json.positions)||!json.account||!json.market))throw new Error('계좌 응답 구조가 올바르지 않습니다.');
- return json as Snapshot;
+ return {...json,authUserId:session.user.id} as Snapshot;
 }
 
 // Read only the authenticated user's wallet and account while orders are locked.
@@ -135,7 +141,32 @@ async function requestReadOnlyAssets():Promise<ReadOnlyAssets>{
  return json as ReadOnlyAssets;
 }
 
-// Independently fetch rankings every 15 seconds even while trading snapshots are blocked.
+async function stillCurrentTradingUser(uid:string|undefined){
+ if(!uid)return false;
+ const {data:{session},error}=await getBrowserDb().auth.getSession();
+ return !error&&session?.user.id===uid;
+}
+
+// Read-only position/account changes at most once per second WHILE a server-confirmed
+// position is open. It does not fetch hoo_coin_wallets or run market catch-up.
+async function requestPositionMonitor():Promise<PositionMonitor>{
+ const client=getBrowserDb();
+ const {data:{session},error}=await client.auth.getSession();
+ if(error||!session?.access_token)throw new Error('후월드 로그인이 필요합니다.');
+ const response=await fetch('/api/hoo-trading?view=position-monitor',{
+  headers:{Authorization:`Bearer ${session.access_token}`},cache:'no-store'
+ });
+ const json=await response.json().catch(()=>({error:'포지션 응답 오류'}));
+ if(!response.ok)throw new Error(json.error||'포지션을 조회하지 못했습니다.');
+ if(json.readOnly!==true||json.positionMonitor!==true||!Array.isArray(json.positions)||
+    !json.account||!Number.isFinite(json.account.cash_tc)||!Number.isFinite(json.account.realized_tc)||
+    json.positions.some((p:MonitorPosition)=>!p||typeof p.id!=='string'||!SYMBOLS.includes(p.symbol)||
+     ![1,-1].includes(p.side)||!Number.isFinite(p.qty)||p.qty<=0||
+     !Number.isFinite(p.entry_price)||p.entry_price<=0||!Number.isFinite(p.margin_tc)))
+  throw new Error('서버 포지션 응답이 올바르지 않습니다.');
+ return {...json,authUserId:session.user.id} as PositionMonitor;
+}
+// Read the leaderboard only when the user explicitly clicks refresh.
 async function requestReadOnlyRanking():Promise<ReadOnlyRanking>{
  const client=getBrowserDb();
  const {data:{session},error}=await client.auth.getSession();
@@ -150,14 +181,23 @@ async function requestReadOnlyRanking():Promise<ReadOnlyRanking>{
     json.ranking.some((p:Leader)=>!p||typeof p.userId!=='string'||typeof p.name!=='string'||
       !Number.isFinite(p.roi)||!Number.isFinite(p.profit)))
   throw new Error('랭킹 응답 형식이 올바르지 않습니다.');
- return json as ReadOnlyRanking;
+ return {...json,authUserId:session.user.id} as ReadOnlyRanking;
 }
 
-type ChartBackup={key:string;at:number;bars:Bar[]}; // HOO_CHART_DIRECT_FIX_V1
+// HOO_CHART_STICKY_FALLBACK_V1: UI-only last *verified* OHLCV cache; never synthesize executable prices.
+type LastGoodChart={key:string;bars:Bar[];savedAt:number;marketSecond:number};
 type PublicMarket={now:number;virtualMinute:number;prices:Record<SymbolCode,number>;
- candles:Partial<Record<SymbolCode,Bar[]>>;news:News[];historyBefore?:number|null;cacheMode?:string};
-async function requestMarket(symbol:SymbolCode,frame:number,before?:number):Promise<PublicMarket>{
- const response=await fetch(`/api/hoo-trading/market?symbol=${symbol}&timeframe=${frame}${before===undefined?'':`&before=${before}`}`,{cache:'no-store'});
+ candles:Partial<Record<SymbolCode,Bar[]>>;news:News[];newsRevision?:string;newsChanged?:boolean;historyBefore?:number|null;cacheMode?:string;delta?:boolean;chartContext?:string;unchanged?:boolean};
+// A verified pair cache is UI-only: never use OHLCV as an order execution price.
+type VerifiedChartMemory={bars:Bar[];historyBefore:number|null|undefined;now:number;context:string;mode:string};
+async function requestMarket(symbol:SymbolCode,frame:number,before?:number,since?:number,newsRevision?:string|null,knownNow?:number,knownContext?:string|null):Promise<PublicMarket>{
+ const suffix=before!==undefined?`&before=${before}`:since!==undefined?`&since=${since}`:'';
+ // News revision travels on the EXISTING quote request, never in an extra poll.
+ const newsQuery=before===undefined&&newsRevision!=null?`&newsRevision=${encodeURIComponent(newsRevision)}`:'';
+ // The server may avoid chart aggregation when this exact market session clock has not moved.
+ const unchangedQuery=before===undefined&&knownNow!==undefined&&Number.isSafeInteger(knownNow)&&knownContext
+   ?`&knownNow=${knownNow}&knownContext=${encodeURIComponent(knownContext)}`:'';
+ const response=await fetch(`/api/hoo-trading/market?symbol=${symbol}&timeframe=${frame}${suffix}${newsQuery}${unchangedQuery}`,{cache:'no-store'});
  const json=await response.json().catch(()=>({error:'공통 시세 응답 오류'}));
  if(!response.ok)throw new Error(json.error||'공통 시장 접속 실패');
  return json as PublicMarket;
@@ -214,14 +254,18 @@ function CandleChart({bars,symbol,timeframe,onLoadOlder,hasOlder}:{
  </div>;
 }
 
-export type HooTradingDockProps={onActiveChange?:(active:boolean)=>void;buttonBottom?:number;disabled?:boolean;walletHoo?:number;onWalletHooChange?:(balance:number)=>void};
+export type HooTradingDockProps={onActiveChange?:(active:boolean)=>void;buttonBottom?:number;disabled?:boolean;walletHoo?:number;onWalletHooChange?:(balance:number)=>void;onConfirmedPositionCount?:(count:number,userId:string)=>void};
 /** Install ONCE in app/hoo-world/page.tsx, do not create a separate game page. */
-export default function HooTradingDock({onActiveChange,buttonBottom,disabled=false,walletHoo=0,onWalletHooChange}:HooTradingDockProps){
+export default function HooTradingDock({onActiveChange,buttonBottom,disabled=false,walletHoo=0,onWalletHooChange,onConfirmedPositionCount}:HooTradingDockProps){
  const [open,setOpen]=useState(false),[data,setData]=useState<Snapshot|null>(null);
  const [marketData,setMarketData]=useState<PublicMarket|null>(null);
+ // The latest event-defined news remains visible between 1s quote packets.
+ const [newsCache,setNewsCache]=useState<News[]|null>(null);
  const [marketError,setMarketError]=useState<string|null>(null);
- const [chartBackup,setChartBackup]=useState<ChartBackup|null>(null);
+ const [lastGoodChart,setLastGoodChart]=useState<LastGoodChart|null>(null);
  const [economyMaintenance,setEconomyMaintenance]=useState(false);
+ const [monitorPositions,setMonitorPositions]=useState(false);
+ const [monitorError,setMonitorError]=useState<string|null>(null);
  const [readOnlyAssets,setReadOnlyAssets]=useState<ReadOnlyAssets|null>(null);
  const [readOnlyAssetError,setReadOnlyAssetError]=useState<string|null>(null);
  const [readOnlyRanking,setReadOnlyRanking]=useState<ReadOnlyRanking|null>(null);
@@ -238,114 +282,312 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [rankingExpanded,setRankingExpanded]=useState(false);
  const [working,setWorking]=useState(false),[error,setError]=useState<string|null>(null),[message,setMessage]=useState<string|null>(null);
  const fetching=useRef(false),marketFetching=useRef(false),isActive=useRef(false);
- const rankingFetching=useRef(false);
+ const monitorFetching=useRef(false);
+ const assetEpoch=useRef(0);
+ const snapshotRef=useRef<Snapshot|null>(null);
+ const finalClosurePending=useRef(false);
+ const activeUserId=useRef<string|null>(null),authRefreshPending=useRef(false);
+ const onActiveChangeRef=useRef(onActiveChange),onWalletChangeRef=useRef(onWalletHooChange),onPositionCountRef=useRef(onConfirmedPositionCount);
+ const frameRef=useRef(frame);
+ onActiveChangeRef.current=onActiveChange;onWalletChangeRef.current=onWalletHooChange;onPositionCountRef.current=onConfirmedPositionCount;frameRef.current=frame;
+ // 0010-C: rank reads are bounded to an opening, manual refresh, or a verified full close.
+ const rankingFetching=useRef(false),rankingEpoch=useRef(0),rankingManualSeq=useRef(0);
+ const rankingQueue=useRef<{key:string;epoch:number}[]>([]);
+ const rankingHandled=useRef<Set<string>>(new Set());
+ const previouslyOpenPositionIds=useRef<Set<string>|null>(null);
+ const rankingAccount=useRef<string|null>(null);
  const lastWalletSeen=useRef<number|null>(null);
  // Last verified public prices survive coin/timeframe switches and in-flight requests.
  const lastMarketPrices=useRef<Partial<Record<SymbolCode,number>>>({});
+ const newsRevisionRef=useRef<string|null>(null);
  const barsRef=useRef<Bar[]>([]),historyCursor=useRef<number|null|undefined>(undefined),historyFetching=useRef(false);
+ // Reuse already verified, paged history when changing symbol or timeframe.
+ const chartMemory=useRef(new Map<string,VerifiedChartMemory>());
+ const chartContextRef=useRef<string|null>(null),chartLastNow=useRef<number|undefined>(undefined);
+ const [chartRevalidating,setChartRevalidating]=useState(false);
  const chartEngineMode=useRef<string|null>(null),chartEngineEpoch=useRef(0);
  // Ignore stale GET responses that started before a trade was submitted.
  const gate=useRef(new RequestGate());
  const requestContext=useRef('');requestContext.current=`${open}:${symbol}:${frame}`;
+ // Only actual server-confirmed positions authorize a repeating asset monitor.
+ // Asset epoch blocks old responses after close/reopen; RequestGate blocks order races.
  const refresh=useCallback(async()=>{
    if(fetching.current||!isActive.current)return;
-   const token=gate.current.beginRead(),context=requestContext.current;
+   const token=gate.current.beginRead(),epoch=assetEpoch.current;
    if(token===null)return;
    fetching.current=true;
-   try{const next=await requestTrading(undefined,frame);
-      if(!gate.current.accepts(token)||context!==requestContext.current)return;
-      setData(next);setReadOnlyAssets(null);setReadOnlyAssetError(null);
-      setError(null);setEconomyMaintenance(false);
-      if(Number.isFinite(next.walletHoo)&&lastWalletSeen.current!==next.walletHoo){
-        lastWalletSeen.current=next.walletHoo;onWalletHooChange?.(next.walletHoo);
-      }}
-   catch(e){
-     if(gate.current.accepts(token)&&context===requestContext.current){
+   try{
+     const next=await requestTrading(undefined,frameRef.current);
+     if(!gate.current.accepts(token)||epoch!==assetEpoch.current||!isActive.current||
+        !await stillCurrentTradingUser(next.authUserId))return;
+     finalClosurePending.current=false;activeUserId.current=next.authUserId||null;
+     snapshotRef.current=next;setData(next);setReadOnlyAssets(null);setReadOnlyAssetError(null);
+     setMonitorError(null);setError(null);setEconomyMaintenance(false);
+     // Never infer a flat account from missing/null data or a pending receipt.
+     setMonitorPositions(Array.isArray(next.positions)&&next.positions.length>0);
+     if(Array.isArray(next.positions)&&next.authUserId)onPositionCountRef.current?.(next.positions.length,next.authUserId);
+     if(Number.isFinite(next.walletHoo)&&lastWalletSeen.current!==next.walletHoo){
+       lastWalletSeen.current=next.walletHoo;onWalletChangeRef.current?.(next.walletHoo);
+     }
+   }catch(e){
+     if(gate.current.accepts(token)&&epoch===assetEpoch.current&&isActive.current){
        const maintenance=e instanceof Error&&e.name==='EconomyMaintenance';
        setEconomyMaintenance(maintenance);
+       // A failed final verification is NOT authorization to resume/retry endlessly.
+       if(finalClosurePending.current){
+         setMonitorPositions(false);
+         setMonitorError('최종 정산 확인 실패. 자산 재확인 버튼으로 다시 검증해주세요.');
+       }else setMonitorPositions(!maintenance&&(snapshotRef.current?.positions.length??0)>0);
        setError(maintenance?null:e instanceof Error?e.message:String(e));
        if(maintenance){
-        // An unsuccessful trading snapshot must never be mistaken for an empty account.
-        setData(null);
-        try{
-         const assets=await requestReadOnlyAssets();
-         if(gate.current.accepts(token)&&context===requestContext.current){
-          setReadOnlyAssets(assets);setReadOnlyAssetError(null);
-          if(lastWalletSeen.current!==assets.walletHoo){
-           lastWalletSeen.current=assets.walletHoo;onWalletHooChange?.(assets.walletHoo);
-          }
+         snapshotRef.current=null;setData(null);
+         try{
+           const assets=await requestReadOnlyAssets();
+           if(gate.current.accepts(token)&&epoch===assetEpoch.current&&isActive.current){
+             setReadOnlyAssets(assets);setReadOnlyAssetError(null);
+             if(lastWalletSeen.current!==assets.walletHoo){
+               lastWalletSeen.current=assets.walletHoo;onWalletChangeRef.current?.(assets.walletHoo);
+             }
+           }
+         }catch(assetError){
+           if(gate.current.accepts(token)&&epoch===assetEpoch.current&&isActive.current)
+             setReadOnlyAssetError(assetError instanceof Error?assetError.message:String(assetError));
          }
-        }catch(assetError){
-         if(gate.current.accepts(token)&&context===requestContext.current){
-          setReadOnlyAssets(null);
-          setReadOnlyAssetError(assetError instanceof Error?assetError.message:String(assetError));
-         }
-        }
-       }else{
-        setReadOnlyAssets(null);setReadOnlyAssetError(null);
        }
      }
+   }finally{
+     fetching.current=false;
+     if(authRefreshPending.current&&isActive.current){
+       authRefreshPending.current=false;
+       // Avoid a lost re-login refresh while the old account request was in flight.
+       window.queueMicrotask(()=>{if(isActive.current)void refresh();});
+     }
    }
-   finally{fetching.current=false;}
- },[frame,onWalletHooChange]);
- useEffect(()=>{
-   isActive.current=open;
-   onActiveChange?.(open);
-   document.documentElement.dataset.hooTrading=open?'on':'off';
-   document.dispatchEvent(new CustomEvent('hoo:trading:change',{detail:{active:open}}));
-   if(open)void refresh();
-   return ()=>{
-     if(open){document.documentElement.dataset.hooTrading='off';document.dispatchEvent(new CustomEvent('hoo:trading:change',{detail:{active:false}}));}
-   };
- },[open,onActiveChange,refresh]);
- useEffect(()=>{if(!open)return;const poll=setInterval(()=>void refresh(),economyMaintenance?15000:4500);return()=>clearInterval(poll);},[open,refresh,economyMaintenance]);
- const refreshRanking=useCallback(async()=>{
-   if(!isActive.current||rankingFetching.current)return;
+ },[]);
+ const refreshRanking=useCallback(async(reason:'entry'|'manual'|'closed'='manual',positionId?:string)=>{
+   if(!isActive.current)return;
+   // The refresh button is single-flight. Market ticks, unrealized P&L, and
+   // partial closes never call this function.
+   if(reason==='manual'&&rankingFetching.current)return;
+   if(reason==='closed'&&!positionId)return;
+   const key=reason==='closed'?`closed:${positionId}`:
+     reason==='entry'?'entry':`manual:${++rankingManualSeq.current}`;
+   if(rankingHandled.current.has(key))return;
+   rankingHandled.current.add(key);
+   rankingQueue.current.push({key,epoch:rankingEpoch.current});
+   if(rankingFetching.current)return;
    rankingFetching.current=true;
    setRankingLoading(true);
    try{
-     const result=await requestReadOnlyRanking();
-     if(isActive.current){setReadOnlyRanking(result);setRankingError(null);}
-   }catch(e){
-     if(isActive.current)setRankingError(e instanceof Error?e.message:String(e));
+     // A confirmed close that arrives during the initial request gets its
+     // own subsequent read AFTER server confirmation; each ID is deduplicated.
+     while(rankingQueue.current.length&&isActive.current){
+       const task=rankingQueue.current.shift()!;
+       if(task.epoch!==rankingEpoch.current)continue;
+       try{
+         const result=await requestReadOnlyRanking();
+         if(task.epoch!==rankingEpoch.current||!isActive.current||
+            !await stillCurrentTradingUser(result.authUserId))continue;
+         setReadOnlyRanking(result);setRankingError(null);
+       }catch(e){
+         if(task.epoch===rankingEpoch.current&&isActive.current)
+           setRankingError(e instanceof Error?e.message:String(e));
+       }
+     }
    }finally{
      rankingFetching.current=false;
      if(isActive.current)setRankingLoading(false);
    }
  },[]);
  useEffect(()=>{
+   isActive.current=open;
+   assetEpoch.current++;
+   // A dock opening is a fresh trading visit; closing/reopening the TOP 5/10
+   // UI within that visit reuses the same read-only ranking cache.
+   rankingEpoch.current++;
+   rankingQueue.current=[];
+   rankingHandled.current.clear();
+   previouslyOpenPositionIds.current=null;
+   rankingAccount.current=null;
+   setReadOnlyRanking(null);setRankingError(null);setRankingLoading(false);
+   if(open)void refreshRanking('entry');
+   onActiveChangeRef.current?.(open);
+   document.documentElement.dataset.hooTrading=open?'on':'off';
+   document.dispatchEvent(new CustomEvent('hoo:trading:change',{detail:{active:open}}));
+   if(open)void refresh();
+   else {setMonitorPositions(false);snapshotRef.current=null;setData(null);finalClosurePending.current=false;authRefreshPending.current=false;activeUserId.current=null;}
+   return ()=>{
+     if(open){isActive.current=false;document.documentElement.dataset.hooTrading='off';
+      document.dispatchEvent(new CustomEvent('hoo:trading:change',{detail:{active:false}}));}
+   };
+ },[open,refresh,refreshRanking]);
+ // A changed login invalidates displayed financial data and all in-flight reads.
+ useEffect(()=>{
    if(!open)return;
-   void refreshRanking();
-   const poll=window.setInterval(()=>void refreshRanking(),15000);
+   const {data:{subscription}}=getBrowserDb().auth.onAuthStateChange((event,session)=>{
+     const uid=session?.user.id??null;
+     if(event!=='SIGNED_OUT'&&event!=='SIGNED_IN')return;
+     if(event==='SIGNED_IN'&&uid===activeUserId.current)return;
+     if(event==='SIGNED_OUT')authRefreshPending.current=false;
+     // Invalidate in-flight leaderboard responses and previous user's cache.
+     const newRankingIdentity=event==='SIGNED_OUT'||
+       (rankingAccount.current!==uid&&
+        (rankingAccount.current!==null||!rankingHandled.current.has('entry')));
+     if(newRankingIdentity){
+       rankingEpoch.current++;rankingQueue.current=[];rankingHandled.current.clear();
+       previouslyOpenPositionIds.current=null;
+       setReadOnlyRanking(null);setRankingError(null);
+       if(uid&&isActive.current)window.queueMicrotask(()=>{
+         if(isActive.current)void refreshRanking('entry');
+       });
+     }
+     // An initial SIGNED_IN notification must not cause a second entry GET.
+     rankingAccount.current=uid;
+     assetEpoch.current++;
+     finalClosurePending.current=false;activeUserId.current=uid;
+     snapshotRef.current=null;lastWalletSeen.current=null;
+     setData(null);setReadOnlyAssets(null);setMonitorPositions(false);
+     setMonitorError(null);setReadOnlyAssetError(null);
+     if(uid&&isActive.current){
+       authRefreshPending.current=true;
+       // Auth callbacks must not await getSession from inside the callback.
+       window.queueMicrotask(()=>{
+         if(isActive.current&&!fetching.current&&authRefreshPending.current){
+           authRefreshPending.current=false;void refresh();
+         }
+       });
+     }
+   });
+   return()=>subscription.unsubscribe();
+ },[open,refresh,refreshRanking]);
+ const refreshPositionMonitor=useCallback(async()=>{
+   if(!isActive.current||monitorFetching.current||fetching.current||finalClosurePending.current)return;
+   const token=gate.current.beginRead(),epoch=assetEpoch.current;
+   if(token===null)return;
+   const previous=snapshotRef.current;
+   if(!previous||previous.positions.length===0)return;
+   monitorFetching.current=true;
+   try{
+     const next=await requestPositionMonitor();
+     if(!gate.current.accepts(token)||epoch!==assetEpoch.current||!isActive.current||
+        !await stillCurrentTradingUser(next.authUserId))return;
+     // A committed external close or liquidation requires one FINAL full snapshot.
+     if(next.authUserId)onPositionCountRef.current?.(next.positions.length,next.authUserId);
+     if(next.positions.length===0){
+       finalClosurePending.current=true;
+       setMonitorPositions(false);
+       void refresh();
+       return;
+     }
+     // Positions may close independently. A disappearing ID is a real complete close;
+     // the full snapshot also refreshes realized history/settled wallet safely.
+     const currentIds=new Set(next.positions.map(p=>p.id));
+     if(previous.positions.some(p=>!currentIds.has(p.id))){
+       setMonitorPositions(next.positions.length>0);
+       void refresh();
+       return;
+     }
+     // Market prices are DISPLAY-ONLY quotes; never authorize trading with them.
+     const quotes=lastMarketPrices.current;
+     const updated:Position[]=next.positions.map(p=>{
+       const old=previous.positions.find(item=>item.id===p.id);
+       const market=Number(quotes[p.symbol]??old?.mark);
+       const mark=Number.isFinite(market)&&market>0?market:p.entry_price;
+       const unrealized=p.side*p.qty*(mark-p.entry_price);
+       const position_equity_tc=Math.max(0,p.margin_tc+unrealized);
+       const liquidation_price=p.side===1?(p.entry_price-p.margin_tc/p.qty)/.995:
+        (p.entry_price+p.margin_tc/p.qty)/1.005;
+       return {...p,mark,unrealized,position_equity_tc,liquidation_price};
+     });
+     const equity=next.account.cash_tc+updated.reduce((sum,p)=>sum+p.position_equity_tc,0);
+     const updatedSnapshot:Snapshot={...previous,
+       account:{...previous.account,...next.account,equity_tc:equity},positions:updated,
+       totalHooEquivalent:previous.walletHoo+equity/1000};
+     snapshotRef.current=updatedSnapshot;
+     setData(updatedSnapshot);setMonitorError(null);setMonitorPositions(true);
+   }catch(e){
+     if(epoch===assetEpoch.current&&isActive.current)setMonitorError(e instanceof Error?e.message:String(e));
+   }finally{monitorFetching.current=false;}
+ },[refresh]);
+ useEffect(()=>{
+   if(!open||!monitorPositions||economyMaintenance)return;
+   // The existing 1s PUBLIC MARKET ticker remains independent and unchanged.
+   const poll=window.setInterval(()=>{
+     if(document.visibilityState==='visible')void refreshPositionMonitor();
+   },1000);
    return()=>window.clearInterval(poll);
- },[open,refreshRanking]);
+ },[open,monitorPositions,economyMaintenance,refreshPositionMonitor]);
+ // On resume, a single verified refresh checks whether another device changed positions.
+ useEffect(()=>{
+   if(!open)return;
+   const resume=()=>{if(document.visibilityState==='visible'&&!monitorPositions)void refresh();};
+   const fromAnotherTab=(event:StorageEvent)=>{
+     if(event.key==='hoo:trading:position-invalidation'&&isActive.current)void refresh();
+   };
+   document.addEventListener('visibilitychange',resume);
+   window.addEventListener('storage',fromAnotherTab);
+   return()=>{
+     document.removeEventListener('visibilitychange',resume);
+     window.removeEventListener('storage',fromAnotherTab);
+   };
+ },[open,monitorPositions,refresh]);
+ // Observe only server-confirmed snapshots. A position vanishing from this
+ // ID set is a COMPLETE close; changing quantity alone is a partial close.
+ // The 1-second unrealized profit updates preserve IDs and issue ZERO rank GETs.
+ useEffect(()=>{
+   if(!open||!data?.authUserId||economyMaintenance)return;
+   if(rankingAccount.current===null)rankingAccount.current=data.authUserId;
+   if(rankingAccount.current!==data.authUserId){
+     rankingEpoch.current++;rankingQueue.current=[];rankingHandled.current.clear();
+     rankingAccount.current=data.authUserId;previouslyOpenPositionIds.current=null;
+     setReadOnlyRanking(null);setRankingError(null);
+     void refreshRanking('entry');
+   }
+   const now=new Set(data.positions.map(p=>p.id));
+   const before=previouslyOpenPositionIds.current;
+   previouslyOpenPositionIds.current=now;
+   if(before)for(const positionId of before){
+     if(!now.has(positionId))void refreshRanking('closed',positionId);
+   }
+ },[open,data,economyMaintenance,refreshRanking]);
  useEffect(()=>{
    if(!open)return;
    const onKey=(e:KeyboardEvent)=>{if(e.key==='Escape')setOpen(false);};
    window.addEventListener('keydown',onKey);
    return()=>window.removeEventListener('keydown',onKey);
  },[open]);
+ // Cache is chart-only and clearly labelled as stale. Never use it as a live trade price.
  useEffect(()=>{
   if(!open)return;
   const key=`${symbol}:${frame}`;
   try{
-   const raw=localStorage.getItem('hoo-last-chart:'+key);
-   const saved=raw?JSON.parse(raw) as ChartBackup:null;
-   const valid=Boolean(saved&&saved.key===key&&
-    saved.at<=Date.now()&&Date.now()-saved.at<7*86400000&&
-    Array.isArray(saved.bars)&&saved.bars.length>0&&
-    saved.bars.length<=78&&saved.bars.every((b:Bar)=>
-      Number.isSafeInteger(b.t)&&b.close>0&&b.low>0&&
-      [b.open,b.high,b.low,b.close,b.volume].every(Number.isFinite)));
-   setChartBackup(valid?saved:null);
-  }catch{setChartBackup(null);}
+   const saved=window.localStorage.getItem('hoo-v6-last-chart:'+key);
+   const value=saved?JSON.parse(saved) as LastGoodChart:null;
+   const valid=Boolean(value&&value.key===key&&Number.isFinite(value.savedAt)&&
+    value.savedAt<=Date.now()&&Date.now()-value.savedAt<7*86400000&&
+    Array.isArray(value.bars)&&value.bars.length>0&&value.bars.length<=78&&
+    value.bars.every((b:Bar)=>Number.isSafeInteger(b.t)&&
+      [b.open,b.high,b.low,b.close,b.volume].every(v=>Number.isFinite(v)&&v>=0)&&
+      b.close>0&&b.low>0&&b.high>=Math.max(b.open,b.close)&&b.low<=Math.min(b.open,b.close)));
+   setLastGoodChart(valid?value:null);
+  }catch{setLastGoodChart(null);}
  },[open,symbol,frame]);
  const refreshMarket=useCallback(async()=>{
    // An old interval callback can fire after the next render but before effect cleanup.
    const context=`true:${symbol}:${frame}`;
    if(context!==requestContext.current||marketFetching.current||!isActive.current)return;
    marketFetching.current=true;
-   try{const next=await requestMarket(symbol,frame);if(context!==requestContext.current)return;
+   // Reuse the selected chart's latest candle as a cursor. No unselected timeframes
+   // are queried or precomputed for this browser.
+   const since=barsRef.current.length?barsRef.current[barsRef.current.length-1].t:undefined;
+   try{const next=await requestMarket(symbol,frame,undefined,since,newsRevisionRef.current,
+     chartLastNow.current,chartContextRef.current);if(context!==requestContext.current)return;
+     // Revision differences are the only news update trigger, including zero-news expiry.
+     // Older/deployed APIs with no revision keep using the initial account snapshot.
+     if(next.newsChanged===true&&typeof next.newsRevision==='string'&&Array.isArray(next.news)){
+       newsRevisionRef.current=next.newsRevision;
+       setNewsCache(next.news);
+     }
      for(const code of SYMBOLS){
        const price=Number(next.prices?.[code]);
        if(Number.isFinite(price)&&price>0)lastMarketPrices.current[code]=price;
@@ -353,25 +595,38 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      // Historical Legacy/V4 candles and the new V6 session must never share a
      // single plotted price axis. Clear local memory at the committed cutover.
      const nextMode=next.cacheMode||'legacy';
-     if(chartEngineMode.current!==null&&chartEngineMode.current!==nextMode){
+     const clockRewound=chartLastNow.current!==undefined&&next.now<chartLastNow.current;
+     if(clockRewound||(chartEngineMode.current!==null&&chartEngineMode.current!==nextMode)||
+        (chartContextRef.current!==null&&typeof next.chartContext==='string'&&
+         chartContextRef.current!==next.chartContext)){
+       // V6 rebase/legacy transition: never splice candles from different sessions.
        barsRef.current=[];historyCursor.current=undefined;chartEngineEpoch.current++;
      }
      chartEngineMode.current=nextMode;
+     chartContextRef.current=typeof next.chartContext==='string'?next.chartContext:null;
+     chartLastNow.current=next.now;
+     // On network lag / session change, the server sends a fresh full page instead
+     // of an incomplete delta. Do not splice disjoint historical periods together.
+     if(since!==undefined&&nextMode==='v6-database'&&next.delta!==true){
+       barsRef.current=[];historyCursor.current=undefined;chartEngineEpoch.current++;
+     }
      const myEpoch=chartEngineEpoch.current;
      const merged=new Map(barsRef.current.map(b=>[b.t,b]));for(const b of next.candles[symbol]||[])merged.set(b.t,b);
      barsRef.current=[...merged.values()].sort((a,b)=>a.t-b.t).slice(-MAX_RETAINED_CANDLES);
+     if(barsRef.current.length&&chartContextRef.current){
+       chartMemory.current.set(`${symbol}:${frame}`,{bars:barsRef.current.slice(),
+         historyBefore:historyCursor.current,now:next.now,context:chartContextRef.current,mode:nextMode});
+     }
      setMarketData({...next,candles:{[symbol]:barsRef.current}});setMarketError(null);
-     if(next.cacheMode==='v6-database'&&barsRef.current.length){
-      const saved:ChartBackup={
-       key:`${symbol}:${frame}`,at:Date.now(),
-       bars:barsRef.current.slice(-78)
-      };
-      setChartBackup(saved);
-      try{
-       localStorage.setItem('hoo-last-chart:'+saved.key,JSON.stringify(saved));
-      }catch{}
+     setChartRevalidating(false);
+     if(nextMode==='v6-database'&&barsRef.current.length){
+       const saved:LastGoodChart={key:`${symbol}:${frame}`,bars:barsRef.current.slice(-78),savedAt:Date.now(),marketSecond:next.now};
+       setLastGoodChart(saved);
+       try{window.localStorage.setItem('hoo-v6-last-chart:'+saved.key,JSON.stringify(saved));}catch{}
      }
      if(historyCursor.current===undefined)historyCursor.current=next.historyBefore;
+     const chartMemo=chartMemory.current.get(`${symbol}:${frame}`);
+     if(chartMemo)chartMemo.historyBefore=historyCursor.current;
      if(!historyFetching.current&&historyCursor.current!=null&&barsRef.current.length<78){
        historyFetching.current=true;
        void (async()=>{try{
@@ -380,6 +635,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
            if(context!==requestContext.current||myEpoch!==chartEngineEpoch.current)return;
            const all=new Map((older.candles[symbol]||[]).map(b=>[b.t,b]));for(const b of barsRef.current)all.set(b.t,b);
            barsRef.current=[...all.values()].sort((a,b)=>a.t-b.t).slice(-MAX_RETAINED_CANDLES);historyCursor.current=older.historyBefore;
+           const memo=chartMemory.current.get(`${symbol}:${frame}`);
+           if(memo){memo.bars=barsRef.current.slice();memo.historyBefore=historyCursor.current;}
            setMarketData(prev=>prev?{...prev,candles:{[symbol]:barsRef.current}}:prev);
          }
        }catch(e){if(context===requestContext.current)setMarketError(e instanceof Error?e.message:String(e));}
@@ -390,13 +647,22 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  },[symbol,frame]);
  useEffect(()=>{
    if(!open)return;
-   // Reset candles for the NEW market context, never reset verified coin prices.
-   setMarketData(previous=>previous?{...previous,candles:{}}:null);
-   setMarketError(null);setHistoryBusy(false);barsRef.current=[];historyCursor.current=undefined;
-   chartEngineMode.current=null;chartEngineEpoch.current++;
+   // Restore UI-only history for a previously visited pair. Verify its market
+   // session and clock on the next public quote before marking it current.
+   const saved=chartMemory.current.get(`${symbol}:${frame}`);
+   barsRef.current=saved?.bars.slice()??[];historyCursor.current=saved?.historyBefore;
+   chartEngineMode.current=saved?.mode??null;
+   chartContextRef.current=saved?.context??null;chartLastNow.current=saved?.now;
+   setChartRevalidating(Boolean(saved));
+   setMarketData(previous=>previous?{...previous,candles:saved?{[symbol]:barsRef.current}:{}}:null);
+   setMarketError(null);setHistoryBusy(false);
+   chartEngineEpoch.current++;
    void refreshMarket();
-   const ticker=window.setInterval(()=>void refreshMarket(),1000);
-   return()=>window.clearInterval(ticker);
+   // Background tabs do not download candles; next visible refresh catches up.
+   const ticker=window.setInterval(()=>{if(document.visibilityState==='visible')void refreshMarket();},1000);
+   const onVisible=()=>{if(document.visibilityState==='visible')void refreshMarket();};
+   document.addEventListener('visibilitychange',onVisible);
+   return()=>{window.clearInterval(ticker);document.removeEventListener('visibilitychange',onVisible);};
  },[open,refreshMarket]);
  const loadOlder=useCallback(()=>{
    const context=`true:${symbol}:${frame}`;
@@ -416,6 +682,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        // Keep recent market bars and a bounded historical buffer; never alter market prices.
        barsRef.current=all.slice(-MAX_RETAINED_CANDLES);
        historyCursor.current=older.historyBefore===cursor?null:older.historyBefore;
+       const memo=chartMemory.current.get(`${symbol}:${frame}`);
+       if(memo){memo.bars=barsRef.current.slice();memo.historyBefore=historyCursor.current;}
        setMarketData(prev=>prev?{...prev,candles:{[symbol]:barsRef.current}}:prev);
      }catch(e){if(context===requestContext.current)setMarketError(e instanceof Error?e.message:String(e));}
      finally{historyFetching.current=false;if(context===requestContext.current)setHistoryBusy(false);}
@@ -429,23 +697,29 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      const next=await requestTrading(body,frame);
      if(next.statePending){setMessage('체결은 확인됐습니다. 계좌 표시를 새로 조회합니다.');return;}
      if(body.action==='open'||next.receipt?.positionId)setPositionTab('position');
-     setData(next);
+     if(!await stillCurrentTradingUser(next.authUserId))return;
+     activeUserId.current=next.authUserId||null;
+     snapshotRef.current=next;setData(next);
+     if(Array.isArray(next.positions)){
+       setMonitorPositions(next.positions.length>0);
+       if(next.authUserId)onPositionCountRef.current?.(next.positions.length,next.authUserId);
+     }
      setMessage(next.receipt?.replayed?'기존 요청의 체결 결과를 확인했습니다.':`${label} 완료`);
-     if(Number.isFinite(next.walletHoo)){lastWalletSeen.current=next.walletHoo;onWalletHooChange?.(next.walletHoo);}
+     if(Number.isFinite(next.walletHoo)){lastWalletSeen.current=next.walletHoo;onWalletChangeRef.current?.(next.walletHoo);}
    }catch(e){setError(e instanceof Error?e.message:String(e));}
    finally{gate.current.endMutation();setWorking(false);void refresh();}
- },[frame,onWalletHooChange,refresh]);
+ },[frame,refresh]);
  const latestMarket=marketData&&(!data||marketData.now>=data.market.now)?marketData:data?.market;
  const market=latestMarket?{
    ...latestMarket,
    prices:{...latestMarket.prices,...lastMarketPrices.current},
    candles:marketData?.candles||data?.market.candles||{}
  }:undefined;
- const currentBars=market?.candles[symbol]||[];
- const cachedBars=chartBackup?.key===`${symbol}:${frame}`?chartBackup.bars:[];
- const shownBars=currentBars.length?currentBars:cachedBars;
- const marketLag=market?.now?Math.max(0,Math.floor(Date.now()/1000)-market.now):null;
- const chartStale=Boolean(marketError)||(!currentBars.length&&cachedBars.length>0)||(marketLag!==null&&marketLag>3);
+ const liveChartBars=market?.candles[symbol]||[];
+ const rememberedBars=lastGoodChart?.key===`${symbol}:${frame}`?lastGoodChart.bars:[];
+ const shownChartBars=liveChartBars.length?liveChartBars:rememberedBars;
+ const ageSeconds=market?.now?Math.max(0,Math.floor(Date.now()/1000)-market.now):null;
+ const chartDelayed=chartRevalidating||Boolean(marketError)||(ageSeconds!==null&&ageSeconds>3)||(!liveChartBars.length&&rememberedBars.length>0);
  const livePositions=(data?.positions||[]).map(p=>{const mark=Number(market?.prices[p.symbol]??p.mark);const unrealized=Number(p.side)*Number(p.qty)*(mark-Number(p.entry_price));return {...p,mark,unrealized};});
  const liveWallet=data?.walletHoo??walletHoo;
  const verifiedCash=Number(data?.account.cash_tc||0);
@@ -487,12 +761,14 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const shownRoi=shownRealized!=null?returnOnInitialCapital(Number(shownRealized)):null;
  const knownUnrealized=data?livePositions.reduce((sum,p)=>sum+p.unrealized,0)
    :readOnlyAssets?.openPositions===0?0:null;
- // News is supplied by the account snapshot on V6. The 1s chart endpoint
- // intentionally returns news: []; do not let a fresher quote response hide it.
- const newsList=(market?.news?.length ? market.news : data?.market.news) ?? [];
+  // Initial snapshot fallback; thereafter keep the last server-confirmed news revision.
+  // Quote responses with no news change never erase the list.
+  const newsList=newsCache??data?.market.news??[];
  // A known-empty database result differs from an unavailable ranking.
- const leaderboard=readOnlyRanking?.ranking??data?.ranking??[];
- const rankingIsKnown=readOnlyRanking!==null||data!==null;
+ // Deliberately ignore the ranking embedded in account snapshots: it must never
+ // silently overwrite the user's manually refreshed leaderboard.
+ const leaderboard=readOnlyRanking?.ranking??[];
+ const rankingIsKnown=readOnlyRanking!==null;
  const riskSide:1|-1=selectedPosition?.side??(direction==='long'?1:-1);
  const riskLeverage=Number(selectedPosition?.leverage??leverage);
  // Entry estimate accounts for the same per-symbol entry slippage used by the server.
@@ -566,6 +842,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          </div>
          {economyMaintenance&&readOnlyAssets&&<div className={styles.miniNote}>실제 DB 지갑 조회 완료 · 읽기 전용 · 주문과 거래는 계속 중지됩니다.{readOnlyAssets.account===null?' 거래 계좌가 아직 생성되지 않았습니다.':''}</div>}
          {readOnlyAssetError&&<div className={styles.miniNote}>자산 조회 실패: {readOnlyAssetError}</div>}
+         {monitorError&&<div className={styles.miniNote}>포지션 동기화 실패: {monitorError} <button type="button" onClick={()=>void refresh()}>자산 재확인</button></div>}
          <div className={styles.miniNote}>공용 후코인 지갑 · 체결 후 자동 정산 (1 HOO 미만은 TC 잔액으로 유지) · 수익률은 초기 500 HOO 대비 누적 실현손익 추정치로, 외부 지급·지출을 반영한 전체 자산 수익률과 다를 수 있습니다.</div>
        </section>
        <section className={styles.card}>
@@ -585,9 +862,9 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
            <b className={p.profit>=0?styles.positive:styles.negative}>{signed(p.profit)} <small>TC</small></b>
          </div>)}
          {!leaderboard.length&&rankingIsKnown&&<div className={styles.miniNote}>집계 대상 거래 기록이 없습니다. 후코인 보유량만으로는 순위가 생성되지 않습니다.</div>}
-         {!leaderboard.length&&!rankingIsKnown&&!rankingError&&<div className={styles.miniNote}>랭킹 조회 중입니다…</div>}
+         {!leaderboard.length&&!rankingIsKnown&&!rankingError&&<div className={styles.miniNote}>최초 랭킹을 조회하는 중입니다. 조회 실패 시 ↻ 버튼으로 재시도하세요.</div>}
          {rankingError&&<div className={styles.miniNote}>랭킹 최신 조회 실패: {rankingError}{readOnlyRanking?' · 이전 조회 결과를 유지합니다.':''}</div>}
-         {readOnlyRanking&&<div className={styles.miniNote}>DB 기록 조회 완료 · 집계 대상 {readOnlyRanking.eligibleCount}명 · 15초마다 자동 갱신 (읽기 전용)</div>}
+         {readOnlyRanking&&<div className={styles.miniNote}>DB 기록 조회 완료 · 집계 대상 {readOnlyRanking.eligibleCount}명 · 접속·포지션 완전 종료·수동 갱신 시 조회 (읽기 전용)</div>}
          <div className={styles.miniNote}>초기 {SEASON_INITIAL_HOO} HOO 지급 기준 추정치 · 별도 지급/선물/소비 및 미실현손익은 미반영 · 거래 참여자만 표시</div>
        </section>
      </aside>
@@ -616,13 +893,14 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
           <p>개발용 샘플은 1시간봉으로만 표시됩니다.</p>
         </section>:<>
         <div className={styles.chartBox}>
-         {chartStale&&shownBars.length>0&&
-          <div role="status" style={{fontSize:12,color:'#d97706',padding:8}}>
-           ⚠ 실시간 시세 지연 · 마지막 확인 차트 표시 중 (거래용 최신 가격 아님)
-          </div>}
-         {marketError&&!shownBars.length
-         ?<div className={styles.chartEmpty} role="status">차트 연결 실패: {marketError}<div style={{marginTop:12,fontSize:13}}>서버 설정 또는 SQL 적용 상태를 확인해주세요. 연결되면 자동으로 다시 불러옵니다.</div></div>
-         :<CandleChart key={`${symbol}:${frame}`} bars={shownBars} symbol={symbol} timeframe={frame} onLoadOlder={loadOlder} olderLoading={historyBusy} hasOlder={historyCursor.current!=null&&barsRef.current.length<MAX_RETAINED_CANDLES}/>}</div>
+         {chartDelayed&&shownChartBars.length>0&&<div role="status" style={{padding:'8px 10px',fontSize:12,color:'#ffdb99',background:'#483723',borderRadius:8,marginBottom:8}}>
+           ⚠ 실시간 시세 지연 · 마지막 확인 차트 표시 중 (거래용 실시간 가격이 아닙니다).
+           {lastGoodChart?.key===`${symbol}:${frame}`&&(!liveChartBars.length)&&<> 저장: {new Date(lastGoodChart.savedAt).toLocaleString('ko-KR')}</>}
+           {ageSeconds!==null&&ageSeconds>3&&<> · 시세 지연 약 {ageSeconds}초</>}
+         </div>}
+         {marketError&&!shownChartBars.length
+         ?<div className={styles.chartEmpty} role="status">실시간 차트 서버 연결 중단: {marketError}<div style={{marginTop:12,fontSize:13}}>저장된 차트가 없는 첫 접속에서는 서버 연결 복구 후 표시됩니다. 시장 데이터나 거래 기록은 초기화하지 마세요.</div></div>
+         :<CandleChart key={`${symbol}:${frame}`} bars={shownChartBars} symbol={symbol} timeframe={frame} onLoadOlder={loadOlder} olderLoading={historyBusy} hasOlder={liveChartBars.length>0&&historyCursor.current!=null&&barsRef.current.length<MAX_RETAINED_CANDLES}/>}</div>
        <div className={styles.tradeForm}>
          <div className={styles.tradeRow}><b>매매 방향</b><div className={styles.segment}>
            <button className={direction==='long'?styles.activeLong:''} onClick={()=>setDirection('long')} type="button" disabled={Boolean(selectedPosition&&selectedPosition.side!==1)}>▲ LONG</button>

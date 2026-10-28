@@ -687,6 +687,128 @@ function countUnclaimedItems(
   );
 }
 
+
+/** 0003: event-driven delivery list sync. No interval or DB mutation. */
+type HooDeliverySnapshot =
+  | { kind: "signed-out" }
+  | { kind: "delivery"; payload: DeliveryRpcPayload };
+
+type HooDeliveryRevision = {
+  revision: number;
+  active_delivery_count: number;
+  unclaimed_item_count: number;
+};
+
+class HooDeliveryRevisionSync {
+  private disposed = false;
+  private generation = 0;
+  private seenRevision = -1;
+  private inFlight: Promise<void> | null = null;
+  private pending = false;
+  private scheduled: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    private readonly read: () => Promise<HooDeliverySnapshot>,
+    private readonly apply: (snapshot: HooDeliverySnapshot) => void,
+    private readonly clearEmpty: () => void,
+  ) {}
+
+  private cancelTimer() {
+    if (this.scheduled !== null) clearTimeout(this.scheduled);
+    this.scheduled = null;
+  }
+
+  changed(value: unknown) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const row = value as Partial<HooDeliveryRevision>;
+    if (
+      !Number.isSafeInteger(row.revision) ||
+      !Number.isSafeInteger(row.active_delivery_count) ||
+      !Number.isSafeInteger(row.unclaimed_item_count) ||
+      (row.revision as number) < 0 ||
+      (row.active_delivery_count as number) < 0 ||
+      (row.unclaimed_item_count as number) < 0 ||
+      (row.revision as number) <= this.seenRevision ||
+      this.disposed
+    ) return;
+    this.seenRevision = row.revision as number;
+    ++this.generation; // A response started before this event is now stale.
+    if (row.active_delivery_count === 0 && row.unclaimed_item_count === 0) {
+      this.cancelTimer();
+      this.pending = false;
+      this.clearEmpty();
+      return;
+    }
+    // A statement can bump revision more than once: coalesce bursts.
+    if (this.inFlight) this.pending = true;
+    this.cancelTimer();
+    this.scheduled = setTimeout(() => {
+      this.scheduled = null;
+      void this.refreshOnce();
+    }, 100);
+  }
+
+  /** Reconnection or explicit conflict: invalidate older reads, one reconciliation. */
+  reconcile(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    ++this.generation;
+    this.cancelTimer();
+    return this.refreshOnce();
+  }
+
+  /** On logout/account change, invalidate outstanding old-session results. */
+  invalidate() {
+    ++this.generation;
+    this.cancelTimer();
+    this.pending = false;
+  }
+
+  /** A successful claim already has a server-confirmed result, not a new SELECT. */
+  claimedLocally() {
+    if (this.disposed) return;
+    ++this.generation;
+    if (this.inFlight) this.pending = true;
+  }
+
+  async refreshOnce(): Promise<void> {
+    if (this.disposed) return;
+    if (this.inFlight) {
+      this.pending = true;
+      return this.inFlight;
+    }
+    const generation = this.generation;
+    const task = (async () => {
+      try {
+        const result = await this.read();
+        if (this.disposed) return;
+        if (generation !== this.generation) {
+          // An event or a claim superseded the snapshot.
+          // changed()/reconcile() explicitly decide whether a new read is due.
+          return;
+        }
+        this.apply(result);
+      } catch (error) {
+        if (!this.disposed) console.warn("HOO 배송 동기화 실패 (자동 재시도 없음)", error);
+      }
+    })();
+    this.inFlight = task;
+    await task;
+    if (this.inFlight === task) this.inFlight = null;
+    if (!this.disposed && this.pending) {
+      this.pending = false;
+      this.cancelTimer();
+      await this.refreshOnce();
+    }
+  }
+
+  dispose() {
+    this.disposed = true;
+    ++this.generation;
+    this.pending = false;
+    this.cancelTimer();
+  }
+}
+
 export default function HooWorldDeliveryGate({
   playerPositionRef,
   interactionLocked = false,
@@ -965,147 +1087,34 @@ export default function HooWorldDeliveryGate({
     deliveredFieldItems,
   ]);
 
-  const refreshDeliveryState =
-    useCallback(
-      async () => {
-        const cachedDeliveryState =
-          await loadRecoveryRecord<{
-            hasDelivery: boolean;
-            deliveryCount: number;
-            itemCount: number;
-            deliveryBoxes: DeliveryBox[];
-          }>(
-            "world-delivery",
-            "current-deliveries",
-          );
+  // Shared public delivery state, not the per-item field-position Realtime.
+  const deliverySyncRef = useRef<HooDeliveryRevisionSync | null>(null);
+  const deliveryBoxesRef = useRef<DeliveryBox[]>([]);
 
-        if (cachedDeliveryState?.value) {
-          setHasDelivery(
-            cachedDeliveryState.value.hasDelivery,
-          );
-          setDeliveryCount(
-            cachedDeliveryState.value.deliveryCount,
-          );
-          setItemCount(
-            cachedDeliveryState.value.itemCount,
-          );
-          setDeliveryBoxes(
-            cachedDeliveryState.value.deliveryBoxes,
-          );
-        }
-
-        const {
-          data: sessionData,
-        } =
-          await supabase.auth.getSession();
-
-        if (
-          !sessionData.session
-        ) {
-          if (!cachedDeliveryState?.value) {
-            setHasDelivery(false);
-            setDeliveryCount(0);
-            setItemCount(0);
-            setDeliveryBoxes([]);
-            setActiveDeliveryId(null);
-          }
-
-          return;
-        }
-
-        const {
-          data,
-          error,
-        } =
-          await supabase.rpc(
-            "get_hoo_world_public_deliveries",
-          );
-
-        if (error) {
-          console.warn(
-            "HOO WORLD 배송 상태 서버 조회 실패: 로컬 복구본을 유지합니다.",
-            error,
-          );
-
-          return;
-        }
-
-        const payload =
-          (
-            data &&
-            typeof data ===
-              "object" &&
-            !Array.isArray(data)
-          )
-            ? data as DeliveryRpcPayload
-            : null;
-
-        const deliveries =
-          Array.isArray(
-            payload?.deliveries,
-          )
-            ? payload.deliveries
-            : [];
-
-        const nextDeliveryBoxes =
-          parseDeliveryBoxes(
-            deliveries,
-          );
-
-        const nextHasDelivery =
-          payload?.has_delivery ===
-            true &&
-          nextDeliveryBoxes.length > 0;
-
-        setHasDelivery(
-          nextHasDelivery,
-        );
-
-        setDeliveryBoxes(
-          nextHasDelivery
-            ? nextDeliveryBoxes
-            : [],
-        );
-
-        setDeliveryCount(
-          nextHasDelivery
-            ? nextDeliveryBoxes.length
-            : 0,
-        );
-
-        const nextItemCount =
-          nextHasDelivery
-            ? countUnclaimedItems(
-                deliveries,
-              )
-            : 0;
-
-        setItemCount(
-          nextItemCount,
-        );
-
-        void saveRecoveryRecord(
-          "world-delivery",
-          "current-deliveries",
-          {
-            hasDelivery: nextHasDelivery,
-            deliveryCount:
-              nextHasDelivery
-                ? nextDeliveryBoxes.length
-                : 0,
-            itemCount: nextItemCount,
-            deliveryBoxes:
-              nextHasDelivery
-                ? nextDeliveryBoxes
-                : [],
-          },
-          "supabase-delivery-state",
-        );
-      },
-      [
-        supabase,
-      ],
+  const applyDeliveryBoxes = useCallback((boxes: DeliveryBox[], persist = true) => {
+    deliveryBoxesRef.current = boxes;
+    setHasDelivery(boxes.length > 0);
+    setDeliveryBoxes(boxes);
+    setDeliveryCount(boxes.length);
+    setItemCount(boxes.reduce((sum, box) => sum + box.items.length, 0));
+    setActiveDeliveryId((current) =>
+      current && boxes.some((box) => box.deliveryId === current) ? current : null
     );
+    if (persist) void saveRecoveryRecord(
+      "world-delivery", "current-deliveries",
+      {
+        hasDelivery: boxes.length > 0,
+        deliveryCount: boxes.length,
+        itemCount: boxes.reduce((sum, box) => sum + box.items.length, 0),
+        deliveryBoxes: boxes,
+      }, "delivery-revision-state",
+    );
+  }, []);
+
+  // Used only after an explicit claim conflict or an ambiguous claim result.
+  const refreshDeliveryState = useCallback(async () => {
+    await deliverySyncRef.current?.reconcile();
+  }, []);
 
   /*
    * 배송으로 꺼낸 월드 아이템 최초 로드 + Realtime.
@@ -1285,96 +1294,120 @@ export default function HooWorldDeliveryGate({
     supabase,
   ]);
 
-  /*
-   * 배송은 이제 HOO WORLD 공용 상태다.
-   *
-   * - 누가 주문했는지와 관계없이 로그인한 모든 이용자가
-   *   같은 열린 대문 / 같은 배송 상자를 본다.
-   * - hoo_world_delivery_world_state가 변경되면 즉시 다시 조회한다.
-   * - 다른 이용자가 상자에서 아이템을 꺼내도
-   *   남은 아이템 수 / 상자 사라짐이 모두에게 바로 반영된다.
-   * - Realtime이 잠깐 끊겨도 30초 polling으로 자동 복구한다.
+  /* 0003: no 4s/30s polling, no unconditional focus reads.
+   * Subscribe before initial list read so delivery events are not missed.
+   * On known disconnect, reconcile once after Realtime reconnects.
    */
   useEffect(() => {
-    void refreshDeliveryState();
+    let mounted = true;
+    let firstReadStarted = false;
+    let disconnected = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let sessionUserId: string | null = null;
 
-    const deliveryStateChannel =
-      supabase
-        .channel(
-          "hoo-world-public-delivery-state",
-        )
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table:
-              "hoo_world_delivery_world_state",
-            filter:
-              "state_id=eq.world",
-          },
-          () => {
-            void refreshDeliveryState();
-          },
-        )
-        .subscribe();
+    const sync = new HooDeliveryRevisionSync(
+      async () => {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const uid = sessionData.session?.user.id ?? null;
+        if (!uid) return { kind: "signed-out" };
+        sessionUserId = uid;
+        const { data, error } = await supabase.rpc("get_hoo_world_public_deliveries");
+        if (error) throw error;
+        const { data: afterAuth } = await supabase.auth.getSession();
+        if (afterAuth.session?.user.id !== uid) return { kind: "signed-out" };
+        if (!data || typeof data !== "object" || Array.isArray(data)) {
+          throw new Error("Malformed public delivery response");
+        }
+        return { kind: "delivery", payload: data as DeliveryRpcPayload };
+      },
+      (snapshot) => {
+        if (!mounted) return;
+        if (snapshot.kind === "signed-out") {
+          applyDeliveryBoxes([]);
+          return;
+        }
+        const raw = snapshot.payload.deliveries;
+        if (!Array.isArray(raw)) throw new Error("Malformed delivery list");
+        const parsed = parseDeliveryBoxes(raw);
+        applyDeliveryBoxes(snapshot.payload.has_delivery === true ? parsed : []);
+      },
+      () => { if (mounted) applyDeliveryBoxes([]); },
+    );
+    deliverySyncRef.current = sync;
 
-    const timer =
-      window.setInterval(
-        () => {
-          if (document.visibilityState === "visible") {
-            void refreshDeliveryState();
+    const connect = async () => {
+      // Offline display only: a cached value is not proof the DB is unchanged.
+      try {
+        const cached = await loadRecoveryRecord<{
+          deliveryBoxes: DeliveryBox[];
+        }>("world-delivery", "current-deliveries");
+        if (mounted && Array.isArray(cached?.value?.deliveryBoxes)) {
+          applyDeliveryBoxes(cached.value.deliveryBoxes, false);
+        }
+      } catch { /* A corrupt recovery record does not block subscription. */ }
+      if (!mounted) return;
+
+      channel = supabase.channel("hoo-world-public-delivery-state")
+        .on("postgres_changes", {
+          event: "*", schema: "public",
+          table: "hoo_world_delivery_world_state",
+          filter: "state_id=eq.world",
+        }, (payload) => {
+          if (!mounted) return;
+          sync.changed(payload.new);
+        })
+        .subscribe((status) => {
+          if (!mounted) return;
+          if (status === "SUBSCRIBED") {
+            if (!firstReadStarted) {
+              firstReadStarted = true;
+              void sync.refreshOnce();
+            } else if (disconnected) {
+              disconnected = false;
+              void sync.reconcile();
+            }
+          } else if (
+            status === "CHANNEL_ERROR" ||
+            status === "TIMED_OUT" ||
+            status === "CLOSED"
+          ) {
+            disconnected = true;
+            if (!firstReadStarted) {
+              firstReadStarted = true;
+              void sync.refreshOnce();
+            }
           }
-        },
-        30000,
-      );
+        });
+    };
+    void connect();
 
-    function handleVisibilityChange() {
-      if (
-        document.visibilityState ===
-        "visible"
-      ) {
-        void refreshDeliveryState();
+    // Auth listener handles actual account transitions only, not ordinary focus.
+    const { data: authSubscription } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mounted) return;
+      if (event === "SIGNED_OUT") {
+        sessionUserId = null;
+        sync.invalidate();
+        applyDeliveryBoxes([]);
+      } else if (event === "SIGNED_IN") {
+        const nextUid = session?.user.id ?? null;
+        if (firstReadStarted && nextUid && nextUid !== sessionUserId) {
+          sessionUserId = nextUid;
+          sync.invalidate();
+          applyDeliveryBoxes([]);
+          // Do not await auth-dependent Supabase work inside the auth callback.
+          queueMicrotask(() => { if (mounted) void sync.reconcile(); });
+        }
       }
-    }
-
-    function handleWindowFocus() {
-      void refreshDeliveryState();
-    }
-
-    window.addEventListener(
-      "focus",
-      handleWindowFocus,
-    );
-
-    document.addEventListener(
-      "visibilitychange",
-      handleVisibilityChange,
-    );
+    });
 
     return () => {
-      window.clearInterval(
-        timer,
-      );
-
-      window.removeEventListener(
-        "focus",
-        handleWindowFocus,
-      );
-
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange,
-      );
-
-      void supabase.removeChannel(
-        deliveryStateChannel,
-      );
+      mounted = false;
+      sync.dispose();
+      if (deliverySyncRef.current === sync) deliverySyncRef.current = null;
+      authSubscription.subscription.unsubscribe();
+      if (channel) void supabase.removeChannel(channel);
     };
-  }, [
-    refreshDeliveryState,
-    supabase,
-  ]);
+  }, [applyDeliveryBoxes, supabase]);
 
   /*
    * 배송 상자와 로컬 캐릭터 거리 감지.
@@ -2469,14 +2502,33 @@ export default function HooWorldDeliveryGate({
               : `${claimedItemName}을(를) 필드에 꺼냈어요. 상자를 닫고 X로 이동할 수 있어요.`,
       );
 
-      /*
-       * RPC 직후 즉시 갱신한다.
-       * Realtime 수신을 기다리지 않아도 상자/필드가 바로 반영된다.
+      /* 0003: server-confirmed claim immediately removes the item locally.
+       * Realtime supplies later remote edits. Do not unconditionally read
+       * the entire list after each successful claim.
        */
-      await Promise.all([
-        refreshDeliveryState(),
-        refreshDeliveredFieldItems(),
-      ]);
+      deliverySyncRef.current?.claimedLocally();
+      const currentBoxes = deliveryBoxesRef.current;
+      const ownerBox = currentBoxes.find((box) =>
+        box.items.some((entry) => entry.deliveryItemId === item.deliveryItemId)
+      );
+      if (ownerBox) {
+        const nextBoxes = currentBoxes
+          .map((box) => ({ ...box, items: box.items.filter((entry) =>
+            entry.deliveryItemId !== item.deliveryItemId
+          ) }))
+          .filter((box) => box.items.length > 0);
+        applyDeliveryBoxes(nextBoxes);
+        const remaining = Number(result.remaining_count);
+        const predicted = ownerBox.items.length - 1;
+        if (Number.isSafeInteger(remaining) && remaining !== predicted) {
+          // A concurrent claimant changed this box: reconcile once.
+          void refreshDeliveryState();
+        }
+      } else {
+        // Cache missing or concurrent edit: one consistency read.
+        void refreshDeliveryState();
+      }
+      await refreshDeliveredFieldItems();
     } catch (error) {
       console.error(
         "HOO WORLD 배송 아이템 수령 중 오류가 발생했습니다.",

@@ -11,6 +11,7 @@ import {
   type FormEvent,
 } from "react";
 import { createPortal } from "react-dom";
+import { createClient } from "@/lib/supabase/client";
 import HooTurntable, {
   PosterFoliage,
   ToneArm,
@@ -42,7 +43,7 @@ export type HooMusicCommunityProps = {
 const PICKS_ENDPOINT = "/api/community/music-picks";
 const PLAYLIST_LIMIT = 60;
 const FAVORITES_KEY = "hoo-music-favorites:v1";
-const REFRESH_INTERVAL = 30_000;
+/* HOO-CHANGE-0006-A: event-driven music list */
 
 type IconName =
   | "play"
@@ -741,6 +742,7 @@ export default function HooMusicCommunity({
   nickname,
   isActive = true,
 }: HooMusicCommunityProps) {
+  const supabase = useMemo(() => createClient(), []);
   const [view, setView] = useState<"landing" | "player">("landing");
   const [picks, setPicks] = useState<MusicPick[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -759,6 +761,7 @@ export default function HooMusicCommunity({
   const titleRef = useRef<HTMLHeadingElement>(null);
   const enterRef = useRef<HTMLButtonElement>(null);
   const requestRef = useRef<AbortController | null>(null);
+  const locallyInsertedIdsRef = useRef(new Map<string, number>());
   const generationRef = useRef(0);
   const mountedRef = useRef(true);
   const historyRef = useRef<string[]>([]);
@@ -863,20 +866,104 @@ export default function HooMusicCommunity({
   }, []);
   useEffect(() => {
     if (!isActive) return;
+    let connectionWasLost = !navigator.onLine;
     void loadPicks(true);
-    const timer = window.setInterval(() => {
-      if (!document.hidden) void loadPicks();
-    }, REFRESH_INTERVAL);
-    function onVisible() {
-      if (!document.hidden) void loadPicks();
-    }
-    document.addEventListener("visibilitychange", onVisible);
+
+    const onOffline = () => { connectionWasLost = true; };
+    const onOnline = () => {
+      if (!connectionWasLost) return;
+      connectionWasLost = false;
+      void loadPicks();
+    };
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
     return () => {
-      window.clearInterval(timer);
       requestRef.current?.abort();
-      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
     };
   }, [loadPicks, isActive]);
+
+  /* HOO-CHANGE-0006-B: music-picks realtime change signal
+   * Receive change signals only, never trust raw Realtime row values.
+   * The existing API remains the sole source of formatted public MusicPick data.
+   * DELETE payload.old under RLS may contain only a primary key.
+   */
+  useEffect(() => {
+    if (!isActive) return;
+    let disposed = false;
+    let updateTimer: number | null = null;
+    let requestRunning = false;
+    let refreshPending = false;
+    let wasSubscribed = false;
+    let reconnectNeedsRead = false;
+
+    const scheduleRefresh = () => {
+      if (disposed) return;
+      if (!navigator.onLine) {
+        reconnectNeedsRead = true;
+        return;
+      }
+      refreshPending = true;
+      if (updateTimer !== null) window.clearTimeout(updateTimer);
+      updateTimer = window.setTimeout(() => {
+        updateTimer = null;
+        if (disposed || !navigator.onLine) {
+          reconnectNeedsRead = true;
+          return;
+        }
+        if (requestRunning) return;
+        requestRunning = true;
+        refreshPending = false;
+        void loadPicks().finally(() => {
+          requestRunning = false;
+          if (!disposed && refreshPending) scheduleRefresh();
+        });
+      }, 350);
+    };
+
+    const channel = supabase
+      .channel("hoo-music-picks:changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "hoo_music_picks" },
+        (payload) => {
+          const changeId = String(
+            (payload.new as { id?: unknown } | null)?.id ??
+            (payload.old as { id?: unknown } | null)?.id ?? "",
+          );
+          if (payload.eventType === "INSERT" && changeId) {
+            const localCreatedAt = locallyInsertedIdsRef.current.get(changeId);
+            if (localCreatedAt !== undefined) {
+              locallyInsertedIdsRef.current.delete(changeId);
+              if (Date.now() - localCreatedAt < 30_000) return;
+            }
+          }
+          scheduleRefresh();
+        },
+      )
+      .subscribe((status) => {
+        if (disposed) return;
+        if (status === "SUBSCRIBED") {
+          if (wasSubscribed && reconnectNeedsRead) scheduleRefresh();
+          wasSubscribed = true;
+          reconnectNeedsRead = false;
+        } else if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT" ||
+          status === "CLOSED"
+        ) {
+          if (wasSubscribed) reconnectNeedsRead = true;
+        }
+      });
+
+    return () => {
+      disposed = true;
+      if (updateTimer !== null) window.clearTimeout(updateTimer);
+      void supabase.removeChannel(channel);
+    };
+  }, [isActive, loadPicks, supabase]);
+
   useEffect(() => {
     function restore() {
       try {
@@ -966,6 +1053,7 @@ export default function HooMusicCommunity({
     setComposerOpen(true);
   }
   function saved(pick: MusicPick) {
+    locallyInsertedIdsRef.current.set(pick.id, Date.now());
     // Invalidate an older GET so it cannot erase the just-created record.
     requestRef.current?.abort();
     generationRef.current += 1;
