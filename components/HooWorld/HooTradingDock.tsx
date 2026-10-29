@@ -204,10 +204,162 @@ async function requestMarket(symbol:SymbolCode,frame:number,before?:number,since
 }
 const colors={up:'#13b58e',down:'#e26671'};
 const MAX_RETAINED_CANDLES=2000;
-function CandleChart({bars,symbol,timeframe,onLoadOlder,hasOlder}:{
- bars:Bar[];symbol:SymbolCode;timeframe:number;onLoadOlder:()=>void;hasOlder:boolean;olderLoading:boolean;
+
+/** Purely visual easing between *two confirmed* quotes. Never used for orders, PnL or SL/TP. */
+function AnimatedMarketPrice({value,quoteSecond}:{value:unknown;quoteSecond:number|undefined}){
+ const node=useRef<HTMLSpanElement>(null);
+ // Keep React's text child stable: RAF owns only the visual label between quote packets.
+ const initialText=useRef(displayMarketPrice(value));
+ const animation=useRef<number|null>(null);
+ const displayed=useRef<number|null>(null);
+ const lastSecond=useRef<number|null>(null);
+ useEffect(()=>{
+   const target=Number(value),second=Number(quoteSecond);
+   const valid=Number.isFinite(target)&&target>0;
+   const el=node.current;
+   if(!el)return;
+   if(!valid){
+     if(animation.current!==null)cancelAnimationFrame(animation.current);
+     animation.current=null;displayed.current=null;lastSecond.current=null;
+     el.textContent='—';return;
+   }
+   // Ignore out-of-order response clocks. Same-second rerenders cannot restart an animation.
+   if(Number.isSafeInteger(second)&&lastSecond.current!==null&&second<lastSecond.current)return;
+   const previous=displayed.current;
+   if(animation.current!==null){cancelAnimationFrame(animation.current);animation.current=null;}
+   const nextSecond=Number.isSafeInteger(second)?second:null;
+   if(nextSecond!==null)lastSecond.current=nextSecond;
+   if(previous===null||previous===target||window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches){
+     displayed.current=target;el.textContent=pformat(target);return;
+   }
+   const rising=target>previous;
+   const color=rising?colors.up:colors.down;
+   // Text color/flash is decorative and does not change numerical state.
+   el.animate?.([
+     {color,filter:`drop-shadow(0 0 5px ${color})`},
+     {color:'inherit',filter:'none'}
+   ],{duration:900,easing:'ease-out'});
+   const start=performance.now();
+   const duration=450;
+   const step=(time:number)=>{
+     const fraction=Math.min(1,(time-start)/duration);
+     const ease=1-Math.pow(1-fraction,3);
+     const current=previous+(target-previous)*ease;
+     displayed.current=current;
+     el.textContent=fraction>=1?pformat(target):pformat(current);
+     if(fraction<1)animation.current=requestAnimationFrame(step);
+     else{displayed.current=target;animation.current=null;}
+   };
+   animation.current=requestAnimationFrame(step);
+   return()=>{if(animation.current!==null){cancelAnimationFrame(animation.current);animation.current=null;}};
+ },[value,quoteSecond]);
+ return <span ref={node} title="표시 전용 가격 전환 애니메이션 · 실제 주문가는 서버 확정 시세">{initialText.current}</span>;
+}
+
+/**
+ * An *indicative*, never-tradable current candle composed from confirmed quotes.
+ * DB OHLCV always wins once a new saved candle is received. Never backfills old gaps.
+ */
+function useVisualCurrentCandle(bars:Bar[],price:unknown,quoteSecond:number|undefined,
+ timeframe:number,enabled:boolean,session:string|null){
+ const [preview,setPreview]=useState<Bar|null>(null);
+ const seen=useRef<{second:number;session:string|null}|null>(null);
+ const last=bars[bars.length-1];
+ useEffect(()=>{
+   if(!enabled||!last){setPreview(null);seen.current=null;return;}
+   const current=Number(price),second=Number(quoteSecond);
+   if(!Number.isFinite(current)||current<=0||!Number.isSafeInteger(second)||
+      !Number.isSafeInteger(last.t)||timeframe<=0||second<last.t||
+      second>last.t+timeframe*2){
+     setPreview(null);return;
+   }
+   if(seen.current&&seen.current.session===session&&second<=seen.current.second)return;
+   seen.current={second,session};
+   // Server candle t is anchored to the V6 stream, not to Unix epoch multiples.
+   const bucket=second<=last.t+timeframe?last.t:last.t+timeframe;
+   setPreview(previous=>{
+     if(bucket===last.t){
+       const same=previous?.t===bucket;
+       const priorHigh=same?previous.high:last.high;
+       const priorLow=same?previous.low:last.low;
+       return {...last,high:Math.max(last.high,priorHigh,current),
+         low:Math.min(last.low,priorLow,current),close:current};
+     }
+     // An unseen new bucket starts at the first *observed* confirmed quote.
+     // Volume is unknown; never manufacture trades or authoritative OHLCV.
+     if(previous?.t===bucket)return {...previous,high:Math.max(previous.high,current),
+       low:Math.min(previous.low,current),close:current};
+     return {t:bucket,open:current,high:current,low:current,close:current,volume:0};
+   });
+ },[enabled,last?.t,last?.open,last?.high,last?.low,last?.close,last?.volume,
+    price,quoteSecond,timeframe,session]);
+ // Invalidate a previous-session draft synchronously, even before effects run.
+ const valid=enabled&&preview&&last&&preview.t>=last.t&&preview.t<=last.t+timeframe&&
+   Number.isSafeInteger(Number(quoteSecond))&&Number(quoteSecond)>=preview.t;
+ return valid?preview:null;
+}
+
+/** Animate only the newest displayed candle: no chart-wide 60fps React rerenders. */
+function AnimatedCandleGlyph({bar,x,width,y,volumeHeight,active}:{
+ bar:Bar;x:number;width:number;y:(value:number)=>number;volumeHeight:number;active:boolean;
 }){
- const pan=useCandlePan(bars,78,`${symbol}:${timeframe}`,onLoadOlder,hasOlder);
+ const wick=useRef<SVGLineElement>(null),body=useRef<SVGRectElement>(null);
+ const frame=useRef<number|null>(null);
+ const lastCoords=useRef<{top:number;bottom:number;high:number;low:number}|null>(null);
+ const openY=y(bar.open),closeY=y(bar.close);
+ const dest={top:Math.min(openY,closeY),bottom:Math.max(openY,closeY),high:y(bar.high),low:y(bar.low)};
+ const color=bar.close>=bar.open?colors.up:colors.down;
+ // Prevent React renders from snapping animated geometry to its final coordinates.
+ const initialGeometry=useRef(dest);
+ useEffect(()=>{
+   const line=wick.current,rect=body.current;
+   if(!line||!rect)return;
+   if(frame.current!==null){cancelAnimationFrame(frame.current);frame.current=null;}
+   const previous=lastCoords.current;
+   const apply=(v:typeof dest)=>{
+     line.setAttribute('y1',String(v.high));line.setAttribute('y2',String(v.low));
+     rect.setAttribute('y',String(v.top));rect.setAttribute('height',String(Math.max(1.3,v.bottom-v.top)));
+     lastCoords.current=v;
+   };
+   if(!active||!previous||window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches){apply(dest);return;}
+   const start=performance.now(),duration=450;
+   const run=(time:number)=>{
+     const fraction=Math.min(1,(time-start)/duration);
+     const easing=1-Math.pow(1-fraction,3);
+     const blend=(a:number,b:number)=>a+(b-a)*easing;
+     apply({top:blend(previous.top,dest.top),bottom:blend(previous.bottom,dest.bottom),
+       high:blend(previous.high,dest.high),low:blend(previous.low,dest.low)});
+     if(fraction<1)frame.current=requestAnimationFrame(run);
+     else frame.current=null;
+   };
+   frame.current=requestAnimationFrame(run);
+   return()=>{if(frame.current!==null){cancelAnimationFrame(frame.current);frame.current=null;}};
+ },[dest.top,dest.bottom,dest.high,dest.low,active]);
+ return <g>
+   <line ref={wick} x1={x} x2={x} y1={initialGeometry.current.high} y2={initialGeometry.current.low} stroke={color} strokeWidth="1.5"/>
+   <rect ref={body} x={x-width/2} y={initialGeometry.current.top} width={width}
+     height={Math.max(1.3,initialGeometry.current.bottom-initialGeometry.current.top)} fill={color} rx=".6"/>
+   <rect x={x-width/2} y={286-volumeHeight} width={width} height={volumeHeight}
+     fill={color} opacity=".90"/>
+ </g>;
+}
+
+function CandleChart({bars,symbol,timeframe,onLoadOlder,hasOlder,quote,quoteSecond,liveEnabled,session}:{
+ bars:Bar[];symbol:SymbolCode;timeframe:number;onLoadOlder:()=>void;hasOlder:boolean;olderLoading:boolean;
+ quote:unknown;quoteSecond:number|undefined;liveEnabled:boolean;session:string|null;
+}){
+ const preview=useVisualCurrentCandle(bars,quote,quoteSecond,timeframe,liveEnabled,session);
+ const chartBars=useMemo(()=>{
+   if(!preview||!bars.length)return bars;
+   if(preview.t===bars[bars.length-1].t){
+     const verified=bars[bars.length-1];
+     return [...bars.slice(0,-1),{...preview,open:verified.open,
+       high:Math.max(preview.high,verified.high),low:Math.min(preview.low,verified.low),
+       volume:verified.volume}];
+   }
+   return [...bars,preview];
+ },[bars,preview]);
+ const pan=useCandlePan(chartBars,78,`${symbol}:${timeframe}`,onLoadOlder,hasOlder);
  const visible=pan.visible;
  const dimension={width:760,height:320};
  const view=useMemo(()=>{
@@ -237,13 +389,17 @@ function CandleChart({bars,symbol,timeframe,onLoadOlder,hasOlder}:{
      {visible.map((b,i)=>{
        const up=b.close>=b.open,c=up?colors.up:colors.down;
        const bx=x(i),candleH=Math.max(1.3,Math.abs(y(b.close)-y(b.open)));
-       return <g key={b.t}>
+       const volumeHeight=Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48));
+       const live=Boolean(preview&&pan.isLatest&&i===visible.length-1&&b.t===preview.t);
+       return live?<AnimatedCandleGlyph key={`live:${b.t}`} bar={b} x={bx} width={bw} y={y}
+           volumeHeight={volumeHeight} active={true}/>:<g key={b.t}>
          <line x1={bx} x2={bx} y1={y(b.high)} y2={y(b.low)} stroke={c} strokeWidth="1.3"/>
          <rect x={bx-bw/2} y={Math.min(y(b.open),y(b.close))} width={bw} height={candleH} fill={c} rx=".6"/>
-         <rect x={bx-bw/2} y={286-Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48))}
-           width={bw} height={Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48))} fill={c} opacity=".90"/>
+         <rect x={bx-bw/2} y={286-volumeHeight}
+           width={bw} height={volumeHeight} fill={c} opacity=".90"/>
        </g>;
      })}
+     {preview&&pan.isLatest&&<text x="22" y="14" fill="#b5d9d3" fontSize="10">● 진행 중 · 확정 시세 기반 화면 표시</text>}
      <line x1="12" x2="710" y1="229" y2="229" stroke="#9bb5c4" strokeOpacity=".5"/>
      <line x1="12" x2="710" y1="286" y2="286" stroke="#9bb5c4" strokeOpacity=".25"/>
      <text x="18" y="239" fontSize="11" fill="#a8bdcf">거래량</text>
@@ -880,10 +1036,10 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      <main className={styles.right} aria-label="공통 거래 화면">
        <div className={styles.symbols}>
          {SYMBOLS.map(s=><button type="button" key={s} className={symbol===s?styles.selectedSymbol:''} onClick={()=>{setSymbol(s);setStop('');setTake('');}}>
-           <span>{LABELS[s]}</span><strong>{displayMarketPrice(market?.prices[s])} <small>TC</small></strong>
+           <span>{LABELS[s]}</span><strong><AnimatedMarketPrice value={market?.prices[s]} quoteSecond={marketData?.now}/> <small>TC</small></strong>
          </button>)}
        </div>
-       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트</small></span><strong>{displayMarketPrice(market?.prices[symbol])} <small>TC</small></strong></div>
+       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트 · 표시 애니메이션, 실제 체결은 서버 시세</small></span><strong><AnimatedMarketPrice key={symbol} value={market?.prices[symbol]} quoteSecond={marketData?.now}/> <small>TC</small></strong></div>
        <div className={styles.intervals}>{[30,60,240].map(s=><button type="button" key={s} className={frame===s?styles.selectedFrame:''} onClick={()=>setFrame(s)}>
           {{30:'30분',60:'1시간',240:'4시간'}[s as 30|60|240]}
         </button>)}</div>
@@ -905,7 +1061,11 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
       
          {marketError&&!shownChartBars.length
          ?<div className={styles.chartEmpty} role="status">실시간 차트 서버 연결 중단: {marketError}<div style={{marginTop:12,fontSize:13}}>저장된 차트가 없는 첫 접속에서는 서버 연결 복구 후 표시됩니다. 시장 데이터나 거래 기록은 초기화하지 마세요.</div></div>
-         :<CandleChart key={`${symbol}:${frame}`} bars={shownChartBars} symbol={symbol} timeframe={frame} onLoadOlder={loadOlder} olderLoading={historyBusy} hasOlder={liveChartBars.length>0&&historyCursor.current!=null&&barsRef.current.length<MAX_RETAINED_CANDLES}/>}</div>
+         :<CandleChart key={`${symbol}:${frame}:${marketData?.chartContext??''}`} bars={shownChartBars} symbol={symbol} timeframe={frame}
+             quote={marketData?.prices?.[symbol]} quoteSecond={marketData?.now}
+             liveEnabled={Boolean(liveChartBars.length>0&&!marketError&&!chartRevalidating&&marketData?.cacheMode==='v6-database')}
+             session={marketData?.chartContext??null}
+             onLoadOlder={loadOlder} olderLoading={historyBusy} hasOlder={liveChartBars.length>0&&historyCursor.current!=null&&barsRef.current.length<MAX_RETAINED_CANDLES}/>}</div>
        <div className={styles.tradeForm}>
          <div className={styles.tradeRow}><b>매매 방향</b><div className={styles.segment}>
            <button className={direction==='long'?styles.activeLong:''} onClick={()=>setDirection('long')} type="button" disabled={Boolean(selectedPosition&&selectedPosition.side!==1)}>▲ LONG</button>
