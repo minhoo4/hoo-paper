@@ -147,7 +147,7 @@ async function stillCurrentTradingUser(uid:string|undefined){
  return !error&&session?.user.id===uid;
 }
 
-// Read-only position/account changes at most once per second WHILE a server-confirmed
+// Read-only position/account changes at most once per five seconds WHILE a server-confirmed
 // position is open. It does not fetch hoo_coin_wallets or run market catch-up.
 async function requestPositionMonitor():Promise<PositionMonitor>{
  const client=getBrowserDb();
@@ -204,10 +204,303 @@ async function requestMarket(symbol:SymbolCode,frame:number,before?:number,since
 }
 const colors={up:'#13b58e',down:'#e26671'};
 const MAX_RETAINED_CANDLES=2000;
-function CandleChart({bars,symbol,timeframe,onLoadOlder,hasOlder}:{
- bars:Bar[];symbol:SymbolCode;timeframe:number;onLoadOlder:()=>void;hasOlder:boolean;olderLoading:boolean;
+
+/** Purely visual easing between *two confirmed* quotes. Never used for orders, PnL or SL/TP. */
+function AnimatedMarketPrice({value,quoteSecond}:{value:unknown;quoteSecond:number|undefined}){
+ const node=useRef<HTMLSpanElement>(null);
+ // Keep React's text child stable: RAF owns only the visual label between quote packets.
+ const initialText=useRef(displayMarketPrice(value));
+ const animation=useRef<number|null>(null);
+ const displayed=useRef<number|null>(null);
+ const lastSecond=useRef<number|null>(null);
+ useEffect(()=>{
+   const target=Number(value),second=Number(quoteSecond);
+   const valid=Number.isFinite(target)&&target>0;
+   const el=node.current;
+   if(!el)return;
+   if(!valid){
+     if(animation.current!==null)cancelAnimationFrame(animation.current);
+     animation.current=null;displayed.current=null;lastSecond.current=null;
+     el.textContent='—';return;
+   }
+   // Ignore out-of-order response clocks. Same-second rerenders cannot restart an animation.
+   if(Number.isSafeInteger(second)&&lastSecond.current!==null&&second<lastSecond.current)return;
+   const previous=displayed.current;
+   if(animation.current!==null){cancelAnimationFrame(animation.current);animation.current=null;}
+   const nextSecond=Number.isSafeInteger(second)?second:null;
+   if(nextSecond!==null)lastSecond.current=nextSecond;
+   if(previous===null||previous===target||window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches){
+     displayed.current=target;el.textContent=pformat(target);return;
+   }
+   const rising=target>previous;
+   const color=rising?colors.up:colors.down;
+   // Text color/flash is decorative and does not change numerical state.
+   el.animate?.([
+     {color,filter:`drop-shadow(0 0 5px ${color})`},
+     {color:'inherit',filter:'none'}
+   ],{duration:900,easing:'ease-out'});
+   const start=performance.now();
+   const duration=1300; // Actual confirmed-price handoff; never invents new market ticks.
+   const step=(time:number)=>{
+     const fraction=Math.min(1,(time-start)/duration);
+     const ease=1-Math.pow(1-fraction,3);
+     const current=previous+(target-previous)*ease;
+     displayed.current=current;
+     el.textContent=fraction>=1?pformat(target):pformat(current);
+     if(fraction<1)animation.current=requestAnimationFrame(step);
+     else{displayed.current=target;animation.current=null;}
+   };
+   animation.current=requestAnimationFrame(step);
+   return()=>{if(animation.current!==null){cancelAnimationFrame(animation.current);animation.current=null;}};
+ },[value,quoteSecond]);
+ return <span ref={node} title="표시 전용 가격 전환 애니메이션 · 실제 주문가는 서버 확정 시세">{initialText.current}</span>;
+}
+
+/**
+ * Bounded client-only visual movement. NOT a market quote or a forecast.
+ * The real executable price remains the last server-confirmed `prices[symbol]`.
+ * This function is intentionally never exported to trading/order/position math.
+ */
+function visualOnlyPrice(base:number,symbol:SymbolCode,seconds:number):number{
+ const phase=symbol==='HOO'?0.2:symbol==='EGG'?1.5:2.8;
+ const wave=Math.sin(seconds*0.73+phase)*0.00055
+   +Math.sin(seconds*1.61+phase*0.7)*0.00022;
+ return base*(1+wave);
+}
+
+/** A conspicuously labelled illustrative ticker, independent of actual market price. */
+function IndicativeVisualPrice({value,symbol,quoteSecond}:{
+ value:unknown;symbol:SymbolCode;quoteSecond:number|undefined;
 }){
- const pan=useCandlePan(bars,78,`${symbol}:${timeframe}`,onLoadOlder,hasOlder);
+ const node=useRef<HTMLSpanElement>(null);
+ useEffect(()=>{
+   const base=Number(value),timestamp=Number(quoteSecond),el=node.current;
+   if(!el)return;
+   if(!Number.isFinite(base)||base<=0||!Number.isSafeInteger(timestamp)){
+     el.textContent='—';return;
+   }
+   let timer:number|null=null;
+   const reduce=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+   const draw=()=>{
+     // Stale market data must not look alive indefinitely; never hide the real quote.
+     const age=Date.now()/1000-timestamp;
+     if(age<0||age>90||document.visibilityState!=='visible'||reduce){
+       el.textContent=pformat(base);return;
+     }
+     const shown=visualOnlyPrice(base,symbol,performance.now()/1000);
+     el.textContent=pformat(shown);
+     el.style.color=shown>=base?colors.up:colors.down;
+   };
+   draw();
+   timer=window.setInterval(draw,80); // UI only: ZERO network/DB requests.
+   return()=>{if(timer!==null)window.clearInterval(timer);};
+ },[value,symbol,quoteSecond]);
+ return <span style={{display:'block',fontSize:11,lineHeight:1.6,fontWeight:500,
+   letterSpacing:'.01em',opacity:.95}} title="화면 연출용 미니 틱: 서버 확정 가격이나 주문·청산 가격이 아닙니다">
+   <span style={{opacity:.8}}>〰 시각 효과 · 거래 불가 </span><span ref={node}>—</span>
+ </span>;
+}
+
+/**
+ * Visual-only one-second candle motion: the dashed candle is NOT a trade quote.
+ * Confirmed OHLCV/quotes remain untouched. A bounded 2–11px decorative movement
+ * makes the UI responsive even when the SERVER only publishes once a minute.
+ * This must never be connected to position equity, orders, SL/TP or history.
+ */
+function IndicativeCandleGhost({price,symbol,quoteSecond,x,y,width,enabled}:{
+ price:unknown;symbol:SymbolCode;quoteSecond:number|undefined;
+ x:number;y:(v:number)=>number;width:number;enabled:boolean;
+}){
+ const wick=useRef<SVGLineElement>(null);
+ const body=useRef<SVGRectElement>(null);
+ const dot=useRef<SVGCircleElement>(null);
+ const base=Number(price);
+ const valid=enabled&&Number.isFinite(base)&&base>0&&
+   Number.isSafeInteger(Number(quoteSecond));
+ const baseY=valid?y(base):0;
+ useEffect(()=>{
+   if(!valid)return;
+   const line=wick.current,rect=body.current,point=dot.current;
+   if(!line||!rect||!point)return;
+   let raf=0;
+   let fromY=baseY, currentY=baseY, toY=baseY;
+   let transitionStart=performance.now(), lastTick=0;
+   const reduce=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+   const draw=(now:number)=>{
+     raf=requestAnimationFrame(draw);
+     const age=Date.now()/1000-Number(quoteSecond);
+     const moving=document.visibilityState==='visible'&&age>=0&&age<=75&&!reduce;
+     if(!moving){
+       line.setAttribute('y1',String(baseY-3));
+       line.setAttribute('y2',String(baseY+3));
+       rect.setAttribute('y',String(baseY-1));
+       rect.setAttribute('height','2');
+       point.setAttribute('cy',String(baseY));
+       return;
+     }
+     // ONE new visual target per second, using the same last confirmed quote.
+     if(lastTick===0||now-lastTick>=1000){
+       lastTick=now;fromY=currentY;
+       const sample=visualOnlyPrice(base,symbol,now/1000);
+       const delta=y(sample)-baseY;
+       // Pixel motion is a deliberate decorative effect, never a market value.
+       toY=baseY+(Math.abs(delta)<0.02?0:Math.sign(delta)*Math.max(2,Math.min(11,Math.abs(delta))));
+       transitionStart=now;
+     }
+     const progress=Math.min(1,(now-transitionStart)/850);
+     const ease=progress*progress*(3-2*progress);
+     currentY=fromY+(toY-fromY)*ease;
+     const top=Math.min(baseY,currentY),bottom=Math.max(baseY,currentY);
+     const color=currentY<=baseY?colors.up:colors.down;
+     line.setAttribute('y1',String(top-3));line.setAttribute('y2',String(bottom+3));
+     line.setAttribute('stroke',color);
+     rect.setAttribute('y',String(top));rect.setAttribute('height',String(Math.max(2,bottom-top)));
+     rect.setAttribute('fill',color);
+     point.setAttribute('cy',String(currentY));point.setAttribute('fill',color);
+   };
+   raf=requestAnimationFrame(draw);
+   return()=>cancelAnimationFrame(raf);
+ },[base,symbol,quoteSecond,enabled,baseY,y,valid]);
+ if(!valid)return null;
+ return <g opacity=".95" pointerEvents="none" aria-hidden="true">
+   <line ref={wick} x1={x} x2={x} y1={baseY-3} y2={baseY+3}
+     stroke="#73c9da" strokeWidth="2.2" strokeDasharray="3 2"/>
+   <rect ref={body} x={x-width/2} y={baseY-1} width={width}
+     height={2} fill="#73c9da" fillOpacity=".6" rx=".6"/>
+   <circle ref={dot} cx={x} cy={baseY} r="2.7" fill="#73c9da"/>
+ </g>;
+}
+
+/** One-second UI heartbeat, not a promise of a fresh server price every second. */
+function CandleSecondHeartbeat({quoteSecond,enabled}:{quoteSecond:number|undefined;enabled:boolean}){
+ const label=useRef<SVGTextElement>(null);
+ const progress=useRef<SVGRectElement>(null);
+ useEffect(()=>{
+   if(!enabled)return;
+   const draw=()=>{
+     if(!label.current||!progress.current)return;
+     const age=Math.max(0,Math.floor(Date.now()/1000)-Number(quoteSecond));
+     if(!Number.isFinite(age))return;
+     const stale=age>75;
+     label.current.textContent=stale?'서버 시세 지연 · 연출 정지':`1초 화면 갱신 · 서버 확정 시세 ${age}초 전`;
+     progress.current.setAttribute('width',String(120*(Math.min(age,60)/60)));
+   };
+   draw();
+   const timer=window.setInterval(()=>{if(document.visibilityState==='visible')draw();},1000);
+   return()=>window.clearInterval(timer);
+ },[quoteSecond,enabled]);
+ if(!enabled||!Number.isSafeInteger(Number(quoteSecond)))return null;
+ return <g pointerEvents="none" aria-hidden="true">
+   <rect x="18" y="16" width="120" height="2" fill="#527080" opacity=".45"/>
+   <rect ref={progress} x="18" y="16" width="0" height="2" fill="#73c9da" opacity=".85"/>
+   <text ref={label} x="18" y="10" fill="#b5d9d3" fontSize="9">서버 시세 확인 중</text>
+ </g>;
+}
+
+/**
+ * An *indicative*, never-tradable current candle composed from confirmed quotes.
+ * DB OHLCV always wins once a new saved candle is received. Never backfills old gaps.
+ */
+function useVisualCurrentCandle(bars:Bar[],price:unknown,quoteSecond:number|undefined,
+ timeframe:number,enabled:boolean,session:string|null){
+ const [preview,setPreview]=useState<Bar|null>(null);
+ const seen=useRef<{second:number;session:string|null}|null>(null);
+ const last=bars[bars.length-1];
+ useEffect(()=>{
+   if(!enabled||!last){setPreview(null);seen.current=null;return;}
+   const current=Number(price),second=Number(quoteSecond);
+   if(!Number.isFinite(current)||current<=0||!Number.isSafeInteger(second)||
+      !Number.isSafeInteger(last.t)||timeframe<=0||second<last.t||
+      second>last.t+timeframe*2){
+     setPreview(null);return;
+   }
+   if(seen.current&&seen.current.session===session&&second<=seen.current.second)return;
+   seen.current={second,session};
+   // Server candle t is anchored to the V6 stream, not to Unix epoch multiples.
+   const bucket=second<=last.t+timeframe?last.t:last.t+timeframe;
+   setPreview(previous=>{
+     if(bucket===last.t){
+       const same=previous?.t===bucket;
+       const priorHigh=same?previous.high:last.high;
+       const priorLow=same?previous.low:last.low;
+       return {...last,high:Math.max(last.high,priorHigh,current),
+         low:Math.min(last.low,priorLow,current),close:current};
+     }
+     // An unseen new bucket starts at the first *observed* confirmed quote.
+     // Volume is unknown; never manufacture trades or authoritative OHLCV.
+     if(previous?.t===bucket)return {...previous,high:Math.max(previous.high,current),
+       low:Math.min(previous.low,current),close:current};
+     return {t:bucket,open:current,high:current,low:current,close:current,volume:0};
+   });
+ },[enabled,last?.t,last?.open,last?.high,last?.low,last?.close,last?.volume,
+    price,quoteSecond,timeframe,session]);
+ // Invalidate a previous-session draft synchronously, even before effects run.
+ const valid=enabled&&preview&&last&&preview.t>=last.t&&preview.t<=last.t+timeframe&&
+   Number.isSafeInteger(Number(quoteSecond))&&Number(quoteSecond)>=preview.t;
+ return valid?preview:null;
+}
+
+/** Animate only the newest displayed candle: no chart-wide 60fps React rerenders. */
+function AnimatedCandleGlyph({bar,x,width,y,volumeHeight,active}:{
+ bar:Bar;x:number;width:number;y:(value:number)=>number;volumeHeight:number;active:boolean;
+}){
+ const wick=useRef<SVGLineElement>(null),body=useRef<SVGRectElement>(null);
+ const frame=useRef<number|null>(null);
+ const lastCoords=useRef<{top:number;bottom:number;high:number;low:number}|null>(null);
+ const openY=y(bar.open),closeY=y(bar.close);
+ const dest={top:Math.min(openY,closeY),bottom:Math.max(openY,closeY),high:y(bar.high),low:y(bar.low)};
+ const color=bar.close>=bar.open?colors.up:colors.down;
+ // Prevent React renders from snapping animated geometry to its final coordinates.
+ const initialGeometry=useRef(dest);
+ useEffect(()=>{
+   const line=wick.current,rect=body.current;
+   if(!line||!rect)return;
+   if(frame.current!==null){cancelAnimationFrame(frame.current);frame.current=null;}
+   const previous=lastCoords.current;
+   const apply=(v:typeof dest)=>{
+     line.setAttribute('y1',String(v.high));line.setAttribute('y2',String(v.low));
+     rect.setAttribute('y',String(v.top));rect.setAttribute('height',String(Math.max(1.3,v.bottom-v.top)));
+     lastCoords.current=v;
+   };
+   if(!active||!previous||window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches){apply(dest);return;}
+   const start=performance.now(),duration=450;
+   const run=(time:number)=>{
+     const fraction=Math.min(1,(time-start)/duration);
+     const easing=1-Math.pow(1-fraction,3);
+     const blend=(a:number,b:number)=>a+(b-a)*easing;
+     apply({top:blend(previous.top,dest.top),bottom:blend(previous.bottom,dest.bottom),
+       high:blend(previous.high,dest.high),low:blend(previous.low,dest.low)});
+     if(fraction<1)frame.current=requestAnimationFrame(run);
+     else frame.current=null;
+   };
+   frame.current=requestAnimationFrame(run);
+   return()=>{if(frame.current!==null){cancelAnimationFrame(frame.current);frame.current=null;}};
+ },[dest.top,dest.bottom,dest.high,dest.low,active]);
+ return <g>
+   <line ref={wick} x1={x} x2={x} y1={initialGeometry.current.high} y2={initialGeometry.current.low} stroke={color} strokeWidth="1.5"/>
+   <rect ref={body} x={x-width/2} y={initialGeometry.current.top} width={width}
+     height={Math.max(1.3,initialGeometry.current.bottom-initialGeometry.current.top)} fill={color} rx=".6"/>
+   <rect x={x-width/2} y={286-volumeHeight} width={width} height={volumeHeight}
+     fill={color} opacity=".90"/>
+ </g>;
+}
+
+function CandleChart({bars,symbol,timeframe,onLoadOlder,hasOlder,quote,quoteSecond,liveEnabled,session}:{
+ bars:Bar[];symbol:SymbolCode;timeframe:number;onLoadOlder:()=>void;hasOlder:boolean;olderLoading:boolean;
+ quote:unknown;quoteSecond:number|undefined;liveEnabled:boolean;session:string|null;
+}){
+ const preview=useVisualCurrentCandle(bars,quote,quoteSecond,timeframe,liveEnabled,session);
+ const chartBars=useMemo(()=>{
+   if(!preview||!bars.length)return bars;
+   if(preview.t===bars[bars.length-1].t){
+     const verified=bars[bars.length-1];
+     return [...bars.slice(0,-1),{...preview,open:verified.open,
+       high:Math.max(preview.high,verified.high),low:Math.min(preview.low,verified.low),
+       volume:verified.volume}];
+   }
+   return [...bars,preview];
+ },[bars,preview]);
+ const pan=useCandlePan(chartBars,78,`${symbol}:${timeframe}`,onLoadOlder,hasOlder);
  const visible=pan.visible;
  const dimension={width:760,height:320};
  const view=useMemo(()=>{
@@ -237,13 +530,21 @@ function CandleChart({bars,symbol,timeframe,onLoadOlder,hasOlder}:{
      {visible.map((b,i)=>{
        const up=b.close>=b.open,c=up?colors.up:colors.down;
        const bx=x(i),candleH=Math.max(1.3,Math.abs(y(b.close)-y(b.open)));
-       return <g key={b.t}>
+       const volumeHeight=Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48));
+       const live=Boolean(preview&&pan.isLatest&&i===visible.length-1&&b.t===preview.t);
+       return live?<AnimatedCandleGlyph key={`live:${b.t}`} bar={b} x={bx} width={bw} y={y}
+           volumeHeight={volumeHeight} active={true}/>:<g key={b.t}>
          <line x1={bx} x2={bx} y1={y(b.high)} y2={y(b.low)} stroke={c} strokeWidth="1.3"/>
          <rect x={bx-bw/2} y={Math.min(y(b.open),y(b.close))} width={bw} height={candleH} fill={c} rx=".6"/>
-         <rect x={bx-bw/2} y={286-Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48))}
-           width={bw} height={Math.max(1,Math.min(48,Number(b.volume)/view.maximumVolume*48))} fill={c} opacity=".90"/>
+         <rect x={bx-bw/2} y={286-volumeHeight}
+           width={bw} height={volumeHeight} fill={c} opacity=".90"/>
        </g>;
      })}
+     {pan.isLatest&&liveEnabled&&<IndicativeCandleGhost
+       price={quote} symbol={symbol} quoteSecond={quoteSecond}
+       x={x(visible.length-1)} y={y} width={bw} enabled={liveEnabled}/>}
+     {pan.isLatest&&liveEnabled&&<CandleSecondHeartbeat quoteSecond={quoteSecond} enabled={liveEnabled}/>}
+     {pan.isLatest&&liveEnabled&&<text x="145" y="20" fill="#b5d9d3" fontSize="9">점선봉은 연출 · 실제 체결가 아님</text>}
      <line x1="12" x2="710" y1="229" y2="229" stroke="#9bb5c4" strokeOpacity=".5"/>
      <line x1="12" x2="710" y1="286" y2="286" stroke="#9bb5c4" strokeOpacity=".25"/>
      <text x="18" y="239" fontSize="11" fill="#a8bdcf">거래량</text>
@@ -511,10 +812,10 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  },[refresh]);
  useEffect(()=>{
    if(!open||!monitorPositions||economyMaintenance)return;
-   // The existing 1s PUBLIC MARKET ticker remains independent and unchanged.
+   // Position monitoring is independent of the public market; poll every 5s.
    const poll=window.setInterval(()=>{
      if(document.visibilityState==='visible')void refreshPositionMonitor();
-   },1000);
+   },5000);
    return()=>window.clearInterval(poll);
  },[open,monitorPositions,economyMaintenance,refreshPositionMonitor]);
  // On resume, a single verified refresh checks whether another device changed positions.
@@ -533,7 +834,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  },[open,monitorPositions,refresh]);
  // Observe only server-confirmed snapshots. A position vanishing from this
  // ID set is a COMPLETE close; changing quantity alone is a partial close.
- // The 1-second unrealized profit updates preserve IDs and issue ZERO rank GETs.
+ // Periodic unrealized profit updates preserve IDs and issue ZERO rank GETs.
  useEffect(()=>{
    if(!open||!data?.authUserId||economyMaintenance)return;
    if(rankingAccount.current===null)rankingAccount.current=data.authUserId;
@@ -659,7 +960,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
    chartEngineEpoch.current++;
    void refreshMarket();
    // Background tabs do not download candles; next visible refresh catches up.
-   const ticker=window.setInterval(()=>{if(document.visibilityState==='visible')void refreshMarket();},1000);
+   const ticker=window.setInterval(()=>{if(document.visibilityState==='visible')void refreshMarket();},5000);
    const onVisible=()=>{if(document.visibilityState==='visible')void refreshMarket();};
    document.addEventListener('visibilitychange',onVisible);
    return()=>{window.clearInterval(ticker);document.removeEventListener('visibilitychange',onVisible);};
@@ -718,6 +1019,15 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const liveChartBars=market?.candles[symbol]||[];
  const rememberedBars=lastGoodChart?.key===`${symbol}:${frame}`?lastGoodChart.bars:[];
  const shownChartBars=liveChartBars.length?liveChartBars:rememberedBars;
+ // The initial account snapshot's clock.caughtUp can become stale while market quotes update.
+ // Only enable the controls with a sufficiently fresh, verified public market quote.
+ // The server and DB must still independently validate every order.
+ const orderMarketAge=marketData?.now!=null
+   ?Math.floor(Date.now()/1000)-Number(marketData.now):Infinity;
+ const orderMarketReady=Boolean(data&&marketData&&!marketError&&
+   Number.isFinite(orderMarketAge)&&orderMarketAge>=0&&orderMarketAge<=75&&
+   SYMBOLS.every(code=>Number.isFinite(Number(marketData.prices?.[code]))&&
+     Number(marketData.prices?.[code])>0));
  const ageSeconds=market?.now?Math.max(0,Math.floor(Date.now()/1000)-market.now):null;
  const chartDelayed=chartRevalidating||Boolean(marketError)||(ageSeconds!==null&&ageSeconds>3)||(!liveChartBars.length&&rememberedBars.length>0);
  const livePositions=(data?.positions||[]).map(p=>{const mark=Number(market?.prices[p.symbol]??p.mark);const unrealized=Number(p.side)*Number(p.qty)*(mark-Number(p.entry_price));return {...p,mark,unrealized};});
@@ -729,7 +1039,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const selectedPosition=data?.positions.find(p=>p.symbol===symbol);
  const addingSamePosition=Boolean(selectedPosition && selectedPosition.side===(direction==='long'?1:-1) && Number(selectedPosition.leverage)===leverage);
  // Load saved risk targets only when the selected position changes.
- // Do not overwrite inputs while the user types or prices refresh once per second.
+ // Do not overwrite inputs while the user types or prices refresh every five seconds.
  useEffect(()=>{
    if(!selectedPosition)return;
    const entry=Number(selectedPosition.entry_price);
@@ -825,7 +1135,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      <div className={styles.scrim} onClick={()=>setOpen(false)} aria-hidden="true"/>
      <div className={styles.header}>
        <span className={styles.heading}>📈 후레이딩 <small>HOO WORLD MARKET</small></span>
-       <span className={styles.clock}>◷ 1초 = 시장 1분 · {gameClock} {data?.clock&&!data.clock.caughtUp?'· 시장 동기화 중':''}</span>
+       <span className={styles.clock}>◷ 1초 = 시장 1분 · {gameClock} {!orderMarketReady?'· 시장 동기화 중':''}</span>
        <button className={styles.close} type="button" onClick={()=>setOpen(false)} aria-label="후레이딩 닫기">×</button>
      </div>
      <aside className={styles.left} aria-label="자산 뉴스 순위">
@@ -871,10 +1181,11 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      <main className={styles.right} aria-label="공통 거래 화면">
        <div className={styles.symbols}>
          {SYMBOLS.map(s=><button type="button" key={s} className={symbol===s?styles.selectedSymbol:''} onClick={()=>{setSymbol(s);setStop('');setTake('');}}>
-           <span>{LABELS[s]}</span><strong>{displayMarketPrice(market?.prices[s])} <small>TC</small></strong>
+           <span>{LABELS[s]}</span><strong><AnimatedMarketPrice value={market?.prices[s]} quoteSecond={marketData?.now}/> <small>TC</small></strong>
          </button>)}
        </div>
-       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트</small></span><strong>{displayMarketPrice(market?.prices[symbol])} <small>TC</small></strong></div>
+       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트 · 표시 애니메이션, 실제 체결은 서버 시세</small></span><strong><AnimatedMarketPrice key={symbol} value={market?.prices[symbol]} quoteSecond={marketData?.now}/> <small>TC (확정 시세)</small>
+          <IndicativeVisualPrice value={marketData?.prices?.[symbol]} symbol={symbol} quoteSecond={marketData?.now}/></strong></div>
        <div className={styles.intervals}>{[30,60,240].map(s=><button type="button" key={s} className={frame===s?styles.selectedFrame:''} onClick={()=>setFrame(s)}>
           {{30:'30분',60:'1시간',240:'4시간'}[s as 30|60|240]}
         </button>)}</div>
@@ -893,14 +1204,14 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
           <p>개발용 샘플은 1시간봉으로만 표시됩니다.</p>
         </section>:<>
         <div className={styles.chartBox}>
-         {chartDelayed&&shownChartBars.length>0&&<div role="status" style={{padding:'8px 10px',fontSize:12,color:'#ffdb99',background:'#483723',borderRadius:8,marginBottom:8}}>
-           ⚠ 실시간 시세 지연 · 마지막 확인 차트 표시 중 (거래용 실시간 가격이 아닙니다).
-           {lastGoodChart?.key===`${symbol}:${frame}`&&(!liveChartBars.length)&&<> 저장: {new Date(lastGoodChart.savedAt).toLocaleString('ko-KR')}</>}
-           {ageSeconds!==null&&ageSeconds>3&&<> · 시세 지연 약 {ageSeconds}초</>}
-         </div>}
+      
          {marketError&&!shownChartBars.length
          ?<div className={styles.chartEmpty} role="status">실시간 차트 서버 연결 중단: {marketError}<div style={{marginTop:12,fontSize:13}}>저장된 차트가 없는 첫 접속에서는 서버 연결 복구 후 표시됩니다. 시장 데이터나 거래 기록은 초기화하지 마세요.</div></div>
-         :<CandleChart key={`${symbol}:${frame}`} bars={shownChartBars} symbol={symbol} timeframe={frame} onLoadOlder={loadOlder} olderLoading={historyBusy} hasOlder={liveChartBars.length>0&&historyCursor.current!=null&&barsRef.current.length<MAX_RETAINED_CANDLES}/>}</div>
+         :<CandleChart key={`${symbol}:${frame}:${marketData?.chartContext??''}`} bars={shownChartBars} symbol={symbol} timeframe={frame}
+             quote={marketData?.prices?.[symbol]} quoteSecond={marketData?.now}
+             liveEnabled={Boolean(liveChartBars.length>0&&!marketError&&!chartRevalidating&&marketData?.cacheMode==='v6-database')}
+             session={marketData?.chartContext??null}
+             onLoadOlder={loadOlder} olderLoading={historyBusy} hasOlder={liveChartBars.length>0&&historyCursor.current!=null&&barsRef.current.length<MAX_RETAINED_CANDLES}/>}</div>
        <div className={styles.tradeForm}>
          <div className={styles.tradeRow}><b>매매 방향</b><div className={styles.segment}>
            <button className={direction==='long'?styles.activeLong:''} onClick={()=>setDirection('long')} type="button" disabled={Boolean(selectedPosition&&selectedPosition.side!==1)}>▲ LONG</button>
@@ -949,7 +1260,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          {riskError&&<div className={styles.riskWarning} role="alert">{riskError}</div>}
          <div className={styles.estimate}>예상 명목가치 {fmt(Number(margin||0)*leverage)} TC · 수수료 및 슬리피지 별도</div>
          <button type="button" className={direction==='long'?styles.submitLong:styles.submitShort}
-           disabled={working||!!riskError||!data?.clock.caughtUp||!data||(Boolean(selectedPosition)&&!addingSamePosition)}
+           disabled={working||!!riskError||!orderMarketReady||!data||(Boolean(selectedPosition)&&!addingSamePosition)}
            onClick={()=>void submit({action:'open',symbol,side:direction,leverage,margin:Number(margin),stop:stopAsNumber,take:takeAsNumber},selectedPosition?'동일 방향 추가 진입':direction==='long'?'LONG 진입':'SHORT 진입')}>
            {working?'처리 중…':selectedPosition?'↗ 같은 포지션 추가 진입':direction==='long'?'↗ LONG 진입':'↘ SHORT 진입'}
          </button>
@@ -965,7 +1276,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
              <div className={styles.pair}><span>보유 수량 {fmt(Number(p.qty),8)} · 증거금 {fmt(Number(p.margin_tc))} TC</span><span>SL {p.stop_price?pformat(Number(p.stop_price)):'—'} · TP {p.take_price?pformat(Number(p.take_price)):'—'}</span></div>
              <div className={styles.positionRiskHint}>설정된 기준 ROI: SL {priceToRiskPercent(p.stop_price,Number(p.entry_price),Number(p.leverage),p.side,'stop')||'—'}% · TP {priceToRiskPercent(p.take_price,Number(p.entry_price),Number(p.leverage),p.side,'take')||'—'}%</div>
              <div className={styles.positionActions}>
-               {[.25,.5,.75,1].map(fraction=><button key={fraction} type="button" disabled={working||!data?.clock.caughtUp}
+               {[.25,.5,.75,1].map(fraction=><button key={fraction} type="button" disabled={working||!orderMarketReady}
                  onClick={()=>void submit({action:'close',symbol:p.symbol,fraction},`${fraction===1?'전량':`${Math.round(fraction*100)}%`} 청산`)}>
                  {p.unrealized>0?`${fraction===1?'전량':`${Math.round(fraction*100)}%`} 익절`:`${fraction===1?'전량':`${Math.round(fraction*100)}%`} 청산`}
                </button>)}
