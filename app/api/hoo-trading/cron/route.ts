@@ -1,5 +1,9 @@
-/** HOO V6 market-only fresh reset. Does not open the economy or clear wallets.
- * Requires the previously installed fresh-reset RPCs and a fresh, explicit arm.
+/**
+ * HOO V6 market cron: one-shot approved fresh reset + controlled recovery.
+ *
+ * After the reset, if the market is > 30 min behind, we allow catch-up only
+ * when the database's service-role-only recovery policy explicitly approves.
+ * Economy unlocks, wallet changes and new resets are NOT performed here.
  */
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
@@ -18,7 +22,7 @@ const noStore = { 'Cache-Control': 'no-store' };
 export async function GET(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret || req.headers.get('authorization') !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+    return NextResponse.json({ error: 'forbidden' }, { status: 403, headers: noStore });
   }
 
   try {
@@ -30,6 +34,7 @@ export async function GET(req: Request) {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
+    // Keep the installed one-shot reset flow intact. A completed reset returns null.
     const { data: pending, error: pendingError } = await db.rpc(
       'hootrading_v6_fresh_reset_pending'
     );
@@ -53,7 +58,6 @@ export async function GET(req: Request) {
         throw new Error('V6_RESET_REQUIRES_STALE_MARKET');
       }
 
-      // This is created server-side. Never expose the checkpoint or market secret.
       const checkpoint = createV6Anchor(newSecond);
       const { data: result, error: resetError } = await db.rpc(
         'hootrading_v6_fresh_reset_atomic',
@@ -68,36 +72,61 @@ export async function GET(req: Request) {
         throw new Error('V6_RESET_UNEXPECTED_RESULT');
       }
 
-      // Next cron invocation starts creating new market candles.
       return NextResponse.json(
-        { ok: true, marketFreshReset: true, fromSecond: expected,
-          toSecond: newSecond, economyStillPaused: true },
+        {
+          ok: true,
+          marketFreshReset: true,
+          fromSecond: expected,
+          toSecond: newSecond,
+          economyStillPaused: true,
+        },
         { headers: noStore }
       );
     }
 
-    // Do not replay days of stale candles accidentally while reset is unarmed.
     const { data: stream, error: clockError } = await db
       .from('hootrading_v6_stream')
       .select('last_second')
       .eq('id', 1)
       .single();
     if (clockError || !stream) throw new Error('V6_CLOCK_READ_FAILED');
+
     const lastSecond = Number(stream.last_second);
     const nowSecond = marketSecond();
     if (!Number.isSafeInteger(lastSecond) || lastSecond > nowSecond + 2) {
       throw new Error('V6_CLOCK_INVALID');
     }
-    if (nowSecond - lastSecond > 1800) {
-      return NextResponse.json(
-        { ok: false, error: 'V6_MARKET_STALE_RESET_NOT_ARMED',
-          lagSeconds: nowSecond - lastSecond },
-        { status: 409, headers: noStore }
+
+    const lagSeconds = nowSecond - lastSecond;
+    let recoveryAuthorized = false;
+    if (lagSeconds > 1800) {
+      // Do not raise the global lag limit. Ask the dedicated, tightly gated DB
+      // policy, which checks pause, positions, reset audit and max 6h lag.
+      const { data: permitted, error: recoveryError } = await db.rpc(
+        'hootrading_v6_recovery_permitted',
+        { p_expected_second: lastSecond }
       );
+      if (recoveryError) {
+        throw new Error(`V6_RECOVERY_CHECK_FAILED:${recoveryError.message}`);
+      }
+      if (permitted !== true) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'V6_MARKET_STALE_RECOVERY_NOT_PERMITTED',
+            lagSeconds,
+          },
+          { status: 409, headers: noStore }
+        );
+      }
+      recoveryAuthorized = true;
     }
 
     const clock = await catchUp(720);
-    return NextResponse.json({ ok: true, ...clock }, { headers: noStore });
+    return NextResponse.json(
+      { ok: true, ...clock, recoveryAuthorized },
+      { headers: noStore }
+    );
   } catch (error) {
     console.error('HOO V6 cron/reset:', error instanceof Error ? error.message : 'unknown');
     return NextResponse.json(
