@@ -718,6 +718,15 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const liveChartBars=market?.candles[symbol]||[];
  const rememberedBars=lastGoodChart?.key===`${symbol}:${frame}`?lastGoodChart.bars:[];
  const shownChartBars=liveChartBars.length?liveChartBars:rememberedBars;
+ // The initial account snapshot's clock.caughtUp can become stale while market quotes update.
+ // Only enable the controls with a sufficiently fresh, verified public market quote.
+ // The server and DB must still independently validate every order.
+ const orderMarketAge=marketData?.now!=null
+   ?Math.floor(Date.now()/1000)-Number(marketData.now):Infinity;
+ const orderMarketReady=Boolean(data&&marketData&&!marketError&&
+   Number.isFinite(orderMarketAge)&&orderMarketAge>=0&&orderMarketAge<=75&&
+   SYMBOLS.every(code=>Number.isFinite(Number(marketData.prices?.[code]))&&
+     Number(marketData.prices?.[code])>0));
  const ageSeconds=market?.now?Math.max(0,Math.floor(Date.now()/1000)-market.now):null;
  const chartDelayed=chartRevalidating||Boolean(marketError)||(ageSeconds!==null&&ageSeconds>3)||(!liveChartBars.length&&rememberedBars.length>0);
  const livePositions=(data?.positions||[]).map(p=>{const mark=Number(market?.prices[p.symbol]??p.mark);const unrealized=Number(p.side)*Number(p.qty)*(mark-Number(p.entry_price));return {...p,mark,unrealized};});
@@ -825,7 +834,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      <div className={styles.scrim} onClick={()=>setOpen(false)} aria-hidden="true"/>
      <div className={styles.header}>
        <span className={styles.heading}>📈 후레이딩 <small>HOO WORLD MARKET</small></span>
-       <span className={styles.clock}>◷ 1초 = 시장 1분 · {gameClock} {data?.clock&&!data.clock.caughtUp?'· 시장 동기화 중':''}</span>
+       <span className={styles.clock}>◷ 1초 = 시장 1분 · {gameClock} {!orderMarketReady?'· 시장 동기화 중':''}</span>
        <button className={styles.close} type="button" onClick={()=>setOpen(false)} aria-label="후레이딩 닫기">×</button>
      </div>
      <aside className={styles.left} aria-label="자산 뉴스 순위">
@@ -945,7 +954,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          {riskError&&<div className={styles.riskWarning} role="alert">{riskError}</div>}
          <div className={styles.estimate}>예상 명목가치 {fmt(Number(margin||0)*leverage)} TC · 수수료 및 슬리피지 별도</div>
          <button type="button" className={direction==='long'?styles.submitLong:styles.submitShort}
-           disabled={working||!!riskError||!data?.clock.caughtUp||!data||(Boolean(selectedPosition)&&!addingSamePosition)}
+           disabled={working||!!riskError||!orderMarketReady||!data||(Boolean(selectedPosition)&&!addingSamePosition)}
            onClick={()=>void submit({action:'open',symbol,side:direction,leverage,margin:Number(margin),stop:stopAsNumber,take:takeAsNumber},selectedPosition?'동일 방향 추가 진입':direction==='long'?'LONG 진입':'SHORT 진입')}>
            {working?'처리 중…':selectedPosition?'↗ 같은 포지션 추가 진입':direction==='long'?'↗ LONG 진입':'↘ SHORT 진입'}
          </button>
@@ -961,7 +970,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
              <div className={styles.pair}><span>보유 수량 {fmt(Number(p.qty),8)} · 증거금 {fmt(Number(p.margin_tc))} TC</span><span>SL {p.stop_price?pformat(Number(p.stop_price)):'—'} · TP {p.take_price?pformat(Number(p.take_price)):'—'}</span></div>
              <div className={styles.positionRiskHint}>설정된 기준 ROI: SL {priceToRiskPercent(p.stop_price,Number(p.entry_price),Number(p.leverage),p.side,'stop')||'—'}% · TP {priceToRiskPercent(p.take_price,Number(p.entry_price),Number(p.leverage),p.side,'take')||'—'}%</div>
              <div className={styles.positionActions}>
-               {[.25,.5,.75,1].map(fraction=><button key={fraction} type="button" disabled={working||!data?.clock.caughtUp}
+               {[.25,.5,.75,1].map(fraction=><button key={fraction} type="button" disabled={working||!orderMarketReady}
                  onClick={()=>void submit({action:'close',symbol:p.symbol,fraction},`${fraction===1?'전량':`${Math.round(fraction*100)}%`} 청산`)}>
                  {p.unrealized>0?`${fraction===1?'전량':`${Math.round(fraction*100)}%`} 익절`:`${fraction===1?'전량':`${Math.round(fraction*100)}%`} 청산`}
                </button>)}
