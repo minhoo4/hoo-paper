@@ -240,7 +240,7 @@ function AnimatedMarketPrice({value,quoteSecond}:{value:unknown;quoteSecond:numb
      {color:'inherit',filter:'none'}
    ],{duration:900,easing:'ease-out'});
    const start=performance.now();
-   const duration=450;
+   const duration=1300; // Actual confirmed-price handoff; never invents new market ticks.
    const step=(time:number)=>{
      const fraction=Math.min(1,(time-start)/duration);
      const ease=1-Math.pow(1-fraction,3);
@@ -254,6 +254,147 @@ function AnimatedMarketPrice({value,quoteSecond}:{value:unknown;quoteSecond:numb
    return()=>{if(animation.current!==null){cancelAnimationFrame(animation.current);animation.current=null;}};
  },[value,quoteSecond]);
  return <span ref={node} title="표시 전용 가격 전환 애니메이션 · 실제 주문가는 서버 확정 시세">{initialText.current}</span>;
+}
+
+/**
+ * Bounded client-only visual movement. NOT a market quote or a forecast.
+ * The real executable price remains the last server-confirmed `prices[symbol]`.
+ * This function is intentionally never exported to trading/order/position math.
+ */
+function visualOnlyPrice(base:number,symbol:SymbolCode,seconds:number):number{
+ const phase=symbol==='HOO'?0.2:symbol==='EGG'?1.5:2.8;
+ const wave=Math.sin(seconds*0.73+phase)*0.00055
+   +Math.sin(seconds*1.61+phase*0.7)*0.00022;
+ return base*(1+wave);
+}
+
+/** A conspicuously labelled illustrative ticker, independent of actual market price. */
+function IndicativeVisualPrice({value,symbol,quoteSecond}:{
+ value:unknown;symbol:SymbolCode;quoteSecond:number|undefined;
+}){
+ const node=useRef<HTMLSpanElement>(null);
+ useEffect(()=>{
+   const base=Number(value),timestamp=Number(quoteSecond),el=node.current;
+   if(!el)return;
+   if(!Number.isFinite(base)||base<=0||!Number.isSafeInteger(timestamp)){
+     el.textContent='—';return;
+   }
+   let timer:number|null=null;
+   const reduce=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+   const draw=()=>{
+     // Stale market data must not look alive indefinitely; never hide the real quote.
+     const age=Date.now()/1000-timestamp;
+     if(age<0||age>90||document.visibilityState!=='visible'||reduce){
+       el.textContent=pformat(base);return;
+     }
+     const shown=visualOnlyPrice(base,symbol,performance.now()/1000);
+     el.textContent=pformat(shown);
+     el.style.color=shown>=base?colors.up:colors.down;
+   };
+   draw();
+   timer=window.setInterval(draw,80); // UI only: ZERO network/DB requests.
+   return()=>{if(timer!==null)window.clearInterval(timer);};
+ },[value,symbol,quoteSecond]);
+ return <span style={{display:'block',fontSize:11,lineHeight:1.6,fontWeight:500,
+   letterSpacing:'.01em',opacity:.95}} title="화면 연출용 미니 틱: 서버 확정 가격이나 주문·청산 가격이 아닙니다">
+   <span style={{opacity:.8}}>〰 시각 효과 · 거래 불가 </span><span ref={node}>—</span>
+ </span>;
+}
+
+/**
+ * Visual-only one-second candle motion: the dashed candle is NOT a trade quote.
+ * Confirmed OHLCV/quotes remain untouched. A bounded 2–11px decorative movement
+ * makes the UI responsive even when the SERVER only publishes once a minute.
+ * This must never be connected to position equity, orders, SL/TP or history.
+ */
+function IndicativeCandleGhost({price,symbol,quoteSecond,x,y,width,enabled}:{
+ price:unknown;symbol:SymbolCode;quoteSecond:number|undefined;
+ x:number;y:(v:number)=>number;width:number;enabled:boolean;
+}){
+ const wick=useRef<SVGLineElement>(null);
+ const body=useRef<SVGRectElement>(null);
+ const dot=useRef<SVGCircleElement>(null);
+ const base=Number(price);
+ const valid=enabled&&Number.isFinite(base)&&base>0&&
+   Number.isSafeInteger(Number(quoteSecond));
+ const baseY=valid?y(base):0;
+ useEffect(()=>{
+   if(!valid)return;
+   const line=wick.current,rect=body.current,point=dot.current;
+   if(!line||!rect||!point)return;
+   let raf=0;
+   let fromY=baseY, currentY=baseY, toY=baseY;
+   let transitionStart=performance.now(), lastTick=0;
+   const reduce=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+   const draw=(now:number)=>{
+     raf=requestAnimationFrame(draw);
+     const age=Date.now()/1000-Number(quoteSecond);
+     const moving=document.visibilityState==='visible'&&age>=0&&age<=75&&!reduce;
+     if(!moving){
+       line.setAttribute('y1',String(baseY-3));
+       line.setAttribute('y2',String(baseY+3));
+       rect.setAttribute('y',String(baseY-1));
+       rect.setAttribute('height','2');
+       point.setAttribute('cy',String(baseY));
+       return;
+     }
+     // ONE new visual target per second, using the same last confirmed quote.
+     if(lastTick===0||now-lastTick>=1000){
+       lastTick=now;fromY=currentY;
+       const sample=visualOnlyPrice(base,symbol,now/1000);
+       const delta=y(sample)-baseY;
+       // Pixel motion is a deliberate decorative effect, never a market value.
+       toY=baseY+(Math.abs(delta)<0.02?0:Math.sign(delta)*Math.max(2,Math.min(11,Math.abs(delta))));
+       transitionStart=now;
+     }
+     const progress=Math.min(1,(now-transitionStart)/850);
+     const ease=progress*progress*(3-2*progress);
+     currentY=fromY+(toY-fromY)*ease;
+     const top=Math.min(baseY,currentY),bottom=Math.max(baseY,currentY);
+     const color=currentY<=baseY?colors.up:colors.down;
+     line.setAttribute('y1',String(top-3));line.setAttribute('y2',String(bottom+3));
+     line.setAttribute('stroke',color);
+     rect.setAttribute('y',String(top));rect.setAttribute('height',String(Math.max(2,bottom-top)));
+     rect.setAttribute('fill',color);
+     point.setAttribute('cy',String(currentY));point.setAttribute('fill',color);
+   };
+   raf=requestAnimationFrame(draw);
+   return()=>cancelAnimationFrame(raf);
+ },[base,symbol,quoteSecond,enabled,baseY,y,valid]);
+ if(!valid)return null;
+ return <g opacity=".95" pointerEvents="none" aria-hidden="true">
+   <line ref={wick} x1={x} x2={x} y1={baseY-3} y2={baseY+3}
+     stroke="#73c9da" strokeWidth="2.2" strokeDasharray="3 2"/>
+   <rect ref={body} x={x-width/2} y={baseY-1} width={width}
+     height={2} fill="#73c9da" fillOpacity=".6" rx=".6"/>
+   <circle ref={dot} cx={x} cy={baseY} r="2.7" fill="#73c9da"/>
+ </g>;
+}
+
+/** One-second UI heartbeat, not a promise of a fresh server price every second. */
+function CandleSecondHeartbeat({quoteSecond,enabled}:{quoteSecond:number|undefined;enabled:boolean}){
+ const label=useRef<SVGTextElement>(null);
+ const progress=useRef<SVGRectElement>(null);
+ useEffect(()=>{
+   if(!enabled)return;
+   const draw=()=>{
+     if(!label.current||!progress.current)return;
+     const age=Math.max(0,Math.floor(Date.now()/1000)-Number(quoteSecond));
+     if(!Number.isFinite(age))return;
+     const stale=age>75;
+     label.current.textContent=stale?'서버 시세 지연 · 연출 정지':`1초 화면 갱신 · 서버 확정 시세 ${age}초 전`;
+     progress.current.setAttribute('width',String(120*(Math.min(age,60)/60)));
+   };
+   draw();
+   const timer=window.setInterval(()=>{if(document.visibilityState==='visible')draw();},1000);
+   return()=>window.clearInterval(timer);
+ },[quoteSecond,enabled]);
+ if(!enabled||!Number.isSafeInteger(Number(quoteSecond)))return null;
+ return <g pointerEvents="none" aria-hidden="true">
+   <rect x="18" y="16" width="120" height="2" fill="#527080" opacity=".45"/>
+   <rect ref={progress} x="18" y="16" width="0" height="2" fill="#73c9da" opacity=".85"/>
+   <text ref={label} x="18" y="10" fill="#b5d9d3" fontSize="9">서버 시세 확인 중</text>
+ </g>;
 }
 
 /**
@@ -399,7 +540,11 @@ function CandleChart({bars,symbol,timeframe,onLoadOlder,hasOlder,quote,quoteSeco
            width={bw} height={volumeHeight} fill={c} opacity=".90"/>
        </g>;
      })}
-     {preview&&pan.isLatest&&<text x="22" y="14" fill="#b5d9d3" fontSize="10">● 진행 중 · 확정 시세 기반 화면 표시</text>}
+     {pan.isLatest&&liveEnabled&&<IndicativeCandleGhost
+       price={quote} symbol={symbol} quoteSecond={quoteSecond}
+       x={x(visible.length-1)} y={y} width={bw} enabled={liveEnabled}/>}
+     {pan.isLatest&&liveEnabled&&<CandleSecondHeartbeat quoteSecond={quoteSecond} enabled={liveEnabled}/>}
+     {pan.isLatest&&liveEnabled&&<text x="145" y="20" fill="#b5d9d3" fontSize="9">점선봉은 연출 · 실제 체결가 아님</text>}
      <line x1="12" x2="710" y1="229" y2="229" stroke="#9bb5c4" strokeOpacity=".5"/>
      <line x1="12" x2="710" y1="286" y2="286" stroke="#9bb5c4" strokeOpacity=".25"/>
      <text x="18" y="239" fontSize="11" fill="#a8bdcf">거래량</text>
@@ -1039,7 +1184,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
            <span>{LABELS[s]}</span><strong><AnimatedMarketPrice value={market?.prices[s]} quoteSecond={marketData?.now}/> <small>TC</small></strong>
          </button>)}
        </div>
-       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트 · 표시 애니메이션, 실제 체결은 서버 시세</small></span><strong><AnimatedMarketPrice key={symbol} value={market?.prices[symbol]} quoteSecond={marketData?.now}/> <small>TC</small></strong></div>
+       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트 · 표시 애니메이션, 실제 체결은 서버 시세</small></span><strong><AnimatedMarketPrice key={symbol} value={market?.prices[symbol]} quoteSecond={marketData?.now}/> <small>TC (확정 시세)</small>
+          <IndicativeVisualPrice value={marketData?.prices?.[symbol]} symbol={symbol} quoteSecond={marketData?.now}/></strong></div>
        <div className={styles.intervals}>{[30,60,240].map(s=><button type="button" key={s} className={frame===s?styles.selectedFrame:''} onClick={()=>setFrame(s)}>
           {{30:'30분',60:'1시간',240:'4시간'}[s as 30|60|240]}
         </button>)}</div>
