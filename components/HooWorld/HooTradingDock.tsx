@@ -1146,7 +1146,12 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          </div></div>
          <div className={styles.tradeRow}><b>레버리지</b><div className={styles.segment}>{[1,2,3,5,10,20].map(n=><button type="button" key={n}
            className={leverage===n?styles.selectedFrame:''} disabled={Boolean(selectedPosition&&selectedPosition.leverage!==n)} onClick={()=>setLeverage(n)}>{n}×</button>)}<input aria-label="직접 입력 레버리지" type="number" min="1" max="20" step="1" value={leverage} disabled={Boolean(selectedPosition)} onChange={e=>setLeverage(Number(e.target.value))} style={{width:64}}/></div></div>
-         <div className={styles.tradeRow}><label>증거금 (TC)<input type="number" min=".01" step=".01" value={margin} onChange={e=>setMargin(e.target.value)}/></label>
+         <div className={styles.tradeRow}><label>증거금 (TC)<input type="text" inputMode="decimal" autoComplete="off"
+            value={margin.replace(/^\d+/, digits=>digits.replace(/\B(?=(\d{3})+(?!\d))/g, ','))}
+            onChange={e=>{
+              const raw=e.target.value.replace(/,/g,'');
+              if(/^\d*(?:\.\d*)?$/.test(raw))setMargin(raw);
+            }}/></label>
            <div className={styles.quick}>{[.25,.5,.75,1].map(x=><button key={x} type="button" onClick={()=>setMargin((Math.floor(Math.max(0,availableTC*x-0.01)/(1+leverage*.0006)*10000)/10000).toFixed(4))}>{x*100}%</button>)}</div></div>
          {selectedPosition&&<div className={styles.scaleHint}>
            같은 방향 추가 진입 가능 · 기존 {selectedPosition.leverage}배 유지 · 가중평균 진입가로 변경
