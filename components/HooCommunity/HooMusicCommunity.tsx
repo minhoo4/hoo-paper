@@ -824,7 +824,7 @@ export default function HooMusicCommunity({
     move("next");
   }
   const playback = useYouTubePlayer(
-    isActive && view === "player",
+    isActive, // HOO_PLAYER_PRELOAD_V2
     selected?.youtubeVideoId,
     nextAfterEnd,
   );
@@ -1036,6 +1036,10 @@ export default function HooMusicCommunity({
     );
   }
   function leave() {
+    if (playback.ready &&
+        (playback.playing || playback.buffering)) {
+      playback.toggle();
+    }
     setView("landing");
     window.requestAnimationFrame(() =>
       enterRef.current?.focus({ preventScroll: true }),
@@ -1068,7 +1072,7 @@ export default function HooMusicCommunity({
       aria-label="HOO 음악 커뮤니티"
     >
       <div className={styles.ambient} aria-hidden="true" />
-      {view === "landing" ? (
+      {view === "landing" && (
         <div className={styles.landing}>
           <div className={styles.landingCopy}>
             <p className={styles.eyebrow}>HOO COMMUNITY</p>
@@ -1122,8 +1126,20 @@ export default function HooMusicCommunity({
             </article>
           </div>
         </div>
-      ) : (
-        <div className={styles.playerLayout}>
+      )}
+      <div
+        className={styles.playerLayout}
+        aria-hidden={view === "landing"}
+        style={view === "landing" ? {
+          position: "absolute",
+          top: 0,
+          left: "-10000px",
+          width: "1320px",
+          minHeight: "760px",
+          visibility: "hidden",
+          pointerEvents: "none",
+        } : undefined}
+      >
           <header className={styles.playerIntro}>
             <button
               type="button"
@@ -1468,8 +1484,7 @@ export default function HooMusicCommunity({
               Better People.
             </p>
           </aside>
-        </div>
-      )}
+      </div>
       {toast && (
         <div className={styles.toast} role="status">
           {toast}
