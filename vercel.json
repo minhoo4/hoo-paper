@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "daemons": {
+    "hoomarket": {
+      "root": ".",
+      "entrypoint": "Dockerfile.hoo-v6",
+      "instances": {
+        "iad1": 0
+      }
+    }
+  }
+}
