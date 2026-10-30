@@ -11,7 +11,6 @@ import {
   type FormEvent,
 } from "react";
 import { createPortal } from "react-dom";
-import { createClient } from "@/lib/supabase/client";
 import HooTurntable, {
   PosterFoliage,
   ToneArm,
@@ -36,14 +35,14 @@ export * from "./hooMusicCommunityVisuals";
 export type HooMusicCommunityProps = {
   isLoggedIn: boolean;
   nickname: string | null;
-  /** Controls foreground-only UI/data refresh; audio playback is allowed to continue off-screen. */
+  /** Pass the current slide's active state if the parent keeps inactive slides mounted. */
   isActive?: boolean;
 };
 
 const PICKS_ENDPOINT = "/api/community/music-picks";
 const PLAYLIST_LIMIT = 60;
 const FAVORITES_KEY = "hoo-music-favorites:v1";
-/* HOO-CHANGE-0006-A: event-driven music list */
+const REFRESH_INTERVAL = 30_000;
 
 type IconName =
   | "play"
@@ -232,6 +231,22 @@ function loadYouTubeApi(): Promise<YouTubeApi> {
   return youtubeApiPromise;
 }
 
+/** Start connecting once; retry a transient API script failure one time. */
+let youtubeWarmupPromise: Promise<YouTubeApi> | null = null;
+function ensureYouTubeApi(): Promise<YouTubeApi> {
+  if (youtubeWarmupPromise) return youtubeWarmupPromise;
+  youtubeWarmupPromise = loadYouTubeApi()
+    .catch(async () => {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 800));
+      return loadYouTubeApi();
+    })
+    .catch((error: unknown) => {
+      youtubeWarmupPromise = null;
+      throw error;
+    });
+  return youtubeWarmupPromise;
+}
+
 type PlaybackState = {
   ready: boolean;
   playing: boolean;
@@ -270,7 +285,11 @@ function useYouTubePlayer(
   const settings = useRef({ volume: 76, muted: false });
   const ended = useRef(onEnded);
   const [retry, setRetry] = useState(0);
+  const reconnectAttempt = useRef(0);
   const [state, setState] = useState<PlaybackState>(INITIAL_PLAYBACK);
+  useEffect(() => {
+    if (!active) reconnectAttempt.current = 0;
+  }, [active]);
   useEffect(() => {
     ended.current = onEnded;
   }, [onEnded]);
@@ -310,6 +329,7 @@ function useYouTubePlayer(
 
   useEffect(() => {
     if (!active) {
+      desired.current.play = false;
       setState((s) => ({
         ...s,
         ready: false,
@@ -351,18 +371,23 @@ function useYouTubePlayer(
       }));
       settings.current = { volume, muted };
     }
-    void loadYouTubeApi()
+    void ensureYouTubeApi()
       .then((api) => {
         if (disposed) return;
         readyTimeout = window.setTimeout(() => {
-          if (!disposed && !readyRef.current)
-            setState((s) => ({
-              ...s,
-              playing: false,
-              buffering: false,
-              error:
-                "영상 플레이어가 응답하지 않아요. 다시 연결하거나 YouTube에서 들어주세요.",
-            }));
+          if (disposed || readyRef.current) return;
+          if (reconnectAttempt.current < 1 && !document.hidden) {
+            reconnectAttempt.current += 1;
+            setRetry((n) => n + 1);
+            return;
+          }
+          setState((s) => ({
+            ...s,
+            playing: false,
+            buffering: false,
+            error:
+              "영상 플레이어가 응답하지 않아요. 다시 연결하거나 YouTube에서 들어주세요.",
+          }));
         }, 18_000);
         instance = new api.Player(node, {
           width: "100%",
@@ -391,7 +416,7 @@ function useYouTubePlayer(
               if (settings.current.muted) target.mute();
               const request = desired.current;
               if (request.id) {
-                if (request.play)
+                if (request.play && !document.hidden)
                   target.loadVideoById(request.id);
                 else target.cueVideoById(request.id);
               }
@@ -458,12 +483,21 @@ function useYouTubePlayer(
                 : "YouTube 연결에 실패했어요.",
           }));
       });
+    function pauseWhenHidden() {
+      if (document.hidden && readyRef.current) {
+        desired.current.play = false;
+        playerRef.current?.pauseVideo();
+      }
+    }
+    document.addEventListener("visibilitychange", pauseWhenHidden);
     return () => {
       disposed = true;
       readyRef.current = false;
-      desired.current.play = false;
+      // Keep an explicitly requested play action across one connection retry.
+      // The !active branch resets it when leaving MUSIC PICK.
       window.clearInterval(tick);
       window.clearTimeout(readyTimeout);
+      document.removeEventListener("visibilitychange", pauseWhenHidden);
       instance?.destroy();
       playerRef.current = null;
       host.replaceChildren();
@@ -562,7 +596,6 @@ function Composer({
   const titleId = useId();
   const errorId = useId();
   const videoId = extractYouTubeVideoId(url);
-  const displayNickname = nickname?.trim() || "HOO";
   useEffect(() => {
     closeRef.current = onClose;
   }, [onClose]);
@@ -660,8 +693,8 @@ function Composer({
     >
       <div className={styles.composerHeading}>
         <div>
-          <p className={styles.eyebrow}>당신의 노래추천</p>
-          <h2 id={titleId}>{displayNickname}의 추천곡</h2>
+          <p className={styles.eyebrow}>LEAVE A RECORD</p>
+          <h2 id={titleId}>오늘의 한 곡을 남겨요</h2>
           <p>누군가의 하루에, 당신의 음악을.</p>
         </div>
         <button
@@ -713,9 +746,9 @@ function Composer({
           )}
           <div>
             <strong>
-              {normalizeTitle(title) || "당신의 노래추천"}
+              {normalizeTitle(title) || "당신의 플레이리스트에서"}
             </strong>
-            <span>{displayNickname}의 추천곡</span>
+            <span>{nickname || "HOO"}의 추천곡</span>
           </div>
         </div>
         {error && (
@@ -742,7 +775,6 @@ export default function HooMusicCommunity({
   nickname,
   isActive = true,
 }: HooMusicCommunityProps) {
-  const supabase = useMemo(() => createClient(), []);
   const [view, setView] = useState<"landing" | "player">("landing");
   const [picks, setPicks] = useState<MusicPick[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -761,7 +793,6 @@ export default function HooMusicCommunity({
   const titleRef = useRef<HTMLHeadingElement>(null);
   const enterRef = useRef<HTMLButtonElement>(null);
   const requestRef = useRef<AbortController | null>(null);
-  const locallyInsertedIdsRef = useRef(new Map<string, number>());
   const generationRef = useRef(0);
   const mountedRef = useRef(true);
   const historyRef = useRef<string[]>([]);
@@ -782,7 +813,7 @@ export default function HooMusicCommunity({
   }, [query, picks, savedOnly, favoriteSet]);
 
   function nextAfterEnd() {
-    if (!selected) return;
+    if (!selected || !isActive) return;
     if (repeat === "one") {
       playback.select(selected.youtubeVideoId, true);
       return;
@@ -793,10 +824,19 @@ export default function HooMusicCommunity({
     move("next");
   }
   const playback = useYouTubePlayer(
-    view === "player",
+    isActive && view === "player",
     selected?.youtubeVideoId,
     nextAfterEnd,
   );
+
+  // HOO COMMUNITY entry starts the YouTube API request immediately.
+  // It does not create an iframe or autoplay: the player is created on entry.
+  useEffect(() => {
+    if (!isActive) return;
+    void ensureYouTubeApi().catch(() => {
+      // The visible player handles errors/reconnecting on entry.
+    });
+  }, [isActive]);
 
   const loadPicks = useCallback(async (initial = false) => {
     requestRef.current?.abort();
@@ -866,104 +906,20 @@ export default function HooMusicCommunity({
   }, []);
   useEffect(() => {
     if (!isActive) return;
-    let connectionWasLost = !navigator.onLine;
     void loadPicks(true);
-
-    const onOffline = () => { connectionWasLost = true; };
-    const onOnline = () => {
-      if (!connectionWasLost) return;
-      connectionWasLost = false;
-      void loadPicks();
-    };
-    window.addEventListener("offline", onOffline);
-    window.addEventListener("online", onOnline);
+    const timer = window.setInterval(() => {
+      if (!document.hidden) void loadPicks();
+    }, REFRESH_INTERVAL);
+    function onVisible() {
+      if (!document.hidden) void loadPicks();
+    }
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
+      window.clearInterval(timer);
       requestRef.current?.abort();
-      window.removeEventListener("offline", onOffline);
-      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [loadPicks, isActive]);
-
-  /* HOO-CHANGE-0006-B: music-picks realtime change signal
-   * Receive change signals only, never trust raw Realtime row values.
-   * The existing API remains the sole source of formatted public MusicPick data.
-   * DELETE payload.old under RLS may contain only a primary key.
-   */
-  useEffect(() => {
-    if (!isActive) return;
-    let disposed = false;
-    let updateTimer: number | null = null;
-    let requestRunning = false;
-    let refreshPending = false;
-    let wasSubscribed = false;
-    let reconnectNeedsRead = false;
-
-    const scheduleRefresh = () => {
-      if (disposed) return;
-      if (!navigator.onLine) {
-        reconnectNeedsRead = true;
-        return;
-      }
-      refreshPending = true;
-      if (updateTimer !== null) window.clearTimeout(updateTimer);
-      updateTimer = window.setTimeout(() => {
-        updateTimer = null;
-        if (disposed || !navigator.onLine) {
-          reconnectNeedsRead = true;
-          return;
-        }
-        if (requestRunning) return;
-        requestRunning = true;
-        refreshPending = false;
-        void loadPicks().finally(() => {
-          requestRunning = false;
-          if (!disposed && refreshPending) scheduleRefresh();
-        });
-      }, 350);
-    };
-
-    const channel = supabase
-      .channel("hoo-music-picks:changes")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "hoo_music_picks" },
-        (payload) => {
-          const changeId = String(
-            (payload.new as { id?: unknown } | null)?.id ??
-            (payload.old as { id?: unknown } | null)?.id ?? "",
-          );
-          if (payload.eventType === "INSERT" && changeId) {
-            const localCreatedAt = locallyInsertedIdsRef.current.get(changeId);
-            if (localCreatedAt !== undefined) {
-              locallyInsertedIdsRef.current.delete(changeId);
-              if (Date.now() - localCreatedAt < 30_000) return;
-            }
-          }
-          scheduleRefresh();
-        },
-      )
-      .subscribe((status) => {
-        if (disposed) return;
-        if (status === "SUBSCRIBED") {
-          if (wasSubscribed && reconnectNeedsRead) scheduleRefresh();
-          wasSubscribed = true;
-          reconnectNeedsRead = false;
-        } else if (
-          status === "CHANNEL_ERROR" ||
-          status === "TIMED_OUT" ||
-          status === "CLOSED"
-        ) {
-          if (wasSubscribed) reconnectNeedsRead = true;
-        }
-      });
-
-    return () => {
-      disposed = true;
-      if (updateTimer !== null) window.clearTimeout(updateTimer);
-      void supabase.removeChannel(channel);
-    };
-  }, [isActive, loadPicks, supabase]);
-
   useEffect(() => {
     function restore() {
       try {
@@ -1053,7 +1009,6 @@ export default function HooMusicCommunity({
     setComposerOpen(true);
   }
   function saved(pick: MusicPick) {
-    locallyInsertedIdsRef.current.set(pick.id, Date.now());
     // Invalidate an older GET so it cannot erase the just-created record.
     requestRef.current?.abort();
     generationRef.current += 1;
@@ -1088,6 +1043,8 @@ export default function HooMusicCommunity({
   }
   const status = playback.error
     ? "재생 확인 필요"
+    : !playback.ready
+      ? "YOUTUBE 연결 중"
     : playback.buffering
       ? "불러오는 중"
       : playback.playing
@@ -1116,10 +1073,10 @@ export default function HooMusicCommunity({
           <div className={styles.landingCopy}>
             <p className={styles.eyebrow}>HOO COMMUNITY</p>
             <h2 className={styles.landingTitle}>
-              HOO-PLAY <span>LIST</span>
+              MUSIC <span>PICK</span>
             </h2>
             <p className={styles.landingSubtitle}>
-              (후플리) · 음악으로 이어지는 새로운 공간
+              음악으로 이어지는 새로운 공간
             </p>
             <button
               ref={enterRef}
