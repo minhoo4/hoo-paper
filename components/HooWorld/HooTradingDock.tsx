@@ -205,55 +205,9 @@ async function requestMarket(symbol:SymbolCode,frame:number,before?:number,since
 const colors={up:'#13b58e',down:'#e26671'};
 const MAX_RETAINED_CANDLES=2000;
 
-/** Purely visual easing between *two confirmed* quotes. Never used for orders, PnL or SL/TP. */
-function AnimatedMarketPrice({value,quoteSecond}:{value:unknown;quoteSecond:number|undefined}){
- const node=useRef<HTMLSpanElement>(null);
- // Keep React's text child stable: RAF owns only the visual label between quote packets.
- const initialText=useRef(displayMarketPrice(value));
- const animation=useRef<number|null>(null);
- const displayed=useRef<number|null>(null);
- const lastSecond=useRef<number|null>(null);
- useEffect(()=>{
-   const target=Number(value),second=Number(quoteSecond);
-   const valid=Number.isFinite(target)&&target>0;
-   const el=node.current;
-   if(!el)return;
-   if(!valid){
-     if(animation.current!==null)cancelAnimationFrame(animation.current);
-     animation.current=null;displayed.current=null;lastSecond.current=null;
-     el.textContent='—';return;
-   }
-   // Ignore out-of-order response clocks. Same-second rerenders cannot restart an animation.
-   if(Number.isSafeInteger(second)&&lastSecond.current!==null&&second<lastSecond.current)return;
-   const previous=displayed.current;
-   if(animation.current!==null){cancelAnimationFrame(animation.current);animation.current=null;}
-   const nextSecond=Number.isSafeInteger(second)?second:null;
-   if(nextSecond!==null)lastSecond.current=nextSecond;
-   if(previous===null||previous===target||window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches){
-     displayed.current=target;el.textContent=pformat(target);return;
-   }
-   const rising=target>previous;
-   const color=rising?colors.up:colors.down;
-   // Text color/flash is decorative and does not change numerical state.
-   el.animate?.([
-     {color,filter:`drop-shadow(0 0 5px ${color})`},
-     {color:'inherit',filter:'none'}
-   ],{duration:900,easing:'ease-out'});
-   const start=performance.now();
-   const duration=1300; // Actual confirmed-price handoff; never invents new market ticks.
-   const step=(time:number)=>{
-     const fraction=Math.min(1,(time-start)/duration);
-     const ease=1-Math.pow(1-fraction,3);
-     const current=previous+(target-previous)*ease;
-     displayed.current=current;
-     el.textContent=fraction>=1?pformat(target):pformat(current);
-     if(fraction<1)animation.current=requestAnimationFrame(step);
-     else{displayed.current=target;animation.current=null;}
-   };
-   animation.current=requestAnimationFrame(step);
-   return()=>{if(animation.current!==null){cancelAnimationFrame(animation.current);animation.current=null;}};
- },[value,quoteSecond]);
- return <span ref={node} title="표시 전용 가격 전환 애니메이션 · 실제 주문가는 서버 확정 시세">{initialText.current}</span>;
+/** Show exactly one server-confirmed price per tick. */
+function AnimatedMarketPrice({value}:{value:unknown;quoteSecond:number|undefined}){
+ return <span title="서버 확정 현재가">{displayMarketPrice(value)}</span>;
 }
 
 /**
@@ -266,39 +220,6 @@ function visualOnlyPrice(base:number,symbol:SymbolCode,seconds:number):number{
  const wave=Math.sin(seconds*0.73+phase)*0.00055
    +Math.sin(seconds*1.61+phase*0.7)*0.00022;
  return base*(1+wave);
-}
-
-/** A conspicuously labelled illustrative ticker, independent of actual market price. */
-function IndicativeVisualPrice({value,symbol,quoteSecond}:{
- value:unknown;symbol:SymbolCode;quoteSecond:number|undefined;
-}){
- const node=useRef<HTMLSpanElement>(null);
- useEffect(()=>{
-   const base=Number(value),timestamp=Number(quoteSecond),el=node.current;
-   if(!el)return;
-   if(!Number.isFinite(base)||base<=0||!Number.isSafeInteger(timestamp)){
-     el.textContent='—';return;
-   }
-   let timer:number|null=null;
-   const reduce=window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
-   const draw=()=>{
-     // Stale market data must not look alive indefinitely; never hide the real quote.
-     const age=Date.now()/1000-timestamp;
-     if(age<0||age>90||document.visibilityState!=='visible'||reduce){
-       el.textContent=pformat(base);return;
-     }
-     const shown=visualOnlyPrice(base,symbol,performance.now()/1000);
-     el.textContent=pformat(shown);
-     el.style.color=shown>=base?colors.up:colors.down;
-   };
-   draw();
-   timer=window.setInterval(draw,80); // UI only: ZERO network/DB requests.
-   return()=>{if(timer!==null)window.clearInterval(timer);};
- },[value,symbol,quoteSecond]);
- return <span style={{display:'block',fontSize:11,lineHeight:1.6,fontWeight:500,
-   letterSpacing:'.01em',opacity:.95}} title="화면 연출용 미니 틱: 서버 확정 가격이나 주문·청산 가격이 아닙니다">
-   <span style={{opacity:.8}}>〰 시각 효과 · 거래 불가 </span><span ref={node}>—</span>
- </span>;
 }
 
 /**
@@ -1184,8 +1105,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
            <span>{LABELS[s]}</span><strong><AnimatedMarketPrice value={market?.prices[s]} quoteSecond={marketData?.now}/> <small>TC</small></strong>
          </button>)}
        </div>
-       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트 · 표시 애니메이션, 실제 체결은 서버 시세</small></span><strong><AnimatedMarketPrice key={symbol} value={market?.prices[symbol]} quoteSecond={marketData?.now}/> <small>TC (확정 시세)</small>
-          <IndicativeVisualPrice value={marketData?.prices?.[symbol]} symbol={symbol} quoteSecond={marketData?.now}/></strong></div>
+       <div className={styles.priceRow}><span>{symbol}/TC <small>공통 실시간 차트 · 확정 시세 한 틱씩 표시</small></span><strong><AnimatedMarketPrice key={symbol} value={market?.prices[symbol]} quoteSecond={marketData?.now}/> <small>TC (확정 시세)</small>
+          </strong></div>
        <div className={styles.intervals}>{[30,60,240].map(s=><button type="button" key={s} className={frame===s?styles.selectedFrame:''} onClick={()=>setFrame(s)}>
           {{30:'30분',60:'1시간',240:'4시간'}[s as 30|60|240]}
         </button>)}</div>
