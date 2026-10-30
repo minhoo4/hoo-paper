@@ -197,7 +197,17 @@ async function requestMarket(symbol:SymbolCode,frame:number,before?:number,since
  // The server may avoid chart aggregation when this exact market session clock has not moved.
  const unchangedQuery=before===undefined&&knownNow!==undefined&&Number.isSafeInteger(knownNow)&&knownContext
    ?`&knownNow=${knownNow}&knownContext=${encodeURIComponent(knownContext)}`:'';
- const response=await fetch(`/api/hoo-trading/market?symbol=${symbol}&timeframe=${frame}${suffix}${newsQuery}${unchangedQuery}`,{cache:'no-store'});
+ // Visible authenticated live quotes use POST; history stays GET.
+ let token:string|undefined;
+ if(before===undefined&&document.visibilityState==='visible'){
+  const {data,error}=await getBrowserDb().auth.getSession();
+  if(!error)token=data.session?.access_token;
+ }
+ const response=await fetch(`/api/hoo-trading/market?symbol=${symbol}&timeframe=${frame}${suffix}${newsQuery}${unchangedQuery}`,{
+  method:token?'POST':'GET',
+  ...(token?{headers:{Authorization:`Bearer ${token}`}}:{}),
+  cache:'no-store'
+ });
  const json=await response.json().catch(()=>({error:'공통 시세 응답 오류'}));
  if(!response.ok)throw new Error(json.error||'공통 시장 접속 실패');
  return json as PublicMarket;
@@ -731,14 +741,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      if(epoch===assetEpoch.current&&isActive.current)setMonitorError(e instanceof Error?e.message:String(e));
    }finally{monitorFetching.current=false;}
  },[refresh]);
- useEffect(()=>{
-   if(!open||!monitorPositions||economyMaintenance)return;
-   // Position monitoring is independent of the public market; poll every 5s.
-   const poll=window.setInterval(()=>{
-     if(document.visibilityState==='visible')void refreshPositionMonitor();
-   },5000);
-   return()=>window.clearInterval(poll);
- },[open,monitorPositions,economyMaintenance,refreshPositionMonitor]);
+ // Position monitoring now follows each confirmed market response.
  // On resume, a single verified refresh checks whether another device changed positions.
  useEffect(()=>{
    if(!open)return;
@@ -840,6 +843,9 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          historyBefore:historyCursor.current,now:next.now,context:chartContextRef.current,mode:nextMode});
      }
      setMarketData({...next,candles:{[symbol]:barsRef.current}});setMarketError(null);
+     // Refresh positions after receiving confirmed prices.
+     if(monitorPositions&&!economyMaintenance)
+       void refreshPositionMonitor();
      setChartRevalidating(false);
      if(nextMode==='v6-database'&&barsRef.current.length){
        const saved:LastGoodChart={key:`${symbol}:${frame}`,bars:barsRef.current.slice(-78),savedAt:Date.now(),marketSecond:next.now};
@@ -866,7 +872,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      }}
    catch(e){if(context===requestContext.current)setMarketError(e instanceof Error?e.message:String(e));}
    finally{marketFetching.current=false;}
- },[symbol,frame]);
+ },[symbol,frame,monitorPositions,economyMaintenance,refreshPositionMonitor]);
  useEffect(()=>{
    if(!open)return;
    // Restore UI-only history for a previously visited pair. Verify its market

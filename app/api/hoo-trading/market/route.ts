@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
-import { admin } from '../../../../lib/hoo-trading/server';
-import { BASE_EPOCH, SYMBOLS, TIMESPANS, recentNews, type SymbolCode } from '../../../../lib/hoo-trading/market';
+import { admin, verifyUser } from '../../../../lib/hoo-trading/server';
+import { catchUpV6 } from '../../../../lib/hoo-trading/v6-live';
+import { BASE_EPOCH, SYMBOLS, TIMESPANS, recentNews, marketSecond, type SymbolCode } from '../../../../lib/hoo-trading/market';
 import { chartPage, marketCacheIdentity } from '../../../../lib/hoo-trading/paged-chart';
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
+export const maxDuration=15;
 /**
  * P7: Bounded per-instance cache of completed candles.
  * Does not modify market prices, positions, or Supabase data.
@@ -127,4 +129,52 @@ export async function GET(req:Request){
   return NextResponse.json({now,virtualMinute:now-BASE_EPOCH,prices,candles:{[symbol]:page.bars},historyBefore:page.historyBefore,...newsPayload,cacheMode:'memory',chartContext,unchanged:false},
    {headers:{'Cache-Control':'no-store, max-age=0'}});
  }catch(e){console.error('hoo-trading market',e);return NextResponse.json(publicError(e),{status:503,headers:{'Cache-Control':'no-store'}});}
+}
+
+// Authenticated on-demand V6 market advancement.
+// Existing GET and Supabase minute Cron remain unchanged.
+export async function POST(req:Request){
+ const headers={'Cache-Control':'private, no-store'};
+ try{
+  await verifyUser(req);
+
+  if(process.env.HOO_V6_ONDEMAND_ENABLE==='1' &&
+     !new URL(req.url).searchParams.has('before')){
+   const db=admin();
+   const {data,error}=await db.from('hootrading_v6_stream')
+    .select('mode,last_second').eq('id',1).maybeSingle();
+
+   if(error)throw new Error('V6_ONDEMAND_CLOCK_READ_FAILED');
+
+   if(data?.mode==='active'){
+    const last=Number(data.last_second);
+    const target=marketSecond();
+
+    if(!Number.isSafeInteger(last)||
+       !Number.isSafeInteger(target)||
+       last>target+2)
+     throw new Error('V6_ONDEMAND_INVALID_CLOCK');
+
+    // Shared DB lease prevents competing market commits.
+    if(target-last>=5)
+     await catchUpV6(db,45);
+   }
+  }
+
+  return await GET(req);
+ }catch(error){
+  const unauthorized=
+   error instanceof Error&&error.message==='UNAUTHORIZED';
+
+  if(!unauthorized)
+   console.error('V6_ONDEMAND_FAILED',
+    error instanceof Error?error.name:'UNKNOWN');
+
+  return NextResponse.json({
+   error:unauthorized?'로그인이 필요합니다.':'시장 갱신 요청 실패'
+  },{
+   status:unauthorized?401:503,
+   headers
+  });
+ }
 }
