@@ -156,7 +156,7 @@ export async function POST(req:Request){
      throw new Error('V6_ONDEMAND_INVALID_CLOCK');
 
     // Shared DB lease prevents competing market commits.
-    if(target-last>=5)
+    if(target-last>=2)
      await catchUpV6(db,45);
    }
   }
