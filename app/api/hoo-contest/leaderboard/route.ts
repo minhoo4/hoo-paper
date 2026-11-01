@@ -54,6 +54,11 @@ export async function GET(request: NextRequest) {
   // 1. 대회 조회 기능이 잠겨 있으면 차단
   if (!readsEnabled()) return unavailable();
 
+  // Capture V2 / ROI V6 검증 완료 전 전체 랭킹 차단
+  if (process.env.HOO_CONTEST_RANKING_V3_ENABLED !== "true") {
+    return jsonError("대회 랭킹은 아직 검증 중입니다.", 423);
+  }
+
   const auth = await getAuthenticatedClient();
 
   if (!auth.ok) return auth.response;
@@ -149,7 +154,7 @@ export async function GET(request: NextRequest) {
     // DB 함수에서 사용자별/대회별 15분 제한 적용
     // 공용 시간별 스냅샷은 덮어쓰지 않음
     const refreshed = await supabase.rpc(
-      "hoo_trading_contest_personal_refresh_v2",
+      "hoo_trading_contest_personal_refresh_v3",
       {
         p_contest_id: contestId,
       }
@@ -201,33 +206,58 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // 5. 일반 조회: 저장된 1시간 공용 랭킹만 읽기
-  // 전체 거래 기록을 다시 계산하지 않음
-  const snapshot = await supabase
-    .from("hoo_trading_contest_rank_snapshots_v1")
-    .select("snapshot_hour,top20")
-    .eq("contest_id", contestId)
-    .order("snapshot_hour", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (snapshot.error) {
+  // HOO_CONTEST_CACHED_V6_PROVENANCE_GUARD
+  // V6 출처가 검증된 스냅샷만 사용하도록 전환하기 전까지 차단
+  if (mode === "cached") {
     return jsonError(
-      "공용 랭킹 저장소를 확인할 수 없습니다.",
+      "공용 랭킹은 V6 검증 스냅샷 준비 중입니다.",
+      423
+    );
+  }
+  // 5. 공용 랭킹: 안전 조회 함수만 사용
+  // 원본 스냅샷 테이블 직접 조회 금지
+  const cached = await supabase.rpc(
+    "hoo_trading_contest_cached_ranking_v1",
+    { p_contest_id: contestId }
+  );
+
+  if (cached.error) {
+    return jsonError(
+      "공용 랭킹을 확인할 수 없습니다.",
       503
     );
   }
 
-  if (!snapshot.data) {
+  const snapshot = cached.data as
+    (ProvisionalSnapshot & {
+      available?: boolean;
+      score_policy?: string;
+    }) | null;
+
+  if (!snapshot || snapshot.available !== true) {
     return jsonError(
       "첫 번째 공용 랭킹 집계를 기다리고 있어요.",
       503
     );
   }
 
-  const rows = formatRows(snapshot.data.top20);
+  if (
+    snapshot.score_policy !==
+    "LINKED_REALIZED_PNL_EVENT_TIME_V6"
+  ) {
+    return jsonError(
+      "공용 랭킹 계산 정책이 일치하지 않습니다.",
+      503
+    );
+  }
 
-  if (!rows) {
+  const rows = formatRows(snapshot.top20);
+
+  if (
+    !rows ||
+    !snapshot.snapshot_hour ||
+    Number.isNaN(Date.parse(snapshot.snapshot_hour))
+  ) {
     return jsonError(
       "공용 랭킹 데이터가 올바르지 않습니다.",
       503
@@ -238,7 +268,7 @@ export async function GET(request: NextRequest) {
     {
       contestId,
       rows,
-      snapshotAt: snapshot.data.snapshot_hour,
+      snapshotAt: snapshot.snapshot_hour,
       source: "hourly",
       official: false,
     },
