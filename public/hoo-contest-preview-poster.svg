@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675">
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1">
+      <stop stop-color="#0a142a"/>
+      <stop offset=".55" stop-color="#172046"/>
+      <stop offset="1" stop-color="#211435"/>
+    </linearGradient>
+    <linearGradient id="gold" x2="1" y2="1">
+      <stop stop-color="#fff0ae"/>
+      <stop offset=".55" stop-color="#f7bf50"/>
+      <stop offset="1" stop-color="#b97c28"/>
+    </linearGradient>
+    <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+      <path d="M60 0H0V60" fill="none" stroke="#ffffff" stroke-opacity=".055"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="675" fill="url(#bg)"/>
+  <rect width="1200" height="675" fill="url(#grid)"/>
+  <circle cx="1000" cy="120" r="200" fill="#a28dff" opacity=".07"/>
+  <circle cx="210" cy="570" r="220" fill="#64d7ff" opacity=".06"/>
+
+  <g opacity=".23" fill="none" stroke="#73d6ff" stroke-width="5">
+    <path d="M50 530L170 490L260 512L340 420L450 460L550 310L660 350L770 230L870 290L970 175L1130 110"/>
+  </g>
+  <g opacity=".18" stroke="#93d7ff" stroke-width="4">
+    <path d="M220 395V520M325 360V480M430 390V510M535 260V405M640 290V430M745 160V335M850 210V365M955 110V270"/>
+  </g>
+
+  <rect x="60" y="55" width="200" height="38" rx="19" fill="#ffffff" fill-opacity=".09"/>
+  <text x="160" y="80" text-anchor="middle" font-size="17" font-family="Arial,sans-serif" fill="#e9edff" letter-spacing="4">HOO CONTEST</text>
+
+  <text x="600" y="220" text-anchor="middle" font-family="Arial,sans-serif" font-size="31" font-weight="bold" letter-spacing="9" fill="#c7d6ff">THE FIRST STAGE</text>
+  <text x="600" y="310" text-anchor="middle" font-family="Arial,sans-serif" font-size="76" font-weight="900" fill="url(#gold)">HOO WORLD</text>
+  <text x="600" y="380" text-anchor="middle" font-family="Arial,sans-serif" font-size="61" font-weight="900" letter-spacing="4" fill="#ffffff">CHAMPIONSHIP</text>
+
+  <path d="M350 420H850" stroke="url(#gold)" stroke-width="2" opacity=".8"/>
+  <text x="600" y="475" text-anchor="middle" font-family="Arial,sans-serif" font-size="23" fill="#e7e9ff" letter-spacing="3">TRADE · COMPETE · RISE</text>
+  <text x="600" y="555" text-anchor="middle" font-family="Arial,sans-serif" font-size="40" font-weight="bold" fill="#f6d286">5,000 HOO</text>
+  <text x="600" y="594" text-anchor="middle" font-family="Arial,sans-serif" font-size="17" fill="#bbc7e8" letter-spacing="3">TOTAL PRIZE POOL</text>
+
+  <rect x="18" y="18" width="1164" height="639" rx="20" fill="none" stroke="#e8c276" stroke-opacity=".5" stroke-width="2"/>
+  <text x="1130" y="639" text-anchor="end" font-family="Arial,sans-serif" font-size="14" fill="#c2b6df">LOCAL DEMO ONLY</text>
+</svg>
