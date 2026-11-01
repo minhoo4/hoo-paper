@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     // admin authorization, contest state,
     // score integrity and archive duplication.
     const { data, error } = await supabase.rpc(
-      "hoo_trading_contest_admin_archive_v4",
+      "hoo_trading_contest_admin_archive_v5",
       { p_contest_id: contestId }
     );
 
