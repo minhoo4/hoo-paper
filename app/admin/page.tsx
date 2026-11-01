@@ -16,6 +16,9 @@ import {
 } from "@/components/HooWorld/items/hooWorldFoodCatalog";
 
 import HooWorldRegionUnlockPanel from "@/components/HooWorld/admin/HooWorldRegionUnlockPanel";
+import HooContestAdminPanel from "@/components/HooWorld/admin/HooContestAdminPanel";
+import HooContestPreflightPanel from "@/components/HooWorld/admin/HooContestPreflightPanel";
+import HooContestEvidencePanel from "@/components/HooWorld/admin/HooContestEvidencePanel";
 
 const HOO_WORLD_ADMIN_FOOD_OPTIONS =
   Object.values(
@@ -3942,6 +3945,10 @@ export default function AdminPage() {
           HOO 운영 현황과 공지사항을
           관리할 수 있습니다.
         </p>
+
+        <HooContestAdminPanel />
+<HooContestPreflightPanel />
+<HooContestEvidencePanel />
 
         {/* 김미썸커피 */}
         <section

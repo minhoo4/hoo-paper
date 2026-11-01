@@ -14,6 +14,7 @@ import {
 } from "react";
 
 import HooTradingDock, { HooTradingStatus } from "@/components/HooWorld/HooTradingDock";
+import HooContestStageGate from "@/components/HooWorld/HooContestStageGate";
 import HooShopV2StagePanel, { HOO_STAGE_GIFT_SELECT_EVENT } from "@/components/HooWorld/shop/HooShopV2StagePanel";
 
 import HooWorldPlayer, {
@@ -12461,6 +12462,7 @@ export default function HooWorldPage() {
         }
         onActiveChange={handleHooTradingActiveChange}
       />
+      <HooContestStageGate />
 
             <button
         type="button"
