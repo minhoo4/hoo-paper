@@ -187,10 +187,25 @@ export default function HooContestAdminPreview() {
     if (button.disabled) {
       return setError("기존 대회 생성 기능이 비활성화되어 있습니다. 운영자 권한·DB 쓰기 게이트를 확인해 주세요.");
     }
+    const form = button.form;
+
+    if (!form) {
+      setError("기존 대회 생성 폼을 찾을 수 없습니다.");
+      return;
+    }
+
+    if (!form.reportValidity()) {
+      setError("대회 입력값을 확인해 주세요.");
+      return;
+    }
+
     setError("");
-    setNotice("기존 대회 생성 버튼을 실행했습니다. 실제 생성 성공 여부는 관리자 응답에서 확인해 주세요.");
-    // No direct DB access, API call, permission bypass or forced 'active' status.
-    button.click();
+
+    // 기존 React onSubmit -> createContest -> Supabase RPC 실행.
+    // 관리자 권한과 DB 쓰기 제한은 그대로 적용.
+    form.requestSubmit();
+
+    setNotice("대회 생성 요청을 제출했습니다. 실제 처리 결과는 관리자 메시지에서 확인해 주세요.");
   }, [applied, dirty, poster]);
 
   return (
