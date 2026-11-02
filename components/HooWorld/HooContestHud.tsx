@@ -7,6 +7,7 @@ import type {
 } from "../../lib/hoo-contest/contracts";
 import { formatDayHourMinute, formatHoo, formatKst, formatRoi, isContestOver } from "../../lib/hoo-contest/clock";
 import styles from "./HooContestHud.module.css";
+import HooContestPoster from "@/components/HooContestPoster";
 
 export interface HooContestHudProps {
   /** MUST stay false until approved backend, release gate, and runtime tests are ready. */
@@ -246,33 +247,20 @@ function ContestUI({ api }: { api: HooContestApi }) {
             {overviewError && <div className={styles.error} role="alert">{overviewError}<button type="button" className={styles.refresh} onClick={() => void reloadOverview()}>다시 조회</button></div>}
             {contest ? (
               <>
-                <div className={styles.poster}>
-                  {presentation?.posterUrl && (
-                    <img
-                      src={presentation.posterUrl}
-                      alt={presentation.headline ?? contest.title}
-                      style={{
-                        width: "100%",
-                        maxHeight: 300,
-                        objectFit: "contain",
-                        borderRadius: 12,
-                        marginBottom: 14
-                      }}
-                    />
-                  )}
-                  <div className={styles.posterIcon}>{finished ? "🏆" : "🏅"}</div>
-                  <div className={styles.contestTitle}>{presentation?.headline ?? (finished ? "대회 종료!" : contest.title)}</div>
-                  <div className={styles.subtle} style={{ whiteSpace: "pre-wrap" }}>{presentation?.body ?? (finished ? `${contest.title} 최종 집계` : "대회 포스터 / 개최 기간 / 상금 안내")}</div>
-                  {!finished && <div className={styles.period}>{formatKst(contest.startsAt)} ~ {formatKst(contest.endsAt)}</div>}
-                  {finished ? <div className={styles.reviewFlag}>{currentBoard?.official ? "공식 결과" : "관리자 검증 대기"}</div> : <>
-                    <div className={styles.period}>{active ? `남은 시간 ${formatDayHourMinute(contest.endsAt, serverAdjustedNow)}` : "개최 예정"}</div>
-                    <div className={styles.prizes}>
-                      <div className={styles.prize}><span>🥇 1등 상금</span><strong>{formatHoo(contest.prizesHoo.first)} HOO</strong></div>
-                      <div className={styles.prize}><span>🥈 2등 상금</span><strong>{formatHoo(contest.prizesHoo.second)} HOO</strong></div>
-                      <div className={styles.prize}><span>🥉 3등 상금</span><strong>{formatHoo(contest.prizesHoo.third)} HOO</strong></div>
-                    </div>
-                  </>}
-                </div>
+                {/* HOO_CONTEST_DYNAMIC_POSTER_V1: uses contest API data, no DB writes */}
+                <HooContestPoster contest={{
+                  title: contest.title,
+                  startsAt: contest.startsAt,
+                  endsAt: contest.endsAt,
+                  prizesHoo: {
+                    first: contest.prizesHoo.first,
+                    second: contest.prizesHoo.second,
+                    third: contest.prizesHoo.third,
+                  },
+                  phase: ["draft", "scheduled", "active", "review", "official", "ended"].includes(String(contest.phase))
+                    ? (contest.phase as "draft" | "scheduled" | "active" | "review" | "official" | "ended")
+                    : "scheduled",
+                }} />
                 {joinError && <div className={styles.error} role="alert">{joinError}</div>}
                 {!finished && <button type="button" className={`${styles.join} ${overview?.viewer.joined ? styles.joined : ""}`}
                   onClick={join} disabled={!joiningAllowed || joining}>
