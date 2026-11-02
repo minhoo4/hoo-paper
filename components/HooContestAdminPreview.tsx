@@ -209,12 +209,12 @@ export default function HooContestAdminPreview() {
       {error && <p className={styles.error} role="alert">{error}</p>}
       {!error && notice && <p className={styles.notice} role="status">{notice}</p>}
       <div className={styles.footer}>
-        <div className={styles.help}>미리보기는 DB를 읽거나 쓰지 않습니다. 대회 생성은 기존 관리자 권한·쓰기 게이트를 따릅니다.</div>
+        <div className={styles.help}>반영이 완료되면 생성 버튼이 활성화됩니다. 실제 생성 요청은 기존 관리자 권한·DB 쓰기 게이트를 통과해야 합니다.</div>
         <button
           type="button"
           className={styles.create}
-          disabled={!applied || dirty || !canCreate}
-          title={!canCreate ? "기존 대회 생성 기능이 비활성화되어 있습니다." : undefined}
+          disabled={!applied || dirty}
+          title={!canCreate ? "관리자 DB 쓰기 게이트가 꺼져 있으면 실제 생성은 차단됩니다." : undefined}
           onClick={create}
         >대회 생성</button>
       </div>
