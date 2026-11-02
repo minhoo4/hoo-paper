@@ -30,7 +30,7 @@ function readPublicContest(payload: unknown): PublicContest | null {
   if (!candidate || typeof candidate !== "object") return null;
   const contest = candidate as Record<string, unknown>;
   if (contest.published === false || contest.isPublished === false || contest.isPublic === false) return null;
-  if (typeof contest.status === "string" && contest.status !== "active") return null;
+  if (contest.status !== "scheduled" && contest.status !== "active") return null;
   if (typeof contest.id !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(contest.id)) return null;
   if (typeof contest.title !== "string" || !contest.title.trim()) return null;
   if (typeof contest.phase !== "string" || !VISIBLE_PHASES.has(contest.phase as ContestPosterPhase)) return null;

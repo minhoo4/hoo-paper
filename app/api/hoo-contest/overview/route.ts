@@ -20,8 +20,7 @@ export async function GET() {
   const { data, error } = await supabase
     .from("hoo_trading_contests")
     .select("id,title,status,starts_at,ends_at,prize_1_hoo,prize_2_hoo,prize_3_hoo")
-    .eq("status", "active")
-    .lte("starts_at", nowIso)
+    .in("status", ["scheduled", "active"])
     .gt("ends_at", nowIso)
     .order("starts_at", { ascending: false })
     .limit(30);
@@ -113,6 +112,7 @@ export async function GET() {
     contest: {
       id: picked.id,
       title: picked.title,
+      status: picked.status,
       phase,
       startsAt: picked.starts_at,
       endsAt: picked.ends_at,

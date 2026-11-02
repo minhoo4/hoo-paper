@@ -194,7 +194,35 @@ export default function HooContestAdminPanel() {
       }
 
       setContestId(result.contest_id);
-      setRecentPublication(null);
+
+      // HOO_CONTEST_AUTOPUBLISH_DEFAULT_POSTER_V5
+      // The competition is created as "scheduled". Publishing a text-only
+      // presentation allows the built-in winter poster without a storage upload.
+      // The same request ID protects against duplicate contest creation if
+      // publishing fails and the admin retries with unchanged form values.
+      const publicHeadline = title.trim();
+      const publicBody = [
+        publicHeadline,
+        `시작: ${start.toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}`,
+        `종료: ${end.toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}`,
+        `상금: 1등 ${amounts[0]} HOO / 2등 ${amounts[1]} HOO / 3등 ${amounts[2]} HOO`,
+      ].join("\n");
+      const { data: publishedData, error: publishedError } =
+        await createClient().rpc(
+          "hoo_trading_contest_admin_presentation_v1",
+          {
+            p_contest_id: result.contest_id,
+            p_headline: publicHeadline,
+            p_body: publicBody,
+            p_poster_path: null,
+            p_publish: true,
+          }
+        );
+      const publishedResult = assertSuccess(publishedData, publishedError);
+      if (publishedResult.is_published !== true) {
+        throw new Error("대회는 생성되었지만 포스터 공개를 확인하지 못했습니다. 동일한 정보로 재시도해 주세요.");
+      }
+      setRecentPublication(true);
     });
   }
 
