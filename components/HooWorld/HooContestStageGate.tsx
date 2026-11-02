@@ -13,6 +13,14 @@ import type {
 // 실제 서버 API는 아직 비활성화
 const realApi = createHooContestApi();
 
+// V7.2: 운영 HUD는 조회 전용. 참가 요청은 차단.
+const displayOnlyApi: HooContestApi = {
+  ...realApi,
+  join: async () => {
+    throw new Error("대회 참가 기능은 아직 준비 중입니다.");
+  },
+};
+
 const demoCreatedAt = Date.now();
 
 const demoContest: ContestInfo = {
@@ -111,7 +119,14 @@ export default function HooContestStageGate() {
 
   // 운영 환경에서는 대회 UI 계속 비활성화
   if (!localPreview) {
-    return <HooContestHud api={realApi} enabled={false} />;
+    return (
+      <HooContestHud
+        api={displayOnlyApi}
+        enabled={
+          process.env.NEXT_PUBLIC_HOO_CONTEST_HUD_ENABLED === "true"
+        }
+      />
+    );
   }
 
   return (
@@ -128,7 +143,7 @@ export default function HooContestStageGate() {
         }}
       >
         <div style={{ pointerEvents: "auto" }}>
-          <HooContestHud api={previewApi} enabled />
+          <HooContestHud api={previewApi} enabled allowJoin />
         </div>
       </div>
 

@@ -12,13 +12,14 @@ import HooContestPoster from "@/components/HooContestPoster";
 export interface HooContestHudProps {
   /** MUST stay false until approved backend, release gate, and runtime tests are ready. */
   enabled?: boolean;
+  allowJoin?: boolean;
   /** Inject an authenticated server adapter. No direct Supabase writes in this component. */
   api: HooContestApi;
 }
 
-export default function HooContestHud({ enabled = false, api }: HooContestHudProps) {
+export default function HooContestHud({ enabled = false, api, allowJoin = false }: HooContestHudProps) {
   if (!enabled) return null;
-  return <ContestUI api={api} />;
+  return <ContestUI api={api} allowJoin={allowJoin} />;
 }
 
 function errText(e: unknown): string { return e instanceof Error ? e.message : "요청에 실패했어요."; }
@@ -46,7 +47,7 @@ function RankTable({ rows }: { rows: ContestRank[] }) {
   );
 }
 
-function ContestUI({ api }: { api: HooContestApi }) {
+function ContestUI({ api, allowJoin }: { api: HooContestApi; allowJoin: boolean }) {
   const [overview, setOverview] = useState<ContestOverview | null>(null);
   const [overviewError, setOverviewError] = useState("");
   const [open, setOpen] = useState(false);
@@ -137,7 +138,9 @@ function ContestUI({ api }: { api: HooContestApi }) {
     && !finished
     && Number.isFinite(startsMs)
     && serverAdjustedNow >= startsMs;
-  const joiningAllowed = active && !overview?.viewer.joined;
+  const showContest = !!contest && !finished &&
+    (contest.phase === "scheduled" || active);
+  const joiningAllowed = allowJoin && active && !overview?.viewer.joined;
 
   const loadLeaderboard = useCallback(async (id: string, mode: "cached" | "fresh") => {
     if (boardInFlight.current) return boardInFlight.current;
@@ -171,7 +174,7 @@ function ContestUI({ api }: { api: HooContestApi }) {
   const showDialog = useCallback(() => {
     setOpen(true);
     setTab("ranking");
-    if (contest && (!board || board.contestId !== contest.id)) void loadLeaderboard(contest.id, "cached");
+    if (contest?.phase === "active" && (!board || board.contestId !== contest.id)) void loadLeaderboard(contest.id, "cached");
   }, [board, contest, loadLeaderboard]);
 
   const showHistory = () => {
@@ -180,8 +183,8 @@ function ContestUI({ api }: { api: HooContestApi }) {
   };
 
   useEffect(() => {
-    if (!active) setOpen(false);
-  }, [active]);
+    if (!showContest) setOpen(false);
+  }, [showContest]);
 
   useEffect(() => {
     if (!open) return;
@@ -210,7 +213,7 @@ function ContestUI({ api }: { api: HooContestApi }) {
   };
 
   const refreshPersonal = () => {
-    if (!contest || boardBusy) return;
+    if (!contest || contest.phase !== "active" || boardBusy) return;
     // Does NOT overwrite the shared hourly snapshot. Server calculates a private result.
     void loadLeaderboard(contest.id, "fresh");
   };
@@ -219,7 +222,7 @@ function ContestUI({ api }: { api: HooContestApi }) {
   const resultRows = currentBoard?.rows ?? [];
   const activeHistory = history?.find(item => item.contestId === selectedHistory) ?? null;
 
-  if (!active || !overview) return null;
+  if (!showContest || !overview) return null;
   return (
     <>
       <button type="button" ref={triggerRef} className={styles.hud} onClick={showDialog}
@@ -227,7 +230,7 @@ function ContestUI({ api }: { api: HooContestApi }) {
         <span className={styles.hudTitle}>🏆 HOO CONTEST</span>
         <span className={styles.hudClock}>
           {overviewError ? "연결 오류" : !contest ? "대회 대기 중" : active ? formatDayHourMinute(contest.endsAt, serverAdjustedNow) :
-            contest.phase === "scheduled" ? "개최 예정" : contest.phase === "official" ? "공식 결과" : "대회 종료"}
+            contest.phase === "scheduled" ? (serverAdjustedNow < Date.parse(contest.startsAt) ? `시작까지 ${formatDayHourMinute(contest.startsAt, serverAdjustedNow)}` : "시작 처리 대기") : contest.phase === "official" ? "공식 결과" : "대회 종료"}
         </span>
         <span className={styles.hudHint}>랭킹보기 <span aria-hidden="true">›</span></span>
       </button>
@@ -238,7 +241,7 @@ function ContestUI({ api }: { api: HooContestApi }) {
               <div className={styles.headingTitle}>🏆 HOO TRADING CONTEST</div>
               <div className={styles.actions}>
                 {tab === "ranking" && contest && (
-                  <button type="button" className={styles.refresh} disabled={boardBusy} onClick={refreshPersonal}
+                  <button type="button" className={styles.refresh} disabled={!active || boardBusy} onClick={refreshPersonal}
                     title="내 화면에만 최신 순위 조회" aria-label="최신 랭킹 수동 갱신">↻ 갱신</button>
                 )}
                 <button type="button" className={styles.close} onClick={() => setOpen(false)} aria-label="닫기">✕</button>
@@ -265,7 +268,7 @@ function ContestUI({ api }: { api: HooContestApi }) {
                 {!finished && <button type="button" className={`${styles.join} ${overview?.viewer.joined ? styles.joined : ""}`}
                   onClick={join} disabled={!joiningAllowed || joining}>
                   {overview?.viewer.joined ? "참가완료!" : joining ? "참가 처리 중…" :
-                    active ? "무료 참가" : contest.phase === "scheduled" ? "개최 후 참가 가능" : "참가 마감"}
+                    !allowJoin ? "참가 기능 준비 중" : active ? "무료 참가" : contest.phase === "scheduled" ? "개최 후 참가 가능" : "참가 마감"}
                 </button>}
                 {!finished && !overview?.viewer.joined && (
                   <div className={styles.subtle} style={{ textAlign: "center", marginBottom: 12 }}>
@@ -276,7 +279,7 @@ function ContestUI({ api }: { api: HooContestApi }) {
             ) : <div className={styles.empty}>현재 진행 중인 대회가 없습니다.</div>}
             <div className={styles.tabs} role="tablist" aria-label="대회 정보">
               <button type="button" role="tab" aria-selected={tab === "ranking"} className={`${styles.tab} ${tab === "ranking" ? styles.tabActive : ""}`}
-                onClick={() => {setTab("ranking");if (contest && (!board || board.contestId !== contest.id)) void loadLeaderboard(contest.id,"cached");}}>{finished ? "최종 결과" : "진행 중 랭킹"}</button>
+                onClick={() => {setTab("ranking");if (contest?.phase === "active" && (!board || board.contestId !== contest.id)) void loadLeaderboard(contest.id,"cached");}}>{finished ? "최종 결과" : contest?.phase === "scheduled" ? "대회 랭킹 (개최 후)" : "진행 중 랭킹"}</button>
               <button type="button" role="tab" aria-selected={tab === "history"} className={`${styles.tab} ${tab === "history" ? styles.tabActive : ""}`} onClick={showHistory}>지난 대회</button>
             </div>
             {tab === "ranking" ? (
