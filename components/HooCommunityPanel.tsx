@@ -358,6 +358,25 @@ const loadRanking = useCallback(async () => {
     setAuthOpen(true);
   }
 
+
+  // HOO_AUTH_LAZY_BRIDGE_V1
+  // 패널 로딩 전에 들어온 로그인 요청을 이어서 처리한다.
+  const pendingMode = window.sessionStorage.getItem(
+    "hoo:auth-pending-mode",
+  );
+
+  if (pendingMode === "login" || pendingMode === "signup") {
+    window.sessionStorage.removeItem(
+      "hoo:auth-pending-mode",
+    );
+
+    handleOpenAuthModal(
+      new CustomEvent("hoo-open-auth-modal", {
+        detail: { mode: pendingMode },
+      }),
+    );
+  }
+
   window.addEventListener(
     "hoo-open-auth-modal",
     handleOpenAuthModal,

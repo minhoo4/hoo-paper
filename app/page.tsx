@@ -1553,6 +1553,41 @@ const [floatingButtonsTarget, setFloatingButtonsTarget] =
     if (horizontalPage === 3) setHasOpenedMusic(true);
   }, [horizontalPage]);
 
+
+  // HOO_AUTH_LAZY_BRIDGE_V1
+  // 로그인 이벤트가 지연 로딩 중 사라지지 않도록 보관한다.
+  useEffect(() => {
+    function handlePendingAuth(event: Event) {
+      if (hasOpenedGames) return;
+
+      const custom = event as CustomEvent<{
+        mode?: "login" | "signup";
+      }>;
+
+      const mode =
+        custom.detail?.mode === "signup" ? "signup" : "login";
+
+      window.sessionStorage.setItem(
+        "hoo:auth-pending-mode",
+        mode,
+      );
+
+      setHasOpenedGames(true);
+    }
+
+    window.addEventListener(
+      "hoo-open-auth-modal",
+      handlePendingAuth,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "hoo-open-auth-modal",
+        handlePendingAuth,
+      );
+    };
+  }, [hasOpenedGames]);
+
   const isHorizontalAnimatingRef = useRef(false);
 
 
