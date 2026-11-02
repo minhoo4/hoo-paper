@@ -206,14 +206,6 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // HOO_CONTEST_CACHED_V6_PROVENANCE_GUARD
-  // V6 출처가 검증된 스냅샷만 사용하도록 전환하기 전까지 차단
-  if (mode === "cached") {
-    return jsonError(
-      "공용 랭킹은 V6 검증 스냅샷 준비 중입니다.",
-      423
-    );
-  }
   // 5. 공용 랭킹: 안전 조회 함수만 사용
   // 원본 스냅샷 테이블 직접 조회 금지
   const cached = await supabase.rpc(

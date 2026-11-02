@@ -121,7 +121,17 @@ export default function HooContestStageGate() {
   if (!localPreview) {
     return (
       <HooContestHud
-        api={displayOnlyApi}
+        api={
+          process.env.NEXT_PUBLIC_HOO_CONTEST_JOIN_ENABLED === "true"
+            ? realApi
+            : displayOnlyApi
+        }
+        allowJoin={
+          process.env.NEXT_PUBLIC_HOO_CONTEST_JOIN_ENABLED === "true"
+        }
+        allowRanking={
+          process.env.NEXT_PUBLIC_HOO_CONTEST_RANKING_ENABLED === "true"
+        }
         enabled={
           process.env.NEXT_PUBLIC_HOO_CONTEST_HUD_ENABLED === "true"
         }
