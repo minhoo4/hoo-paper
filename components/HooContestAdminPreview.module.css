@@ -1,0 +1,16 @@
+.panel { display: grid; gap: 14px; margin: 22px 0 26px; padding: 18px; border: 1px solid #33363e; background: #151619; border-radius: 12px; color: #ececf0; }
+.head { display: flex; gap: 12px; justify-content: space-between; align-items: start; flex-wrap: wrap; }
+.head h3 { margin: 0; font-size: 15px; font-weight: 750; color: #eacb70; }
+.head p { margin: 6px 0 0; font-size: 12px; color: #a8abb4; line-height: 1.6; }
+.tag { padding: 5px 8px; border: 1px solid #4f515a; border-radius: 6px; background: #24262a; color: #d7d5cd; font-size: 11px; white-space: nowrap; }
+.apply,.create { border: 1px solid #6e5b32; border-radius: 7px; background: #332a18; padding: 10px 16px; color: #ffe6ac; font-weight: 750; font-size: 13px; cursor: pointer; }
+.apply { justify-self: start; }
+.apply:hover,.create:not(:disabled):hover { background: #534325; }
+.create { min-width: 142px; }
+.create:disabled { cursor: not-allowed; background: #242426; color: #686a71; border-color: #35363b; }
+.posterWrap { width: min(100%, 960px); margin: 0 auto; }
+.footer { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding-top: 12px; border-top: 1px solid #35373f; }
+.help { flex: 1; min-width: 210px; font-size: 11px; color: #a8abb4; line-height: 1.65; }
+.error { margin: 0; padding: 10px 12px; border-radius: 6px; background: #3e1f24; color: #ffb3bc; font-size: 12px; }
+.notice { margin: 0; font-size: 12px; color: #b8d4bb; }
+@media (max-width: 640px) { .panel { padding: 11px; } .footer { align-items: stretch; } .create { width: 100%; } }

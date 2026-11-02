@@ -1,6 +1,7 @@
 
 "use client";
 
+import HooContestAdminPreview from "@/components/HooContestAdminPreview";
 import { useRef, useState, type FormEvent } from "react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -481,6 +482,7 @@ export default function HooContestAdminPanel() {
       <div className="space-y-3">
 
         <div className="flex flex-wrap items-center justify-between gap-2">
+          <HooContestAdminPreview />
           <h3 className="font-semibold text-amber-200">
             2. 대회 선택 및 관리
           </h3>
