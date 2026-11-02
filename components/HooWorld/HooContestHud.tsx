@@ -13,13 +13,14 @@ export interface HooContestHudProps {
   /** MUST stay false until approved backend, release gate, and runtime tests are ready. */
   enabled?: boolean;
   allowJoin?: boolean;
+  allowRanking?: boolean;
   /** Inject an authenticated server adapter. No direct Supabase writes in this component. */
   api: HooContestApi;
 }
 
-export default function HooContestHud({ enabled = false, api, allowJoin = false }: HooContestHudProps) {
+export default function HooContestHud({ enabled = false, api, allowJoin = false, allowRanking = false }: HooContestHudProps) {
   if (!enabled) return null;
-  return <ContestUI api={api} allowJoin={allowJoin} />;
+  return <ContestUI api={api} allowJoin={allowJoin} allowRanking={allowRanking} />;
 }
 
 function errText(e: unknown): string { return e instanceof Error ? e.message : "요청에 실패했어요."; }
@@ -47,7 +48,7 @@ function RankTable({ rows }: { rows: ContestRank[] }) {
   );
 }
 
-function ContestUI({ api, allowJoin }: { api: HooContestApi; allowJoin: boolean }) {
+function ContestUI({ api, allowJoin, allowRanking }: { api: HooContestApi; allowJoin: boolean; allowRanking: boolean }) {
   const [overview, setOverview] = useState<ContestOverview | null>(null);
   const [overviewError, setOverviewError] = useState("");
   const [open, setOpen] = useState(false);
@@ -122,6 +123,36 @@ function ContestUI({ api, allowJoin }: { api: HooContestApi; allowJoin: boolean 
   }, []);
 
   const contest = overview?.contest ?? null;
+
+  // V7.4: 시작/종료 경계마다 1회 서버 상태 확인
+  // 15초 카운트다운은 화면 계산만 수행하며 API를 호출하지 않음
+  const contestId = contest?.id;
+  const contestPhase = contest?.phase;
+  const startsAt = contest?.startsAt;
+  const endsAt = contest?.endsAt;
+
+  useEffect(() => {
+    const boundary =
+      contestPhase === "scheduled"
+        ? Date.parse(startsAt ?? "")
+        : contestPhase === "active"
+          ? Date.parse(endsAt ?? "")
+          : NaN;
+
+    if (!contestId || !Number.isFinite(boundary)) return;
+
+    // Cron 실행 직후의 짧은 반영 시간을 고려
+    const delay = boundary + 30_000 - Date.now();
+
+    // 이미 지난 경계는 다시 예약하지 않음
+    if (delay <= 0 || delay > 2_147_483_647) return;
+
+    const timer = window.setTimeout(() => {
+      void reloadOverview();
+    }, delay);
+
+    return () => window.clearTimeout(timer);
+  }, [contestId, contestPhase, startsAt, endsAt, reloadOverview]);
   const presentation = overview?.presentation ?? null;
   const [clockOffsetMs, setClockOffsetMs] = useState(0);
   useEffect(() => {
@@ -174,8 +205,8 @@ function ContestUI({ api, allowJoin }: { api: HooContestApi; allowJoin: boolean 
   const showDialog = useCallback(() => {
     setOpen(true);
     setTab("ranking");
-    if (contest?.phase === "active" && (!board || board.contestId !== contest.id)) void loadLeaderboard(contest.id, "cached");
-  }, [board, contest, loadLeaderboard]);
+    if (allowRanking && contest?.phase === "active" && (!board || board.contestId !== contest.id)) void loadLeaderboard(contest.id, "cached");
+  }, [board, contest, loadLeaderboard, allowRanking]);
 
   const showHistory = () => {
     setTab("history");
@@ -213,7 +244,7 @@ function ContestUI({ api, allowJoin }: { api: HooContestApi; allowJoin: boolean 
   };
 
   const refreshPersonal = () => {
-    if (!contest || contest.phase !== "active" || boardBusy) return;
+    if (!allowRanking || !contest || contest.phase !== "active" || boardBusy) return;
     // Does NOT overwrite the shared hourly snapshot. Server calculates a private result.
     void loadLeaderboard(contest.id, "fresh");
   };
@@ -240,7 +271,7 @@ function ContestUI({ api, allowJoin }: { api: HooContestApi; allowJoin: boolean 
             <div className={styles.heading}>
               <div className={styles.headingTitle}>🏆 HOO TRADING CONTEST</div>
               <div className={styles.actions}>
-                {tab === "ranking" && contest && (
+                {allowRanking && tab === "ranking" && contest && (
                   <button type="button" className={styles.refresh} disabled={!active || boardBusy} onClick={refreshPersonal}
                     title="내 화면에만 최신 순위 조회" aria-label="최신 랭킹 수동 갱신">↻ 갱신</button>
                 )}
@@ -279,20 +310,20 @@ function ContestUI({ api, allowJoin }: { api: HooContestApi; allowJoin: boolean 
             ) : <div className={styles.empty}>현재 진행 중인 대회가 없습니다.</div>}
             <div className={styles.tabs} role="tablist" aria-label="대회 정보">
               <button type="button" role="tab" aria-selected={tab === "ranking"} className={`${styles.tab} ${tab === "ranking" ? styles.tabActive : ""}`}
-                onClick={() => {setTab("ranking");if (contest?.phase === "active" && (!board || board.contestId !== contest.id)) void loadLeaderboard(contest.id,"cached");}}>{finished ? "최종 결과" : contest?.phase === "scheduled" ? "대회 랭킹 (개최 후)" : "진행 중 랭킹"}</button>
+                onClick={() => {setTab("ranking");if (allowRanking && contest?.phase === "active" && (!board || board.contestId !== contest.id)) void loadLeaderboard(contest.id,"cached");}}>{finished ? "최종 결과" : contest?.phase === "scheduled" ? "대회 랭킹 (개최 후)" : "진행 중 랭킹"}</button>
               <button type="button" role="tab" aria-selected={tab === "history"} className={`${styles.tab} ${tab === "history" ? styles.tabActive : ""}`} onClick={showHistory}>지난 대회</button>
             </div>
             {tab === "ranking" ? (
               <>
                 <div className={styles.meta}>
-                  <span>{currentBoard?.official ? "공식 확정 결과" : finished ? "잠정 결과 · 관리자 검증 대기" : "TOP20 · 1시간 공용 집계"}</span>
+                  <span>{!allowRanking ? "랭킹 검증 중" : currentBoard?.official ? "공식 확정 결과" : finished ? "잠정 결과 · 관리자 검증 대기" : "TOP20 · 1시간 공용 집계"}</span>
                   <span>{currentBoard ? `기준 ${formatKst(currentBoard.snapshotAt)}` : ""}</span>
                 </div>
                 {boardError && <div className={styles.error} role="alert">{boardError}</div>}
                 {boardBusy && <div className={styles.subtle} role="status">랭킹을 확인하고 있어요…</div>}
-                {(!boardBusy || board) && <RankTable rows={resultRows} />}
+                {!allowRanking ? <div className={styles.empty}>랭킹 검증 중입니다.</div> : (!boardBusy || board) && <RankTable rows={resultRows} />}
                 <div className={styles.subtle} style={{ marginTop: 9 }}>
-                  {finished ? "상금은 관리자 검증·승인 후 별도 지급됩니다." : currentBoard?.source === "personal" ? "내 화면만 최신 랭킹으로 갱신되었습니다. 공용 순위는 그대로 유지됩니다." :
+                  {!allowRanking ? "랭킹 집계 검증 후 공개됩니다." : finished ? "상금은 관리자 검증·승인 후 별도 지급됩니다." : currentBoard?.source === "personal" ? "내 화면만 최신 랭킹으로 갱신되었습니다. 공용 순위는 그대로 유지됩니다." :
                     "공용 랭킹은 1시간마다 집계됩니다. 우측 상단 ↻ 갱신은 내 화면에만 적용돼요."}
                 </div>
               </>

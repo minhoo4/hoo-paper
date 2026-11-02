@@ -143,7 +143,7 @@ export default function HooContestStageGate() {
         }}
       >
         <div style={{ pointerEvents: "auto" }}>
-          <HooContestHud api={previewApi} enabled allowJoin />
+          <HooContestHud api={previewApi} enabled allowJoin allowRanking />
         </div>
       </div>
 
