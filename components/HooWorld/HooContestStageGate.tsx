@@ -132,9 +132,7 @@ export default function HooContestStageGate() {
         allowRanking={
           process.env.NEXT_PUBLIC_HOO_CONTEST_RANKING_ENABLED === "true"
         }
-        enabled={
-          process.env.NEXT_PUBLIC_HOO_CONTEST_HUD_ENABLED === "true"
-        }
+        enabled
       />
     );
   }

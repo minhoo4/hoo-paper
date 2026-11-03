@@ -1,9 +1,9 @@
 /* HOO WORLD · Contest UI v1.3. Rounded, gentle, dark fantasy glass.
    All selectors scoped to this CSS module; no existing World styles changed. */
 .hud {
-  position: absolute;
+  position: fixed;
   left: 50%;
-  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(80px + env(safe-area-inset-bottom, 0px));
   z-index: 36;
   transform: translateX(-50%);
   width: max-content;
