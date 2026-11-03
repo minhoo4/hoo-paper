@@ -1092,7 +1092,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        </section>
        <section className={styles.card}>
          <div className={styles.cardTitle}>🏆 후레이딩 랭킹 <button type="button" onClick={()=>setRankingExpanded(x=>!x)}>{rankingExpanded?'TOP 5':'TOP 10'}</button><button type="button" onClick={()=>void refreshRanking()} disabled={rankingLoading} aria-label="랭킹 새로고침">{rankingLoading?'조회 중':'↻ 갱신'}</button></div>
-         <div className={styles.rankHeader}><span>순위 · 추종자</span><span>500 HOO 기준 수익률</span><span>누적 실현손익</span></div>
+         <div className={styles.rankHeader}><span>순위 · 추종자</span><span>500 HOO 기준 수익률</span><span>초기화 후 실현손익</span></div>
          {(rankingExpanded?leaderboard:leaderboard.slice(0,5)).map((p,i)=><div className={styles.rankRow} key={p.userId}>
            <span>{i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`} {p.name}</span>
            <b className={p.roi>=0?styles.positive:styles.negative}>{percent(p.roi)}</b>

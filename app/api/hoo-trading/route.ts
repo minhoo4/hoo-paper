@@ -79,7 +79,7 @@ async function readOnlyPositionMonitor(userId:string){
 // Pure SELECT of existing, realized trading-account statistics. This intentionally
 // does not call snapshot/catchUp, recalculate settlements, or touch economy gates.
 async function readOnlyRanking(){
- const {data, count, error}=await admin().from('hootrading_accounts')
+ const {data, count, error}=await admin().from('hootrading_rank_since_reset_v1')
   .select('user_id,display_name,total_deposit_tc,realized_tc',{count:'exact'})
   .gte('total_deposit_tc',1000)
   .order('user_id',{ascending:true})
