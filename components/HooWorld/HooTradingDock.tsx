@@ -124,6 +124,22 @@ async function requestTrading(body?:Record<string,unknown>,frame=30):Promise<Sna
 }
 
 // Read only the authenticated user's wallet and account while orders are locked.
+async function requestPersonalBaseline():Promise<number>{
+ const client=getBrowserDb();
+ const {data:{session},error}=await client.auth.getSession();
+ if(error||!session?.access_token)
+  throw new Error('로그인이 필요합니다.');
+ const res=await fetch('/api/hoo-trading?view=personal-baseline',{
+  headers:{Authorization:`Bearer ${session.access_token}`},
+  cache:'no-store'
+ });
+ const json=await res.json().catch(()=>({error:'기준점 응답 오류'}));
+ if(!res.ok)throw new Error(json.error||'기준점 조회 실패');
+ if(typeof json.baselineRealizedTc!=='number'||
+    !Number.isFinite(json.baselineRealizedTc))
+  throw new Error('기준점 응답 형식 오류');
+ return json.baselineRealizedTc;
+}
 async function requestReadOnlyAssets():Promise<ReadOnlyAssets>{
  const client=getBrowserDb();
  const {data:{session},error}=await client.auth.getSession();
@@ -499,6 +515,8 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const [monitorPositions,setMonitorPositions]=useState(false);
  const [monitorError,setMonitorError]=useState<string|null>(null);
  const [readOnlyAssets,setReadOnlyAssets]=useState<ReadOnlyAssets|null>(null);
+ const [personalBaseline,setPersonalBaseline]=useState<number|null>(null);
+ const [personalBaselineError,setPersonalBaselineError]=useState<string|null>(null);
  const [readOnlyAssetError,setReadOnlyAssetError]=useState<string|null>(null);
  const [readOnlyRanking,setReadOnlyRanking]=useState<ReadOnlyRanking|null>(null);
  const [rankingError,setRankingError]=useState<string|null>(null);
@@ -596,6 +614,41 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      }
    }
  },[]);
+ useEffect(()=>{
+  if(!open){
+   setPersonalBaseline(null);
+   setPersonalBaselineError(null);
+   return;
+  }
+  let alive=true;
+  let version=0;
+  const load=async()=>{
+   const current=++version;
+   setPersonalBaseline(null);
+   setPersonalBaselineError(null);
+   try{
+    const value=await requestPersonalBaseline();
+    if(alive&&current===version)setPersonalBaseline(value);
+   }catch(e){
+    if(alive&&current===version)
+     setPersonalBaselineError(e instanceof Error?e.message:String(e));
+   }
+  };
+  void load();
+  const {data:{subscription}}=getBrowserDb().auth.onAuthStateChange((event)=>{
+   if(event==='SIGNED_OUT'){
+    version++;
+    setPersonalBaseline(null);
+   }else if(event==='SIGNED_IN'){
+    window.queueMicrotask(()=>{if(alive)void load();});
+   }
+  });
+  return ()=>{
+   alive=false;
+   version++;
+   subscription.unsubscribe();
+  };
+ },[open]);
  const refreshRanking=useCallback(async(reason:'entry'|'manual'|'closed'='manual',positionId?:string)=>{
    if(!isActive.current)return;
    // The refresh button is single-flight. Market ticks, unrealized P&L, and
@@ -993,9 +1046,11 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
  const shownFreeTC=data?availableTC:readOnlyAssets
    ?readOnlyAssets.walletHoo*1000+(readOnlyAssets.account?.cash_tc??0):null;
  const shownTotalTC=data?totalEq:readOnlyAssets?.openPositions===0?shownFreeTC:null;
- const shownRealized=data?pnl:readOnlyAssets?.account?.realized_tc;
+ const rawRealized=data?pnl:readOnlyAssets?.account?.realized_tc;
+ const shownRealized=rawRealized!=null&&personalBaseline!=null
+  ?rawRealized-personalBaseline:null;
  const shownDeposits=data?deposit:readOnlyAssets?.account?.total_deposit_tc;
- const shownRoi=shownRealized!=null?returnOnInitialCapital(Number(shownRealized)):null;
+ const shownRoi=shownRealized!=null?100*Number(shownRealized)/100000:null;
  const knownUnrealized=data?livePositions.reduce((sum,p)=>sum+p.unrealized,0)
    :readOnlyAssets?.openPositions===0?0:null;
   // Initial snapshot fallback; thereafter keep the last server-confirmed news revision.
@@ -1075,12 +1130,13 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          <div className={styles.pair}><span>미실현 손익</span><b>{knownUnrealized!=null?`${signed(knownUnrealized)} TC`:'미확인'}</b></div>
          <div className={styles.statsRow}>
            <div><small>실현 손익</small><strong className={shownRealized!=null&&shownRealized>=0?styles.positive:styles.negative}>{shownRealized!=null?`${signed(shownRealized)} TC`:'미확인'}</strong></div>
-           <div><small>실현수익률 (초기 500 HOO 기준)</small><strong className={shownRoi!=null&&shownRoi>=0?styles.positive:styles.negative}>{shownRoi!=null?percent(shownRoi):'미산출'}</strong></div>
+           <div><small>실현수익률 (초기 100 HOO 기준)</small><strong className={shownRoi!=null&&shownRoi>=0?styles.positive:styles.negative}>{shownRoi!=null?percent(shownRoi):'미산출'}</strong></div>
          </div>
          {economyMaintenance&&readOnlyAssets&&<div className={styles.miniNote}>실제 DB 지갑 조회 완료 · 읽기 전용 · 주문과 거래는 계속 중지됩니다.{readOnlyAssets.account===null?' 거래 계좌가 아직 생성되지 않았습니다.':''}</div>}
+         {personalBaselineError&&<div className={styles.miniNote}>수익 기준점 조회 실패: {personalBaselineError}</div>}
          {readOnlyAssetError&&<div className={styles.miniNote}>자산 조회 실패: {readOnlyAssetError}</div>}
          {monitorError&&<div className={styles.miniNote}>포지션 동기화 실패: {monitorError} <button type="button" onClick={()=>void refresh()}>자산 재확인</button></div>}
-         <div className={styles.miniNote}>공용 후코인 지갑 · 체결 후 자동 정산 (1 HOO 미만은 TC 잔액으로 유지) · 수익률은 초기 500 HOO 대비 누적 실현손익 추정치로, 외부 지급·지출을 반영한 전체 자산 수익률과 다를 수 있습니다.</div>
+         <div className={styles.miniNote}>공용 후코인 지갑 · 체결 후 자동 정산 (1 HOO 미만은 TC 잔액으로 유지) · 수익률은 초기화 후 실현손익을 초기 100 HOO 대비 계산한 추정치로, 외부 지급·지출을 반영한 전체 자산 수익률과 다를 수 있습니다.</div>
        </section>
        <section className={styles.card}>
          <div className={styles.cardTitle}>📣 오늘의 소식</div>
@@ -1092,7 +1148,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        </section>
        <section className={styles.card}>
          <div className={styles.cardTitle}>🏆 후레이딩 랭킹 <button type="button" onClick={()=>setRankingExpanded(x=>!x)}>{rankingExpanded?'TOP 5':'TOP 10'}</button><button type="button" onClick={()=>void refreshRanking()} disabled={rankingLoading} aria-label="랭킹 새로고침">{rankingLoading?'조회 중':'↻ 갱신'}</button></div>
-         <div className={styles.rankHeader}><span>순위 · 추종자</span><span>500 HOO 기준 수익률</span><span>초기화 후 실현손익</span></div>
+         <div className={styles.rankHeader}><span>순위 · 추종자</span><span>100 HOO 기준 수익률</span><span>초기화 후 실현손익</span></div>
          {(rankingExpanded?leaderboard:leaderboard.slice(0,5)).map((p,i)=><div className={styles.rankRow} key={p.userId}>
            <span>{i===0?'🥇':i===1?'🥈':i===2?'🥉':`${i+1}.`} {p.name}</span>
            <b className={p.roi>=0?styles.positive:styles.negative}>{percent(p.roi)}</b>
@@ -1102,7 +1158,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
          {!leaderboard.length&&!rankingIsKnown&&!rankingError&&<div className={styles.miniNote}>최초 랭킹을 조회하는 중입니다. 조회 실패 시 ↻ 버튼으로 재시도하세요.</div>}
          {rankingError&&<div className={styles.miniNote}>랭킹 최신 조회 실패: {rankingError}{readOnlyRanking?' · 이전 조회 결과를 유지합니다.':''}</div>}
          {readOnlyRanking&&<div className={styles.miniNote}>DB 기록 조회 완료 · 집계 대상 {readOnlyRanking.eligibleCount}명 · 접속·포지션 완전 종료·수동 갱신 시 조회 (읽기 전용)</div>}
-         <div className={styles.miniNote}>초기 {SEASON_INITIAL_HOO} HOO 지급 기준 추정치 · 별도 지급/선물/소비 및 미실현손익은 미반영 · 거래 참여자만 표시</div>
+         <div className={styles.miniNote}>초기 100 HOO 기준 추정치 · 별도 지급/선물/소비 및 미실현손익은 미반영 · 거래 참여자만 표시</div>
        </section>
      </aside>
      <main className={styles.right} aria-label="공통 거래 화면">

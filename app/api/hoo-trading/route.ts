@@ -8,6 +8,18 @@ export const dynamic='force-dynamic';
 const headers={'Cache-Control':'private, no-store'};
 // Authenticated READ-ONLY balance endpoint. No RPC, market synchronization,
 // row creation, write, or maintenance-gate mutation is performed here.
+async function readOnlyPersonalBaseline(userId:string){
+ const {data,error}=await admin()
+  .from('hootrading_rank_reset_baseline_v1')
+  .select('realized_tc')
+  .eq('user_id',userId)
+  .maybeSingle();
+ if(error)throw new Error('PERSONAL_BASELINE_ERROR: '+error.message);
+ const baseline=Number(data?.realized_tc??0);
+ if(!Number.isFinite(baseline)||Math.abs(baseline)>Number.MAX_SAFE_INTEGER)
+  throw new Error('INVALID_PERSONAL_BASELINE');
+ return {baselineRealizedTc:baseline};
+}
 async function readOnlyAssets(userId:string){
  const db=admin();
  const [wallet,account,positions]=await Promise.all([
@@ -99,7 +111,7 @@ async function readOnlyRanking(){
   const deposited=finite(record.total_deposit_tc,'total_deposit_tc');
   const profit=finite(record.realized_tc,'realized_tc');
   if(deposited<1000)throw new Error('INVALID_READ_ONLY_RANKING:deposit_threshold');
-  const roi=returnOnInitialCapital(profit);
+  const roi=100*profit/100000;
   if(!Number.isFinite(roi))throw new Error('INVALID_READ_ONLY_RANKING:roi');
   const userId=String(record.user_id??'');
   if(!/^[0-9a-f-]{36}$/i.test(userId))throw new Error('INVALID_READ_ONLY_RANKING:user_id');
@@ -132,6 +144,12 @@ export async function GET(req:Request){
  try{
   const user=await verifyUser(req);
   const url=new URL(req.url);
+  if(url.searchParams.get('view')==='personal-baseline'){
+   return NextResponse.json(
+    await readOnlyPersonalBaseline(user.id),
+    {headers}
+   );
+  }
   if(url.searchParams.get('view')==='assets'){
    // This endpoint remains available during maintenance without opening trading.
    return NextResponse.json(await readOnlyAssets(user.id),{headers});
