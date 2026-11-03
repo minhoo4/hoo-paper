@@ -18,9 +18,9 @@ export interface HooContestHudProps {
   api: HooContestApi;
 }
 
-export default function HooContestHud({ enabled = false, api, allowJoin = false, allowRanking = false }: HooContestHudProps) {
+export default function HooContestHud({ enabled = false, api, allowJoin = false }: HooContestHudProps) {
   if (!enabled) return null;
-  return <ContestUI api={api} allowJoin={allowJoin} allowRanking={allowRanking} />;
+  return <ContestUI api={api} allowJoin={allowJoin} allowRanking={true} />;
 }
 
 function errText(e: unknown): string { return e instanceof Error ? e.message : "요청에 실패했어요."; }
