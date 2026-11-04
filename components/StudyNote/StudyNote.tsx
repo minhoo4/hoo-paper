@@ -1,5 +1,6 @@
 "use client";
 
+import StudyNoteCollapsibleSidebar from "./StudyNoteCollapsibleSidebar";
 import {
   useEffect,
   useMemo,
@@ -15788,8 +15789,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
             <div aria-hidden="true" />
           </header>
 
-          <div className="grid min-h-0 grid-cols-[266px_minmax(0,1fr)]">
-            {renderSidebar()}
+          <div className="relative isolate grid min-h-0 min-w-0 grid-cols-[44px_minmax(0,1fr)]">
+            <StudyNoteCollapsibleSidebar isDarkMode={isDarkMode}>{renderSidebar()}</StudyNoteCollapsibleSidebar>
 
             <main
               data-hoo-vertical-scroll="true"
@@ -16073,8 +16074,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
             </div>
           </header>
 
-          <div className="grid min-h-0 grid-cols-[266px_minmax(0,1fr)]">
-            {renderSidebar()}
+          <div className="relative isolate grid min-h-0 min-w-0 grid-cols-[44px_minmax(0,1fr)]">
+            <StudyNoteCollapsibleSidebar isDarkMode={isDarkMode}>{renderSidebar()}</StudyNoteCollapsibleSidebar>
 
             <main
               data-hoo-vertical-scroll="true"
@@ -16293,8 +16294,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
             </div>
           </header>
 
-          <div className="grid min-h-0 grid-cols-[266px_minmax(0,1fr)]">
-            {renderSidebar()}
+          <div className="relative isolate grid min-h-0 min-w-0 grid-cols-[44px_minmax(0,1fr)]">
+            <StudyNoteCollapsibleSidebar isDarkMode={isDarkMode}>{renderSidebar()}</StudyNoteCollapsibleSidebar>
 
             <main className="flex min-h-0 min-w-0 flex-col overflow-hidden p-3">
               <div className="relative h-[50px] shrink-0">
@@ -16381,8 +16382,8 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
         </header>
 
-        <div className="grid min-h-0 grid-cols-[266px_minmax(0,1fr)]">
-          {renderSidebar()}
+        <div className="relative isolate grid min-h-0 min-w-0 grid-cols-[44px_minmax(0,1fr)]">
+          <StudyNoteCollapsibleSidebar isDarkMode={isDarkMode}>{renderSidebar()}</StudyNoteCollapsibleSidebar>
 
           <main
             ref={editorViewportRef}
