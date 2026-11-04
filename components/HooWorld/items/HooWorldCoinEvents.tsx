@@ -9,6 +9,8 @@ import {
   type MutableRefObject,
 } from "react";
 
+import { HOO_WORLD_DEFAULT_REGION_ID } from "@/components/HooWorld/world/hooWorldMap";
+
 type Position = {
   x: number;
   y: number;
@@ -60,13 +62,7 @@ function distance(
 }
 
 function resolveFieldId(regionId: string) {
-  const normalized = regionId.trim().toLowerCase();
-
-  if (normalized === "main") return 1;
-
-  const match = normalized.match(/(\d+)$/);
-
-  return match ? Number(match[1]) : 0;
+  return regionId === HOO_WORLD_DEFAULT_REGION_ID ? 1 : 0;
 }
 
 export default function HooWorldCoinEvents({

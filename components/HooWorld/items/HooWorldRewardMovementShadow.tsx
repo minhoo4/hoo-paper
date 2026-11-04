@@ -10,10 +10,18 @@ type Position = {
   y: number;
 };
 
+type MovementInput = {
+  left: boolean;
+  right: boolean;
+  up: boolean;
+  down: boolean;
+};
+
 type Props = {
   enabled: boolean;
   regionId: string;
   playerPositionRef: MutableRefObject<Position>;
+  movementInputRef: MutableRefObject<MovementInput>;
 };
 
 const API = "/api/hoo-world/coin-events/movement";
@@ -25,6 +33,7 @@ export default function HooWorldRewardMovementShadow({
   enabled,
   regionId,
   playerPositionRef,
+  movementInputRef,
 }: Props) {
   useEffect(() => {
     if (
@@ -41,7 +50,6 @@ export default function HooWorldRewardMovementShadow({
     let sequence = 0;
     let timer: ReturnType<typeof setInterval> | null = null;
 
-    let previous = { ...playerPositionRef.current };
     let lastDirection = "0,0";
     let lastSent = 0;
     let warned = false;
@@ -145,7 +153,6 @@ export default function HooWorldRewardMovementShadow({
 
         sequence = initialSequence;
         ready = true;
-        previous = { ...playerPositionRef.current };
 
         timer = setInterval(() => {
           if (!ready || disposed) return;
@@ -159,25 +166,16 @@ export default function HooWorldRewardMovementShadow({
             return;
           }
 
-          if (document.visibilityState !== "visible") {
-            previous = current;
-            return;
-          }
+          const input = movementInputRef.current;
+          const visible = document.visibilityState === "visible";
 
-          const deltaX = current.x - previous.x;
-          const deltaY = current.y - previous.y;
+          const dx = visible
+            ? Number(input.right) - Number(input.left)
+            : 0;
 
-          previous = current;
-
-          const dx =
-            Math.abs(deltaX) < 0.04
-              ? 0
-              : Math.sign(deltaX);
-
-          const dy =
-            Math.abs(deltaY) < 0.04
-              ? 0
-              : Math.sign(deltaY);
+          const dy = visible
+            ? Number(input.down) - Number(input.up)
+            : 0;
 
           const direction = `${dx},${dy}`;
           const now = Date.now();
@@ -207,7 +205,7 @@ export default function HooWorldRewardMovementShadow({
           };
 
           void flush();
-        }, 500);
+        }, 200);
 
       } catch (error) {
         console.warn(
@@ -226,7 +224,7 @@ export default function HooWorldRewardMovementShadow({
 
       if (timer) clearInterval(timer);
     };
-  }, [enabled, regionId, playerPositionRef]);
+  }, [enabled, regionId, playerPositionRef, movementInputRef]);
 
   return null;
 }

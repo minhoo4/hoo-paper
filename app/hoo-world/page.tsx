@@ -10473,9 +10473,10 @@ export default function HooWorldPage() {
     HooWorldStall.tsx가 직접 소유한다.
 ───────────────────────── */}
 <HooWorldRewardMovementShadow
-  enabled={Boolean(currentUserId)}
+  enabled={Boolean(currentUserId) && !isControllingAdminCharacter && !hooTradingActive && !isHooWorldMovementLockedStatus(status)}
   regionId={String(worldRegionId)}
   playerPositionRef={playerPositionRef}
+  movementInputRef={movementInputRef}
 />
 
 <HooWorldCoinEvents
