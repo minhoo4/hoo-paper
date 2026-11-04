@@ -10471,7 +10471,10 @@ export default function HooWorldPage() {
     F 상호작용 / 모금 / 요청 기능은
     HooWorldStall.tsx가 직접 소유한다.
 ───────────────────────── */}
-<HooWorldCoinEvents regionId={String(worldRegionId)} />
+<HooWorldCoinEvents
+  regionId={String(worldRegionId)}
+  playerPositionRef={playerPositionRef}
+/>
 <HooWorldStall
   walletHoo={hooCoinBalance}
   x={77}
