@@ -52,7 +52,6 @@ export default function HooWorldRewardMovementShadow({
 
     let lastDirection = "0,0";
     let lastSent = 0;
-    let warned = false;
 
     let queued: {
       dx: number;
@@ -104,23 +103,30 @@ export default function HooWorldRewardMovementShadow({
           const serverX = Number(data.x);
           const serverY = Number(data.y);
 
+          // 이동 중에는 네트워크 지연으로
+          // 좌표 비교 시점이 달라질 수 있다.
+          // 정지 요청 처리 후에만 비교한다.
           if (
-            !warned &&
+            input.dx === 0 &&
+            input.dy === 0 &&
             Number.isFinite(serverX) &&
             Number.isFinite(serverY)
           ) {
-            const difference = Math.hypot(
-              serverX - input.x,
-              serverY - input.y
+            const local = playerPositionRef.current;
+
+            const gap = Math.hypot(
+              serverX - local.x,
+              serverY - local.y
             );
 
-            if (difference > 2.5) {
-              warned = true;
-              console.warn(
-                "HOO_WORLD_REWARD_POSITION_DIVERGENCE",
-                { difference }
-              );
-            }
+            console.info("HOO_WORLD_SHADOW_STOP_CHECK", {
+              clientX: Number(local.x.toFixed(2)),
+              clientY: Number(local.y.toFixed(2)),
+              serverX: Number(serverX.toFixed(2)),
+              serverY: Number(serverY.toFixed(2)),
+              difference: Number(gap.toFixed(2)),
+              sequence: data.last_sequence,
+            });
           }
         }
       } catch (error) {
@@ -153,6 +159,29 @@ export default function HooWorldRewardMovementShadow({
 
         sequence = initialSequence;
         ready = true;
+
+        const local = playerPositionRef.current;
+        const serverX = Number(data.x);
+        const serverY = Number(data.y);
+
+        if (
+          Number.isFinite(serverX) &&
+          Number.isFinite(serverY)
+        ) {
+          console.info("HOO_WORLD_SHADOW_START_CHECK", {
+            clientX: Number(local.x.toFixed(2)),
+            clientY: Number(local.y.toFixed(2)),
+            serverX: Number(serverX.toFixed(2)),
+            serverY: Number(serverY.toFixed(2)),
+            difference: Number(
+              Math.hypot(
+                serverX - local.x,
+                serverY - local.y
+              ).toFixed(2)
+            ),
+            sequence: initialSequence,
+          });
+        }
 
         timer = setInterval(() => {
           if (!ready || disposed) return;
