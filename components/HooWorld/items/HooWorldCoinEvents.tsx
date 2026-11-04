@@ -57,6 +57,11 @@ type Props = {
 const REWARD_EVENTS_VISIBLE =
   process.env.NEXT_PUBLIC_HOO_WORLD_COIN_EVENTS_ENABLED === "true";
 
+// HOO_WORLD_REWARD_COLLECT_CLIENT_V1
+// 서버 지급 스위치와 별개의 UI 안전 스위치
+const CLAIM_UI_ENABLED =
+  process.env.NEXT_PUBLIC_HOO_WORLD_REWARD_COLLECT_ENABLED === "true";
+
 const INTERACTION_DISTANCE = 2.5;
 
 function distance(
@@ -88,6 +93,7 @@ export default function HooWorldCoinEvents({
 
   const feedbackTimer =
     useRef<ReturnType<typeof setTimeout> | null>(null);
+  const claimBusyRef = useRef(false);
 
   const notify = useCallback((message: string) => {
     setFeedback(message);
@@ -232,6 +238,12 @@ export default function HooWorldCoinEvents({
       "visibilitychange",
       onVisibility
     );
+    const onRewardCollected = () => void refresh();
+
+    window.addEventListener(
+      "hoo-world:reward-collected",
+      onRewardCollected
+    );
 
     void refresh();
 
@@ -243,6 +255,10 @@ export default function HooWorldCoinEvents({
       document.removeEventListener(
         "visibilitychange",
         onVisibility
+      );
+      window.removeEventListener(
+        "hoo-world:reward-collected",
+        onRewardCollected
       );
     };
   }, []);
@@ -288,26 +304,97 @@ export default function HooWorldCoinEvents({
   }, [snapshot, previewItems, regionId]);
 
   const attemptInteraction = useCallback(
-    (item: WorldReward) => {
+    async (item: WorldReward) => {
       const player = playerPositionRef.current;
 
-      if (distance(player, item) >
-          INTERACTION_DISTANCE) {
+      if (distance(player, item) > INTERACTION_DISTANCE) {
         notify("조금 더 가까이 이동해주세요.");
         return;
       }
 
       if (item.preview) {
-        notify(
-          "🧪 상호작용 성공! 테스트 모드 · HOO 미지급"
-        );
+        notify("🧪 테스트 상호작용 성공 · HOO 미지급");
         return;
       }
 
-      // 실제 지급 RPC는 서버 위치 검증 구현 후 연결한다.
-      notify(
-        "🎁 발견 성공! 보상 지급은 아직 준비 중입니다."
-      );
+      if (!CLAIM_UI_ENABLED) {
+        notify("🪙 보상 획득은 아직 준비 중입니다.");
+        return;
+      }
+
+      if (claimBusyRef.current) return;
+
+      const [kind, objectId] = item.id.split(":");
+
+      if (
+        (kind !== "coin" && kind !== "box") ||
+        !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(
+          objectId ?? ""
+        )
+      ) return;
+
+      claimBusyRef.current = true;
+
+      try {
+        const response = await fetch(
+          "/api/hoo-world/coin-events/collect",
+          {
+            method: "POST",
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ kind, objectId }),
+          }
+        );
+
+        const data = await response.json()
+          .catch(() => null);
+
+        if (!response.ok || data?.success !== true) {
+          const code = data?.code ?? data?.reason;
+
+          notify(
+            code === "POSITION_NOT_VERIFIED"
+              ? "현재 위치가 확인되지 않아 획득할 수 없어요."
+              : code === "TOO_FAR"
+                ? "코인에 조금 더 가까이 이동해 주세요."
+                : code === "COLLECT_NOT_RELEASED"
+                  ? "🪙 보상 지급은 아직 준비 중입니다."
+                  : "획득에 실패했어요. 잠시 후 다시 시도해 주세요."
+          );
+
+          return;
+        }
+
+        notify("🎉 후코인 획득 완료!");
+
+        // 중복 클릭 방지를 위해 획득된 아이템 즉시 제거
+        setSnapshot((current) => current ? {
+          ...current,
+          active_coins: current.active_coins.filter(
+            (coin) => !(
+              kind === "coin" && coin.coin_id === objectId
+            )
+          ),
+          active_boxes: current.active_boxes.filter(
+            (box) => !(
+              kind === "box" && box.box_id === objectId
+            )
+          ),
+        } : current);
+
+        // 실제 데이터 변형 후 1회 조회
+        window.dispatchEvent(
+          new Event("hoo-world:reward-collected")
+        );
+
+      } catch {
+        notify("네트워크 연결을 확인해 주세요.");
+      } finally {
+        claimBusyRef.current = false;
+      }
     },
     [playerPositionRef, notify]
   );
