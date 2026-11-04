@@ -12,6 +12,41 @@ function json(body: unknown, status = 200) {
 }
 
 export async function GET() {
+  // HOO_WORLD_REWARD_PRODUCTION_CANARY_V1
+  // 운영 배포 시 지정 계정만 이벤트 조회 가능
+  const canaryId =
+    process.env.HOO_WORLD_REWARD_COLLECT_TEST_USER_ID;
+
+  const emptySnapshot = {
+    active_coins: [],
+    active_boxes: [],
+    next_coin_at: null,
+    next_box_at: null,
+  };
+
+  if (!canaryId) {
+    return Response.json(emptySnapshot, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
+  const { createClient: createCanarySession } =
+    await import("@/lib/supabase/server");
+
+  const canarySession = await createCanarySession();
+  const { data: canaryAuth, error: canaryError } =
+    await canarySession.auth.getUser();
+
+  if (
+    canaryError ||
+    canaryAuth.user?.id !== canaryId
+  ) {
+    return Response.json(emptySnapshot, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+
+
   try {
     const session = await createSession();
     const { data: auth, error: authError } =
