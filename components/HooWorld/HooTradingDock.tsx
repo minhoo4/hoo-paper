@@ -1,4 +1,5 @@
 'use client';
+import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import dynamic from 'next/dynamic';
@@ -1113,7 +1114,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
      aria-expanded={open} disabled={disabled} aria-disabled={disabled} onClick={()=>{if(!disabled)setOpen(x=>!x);}} title="후월드 공통 시장에 접속하기">
      <span aria-hidden="true">📈</span> 후레이딩 <span className={styles.entryDot}/>
    </button>
-   {open&&<div className={styles.overlay} role="dialog" aria-label="후레이딩 거래 패널" aria-modal="false">
+   {open&&typeof document!=='undefined'&&createPortal(<div className={styles.overlay} role="dialog" aria-label="후레이딩 거래 패널" aria-modal="false">
      <div className={styles.scrim} onClick={()=>setOpen(false)} aria-hidden="true"/>
      <div className={styles.header}>
        <span className={styles.heading}>📈 후레이딩 <small>HOO WORLD MARKET</small></span>
@@ -1286,7 +1287,7 @@ export default function HooTradingDock({onActiveChange,buttonBottom,disabled=fal
        <div className={styles.foot}>후코인 1 = 1,000 TC · 공동 가상시장 · 부분청산 / 동일방향 추가 진입 가능 · 투자 결과는 후코인 게임자산에 반영</div>
        </>}
      </main>
-   </div>}
+   </div>, document.body)}
  </>;
 }
 
