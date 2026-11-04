@@ -218,6 +218,7 @@ export async function POST(req:Request){
   // HOO_FAST_CLOSE_V1_QUOTE_READY: skip heavy replay only when V6 and the settled market clock agree.
   // This is a read-only preflight. The order RPC still serializes and validates price.
   let fastCloseReady=false;
+  let clock: Awaited<ReturnType<typeof catchUp>> | undefined;
   if(input.command.action==='close'){
    const db=admin();
    const [marketClock,v6Clock]=await Promise.all([
@@ -231,8 +232,19 @@ export async function POST(req:Request){
     &&Number.isSafeInteger(marketSecond)&&marketSecond===streamSecond
     &&marketSecond>=wallSecond-1&&marketSecond<=wallSecond;
   }
+  if(fastCloseReady){
+    const settled=await admin().from('hootrading_market_state')
+      .select('last_second').eq('id',1).single();
+    if(settled.error || !settled.data)
+      throw new Error('FAST_CLOSE_CLOCK_UNAVAILABLE');
+    clock={
+      caughtUp:true,
+      remaining:0,
+      lastSecond:Number(settled.data.last_second)
+    };
+  }
   if(!fastCloseReady){
-    const clock=await catchUp(960);
+    clock=await catchUp(960);
     if(!clock.caughtUp)return NextResponse.json({error:`시장 동기화 중: 남은 ${clock.remaining.toLocaleString('ko-KR')}틱. 동일 요청으로 다시 확인해주세요.`,requestId,clock},{status:503,headers:{...headers,'Retry-After':'1'}});
   }
   committed=await executeOrder(user.id,requestId,input.command);
