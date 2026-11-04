@@ -1,6 +1,7 @@
 "use client";
 
 
+import HooWorldRewardMovementShadow from "@/components/HooWorld/items/HooWorldRewardMovementShadow";
 import HooWorldCoinEvents from "@/components/HooWorld/items/HooWorldCoinEvents";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -10471,6 +10472,12 @@ export default function HooWorldPage() {
     F 상호작용 / 모금 / 요청 기능은
     HooWorldStall.tsx가 직접 소유한다.
 ───────────────────────── */}
+<HooWorldRewardMovementShadow
+  enabled={Boolean(currentUserId)}
+  regionId={String(worldRegionId)}
+  playerPositionRef={playerPositionRef}
+/>
+
 <HooWorldCoinEvents
   regionId={String(worldRegionId)}
   playerPositionRef={playerPositionRef}
