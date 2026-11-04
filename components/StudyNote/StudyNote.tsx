@@ -15789,7 +15789,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
             <div aria-hidden="true" />
           </header>
 
-          <div className="relative isolate grid min-h-0 min-w-0 grid-cols-[44px_minmax(0,1fr)]">
+          <div className="relative flex min-h-0 min-w-0 [&>main]:min-w-0 [&>main]:flex-1">
             <StudyNoteCollapsibleSidebar isDarkMode={isDarkMode}>{renderSidebar()}</StudyNoteCollapsibleSidebar>
 
             <main
@@ -16074,7 +16074,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
             </div>
           </header>
 
-          <div className="relative isolate grid min-h-0 min-w-0 grid-cols-[44px_minmax(0,1fr)]">
+          <div className="relative flex min-h-0 min-w-0 [&>main]:min-w-0 [&>main]:flex-1">
             <StudyNoteCollapsibleSidebar isDarkMode={isDarkMode}>{renderSidebar()}</StudyNoteCollapsibleSidebar>
 
             <main
@@ -16294,7 +16294,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
             </div>
           </header>
 
-          <div className="relative isolate grid min-h-0 min-w-0 grid-cols-[44px_minmax(0,1fr)]">
+          <div className="relative flex min-h-0 min-w-0 [&>main]:min-w-0 [&>main]:flex-1">
             <StudyNoteCollapsibleSidebar isDarkMode={isDarkMode}>{renderSidebar()}</StudyNoteCollapsibleSidebar>
 
             <main className="flex min-h-0 min-w-0 flex-col overflow-hidden p-3">
@@ -16382,7 +16382,7 @@ export default function StudyNote({ active }: StudyNoteProps) {
 
         </header>
 
-        <div className="relative isolate grid min-h-0 min-w-0 grid-cols-[44px_minmax(0,1fr)]">
+        <div className="relative flex min-h-0 min-w-0 [&>main]:min-w-0 [&>main]:flex-1">
           <StudyNoteCollapsibleSidebar isDarkMode={isDarkMode}>{renderSidebar()}</StudyNoteCollapsibleSidebar>
 
           <main
