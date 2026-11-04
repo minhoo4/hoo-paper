@@ -36,6 +36,8 @@ import {
 } from "@/components/HooWorld/audio/hooWorldMusicPlaylist";
 
 import HooWorldMiniMap from "@/components/HooWorld/world/HooWorldMiniMap";
+import { useHooWorldMobileDrag } from "@/components/HooWorld/hooks/useHooWorldMobileDrag";
+import { useHooWorldMobileCamera } from "@/components/HooWorld/hooks/useHooWorldMobileCamera";
 import {
   useHooWorldRegionUnlocks,
 } from "@/components/HooWorld/world/useHooWorldRegionUnlocks";
@@ -5316,18 +5318,81 @@ export default function HooWorldPage() {
        * 캐릭터 크기 / 스케일 / 스킨이 바뀌어도
        * 고정 숫자를 다시 맞출 필요가 없다.
        */
+
+      // HOO_MOBILE_CAMERA_COLLISION_V1
+      // 화면 확대 후에도 충돌 계산은 기존 월드 좌표를 사용한다.
+      // 실제 카메라 레이어가 활성화되기 전까지는 완전한 기존 동작이다.
+      const cameraRoot =
+        playerElement?.closest<HTMLElement>("main") ?? null;
+
+      const cameraStageActive =
+        cameraRoot?.dataset.hooMobileCameraStage === "active";
+
+      const rawCameraZoom = Number(
+        cameraRoot?.style.getPropertyValue("--hoo-camera-zoom") || 1
+      );
+
+      const cameraZoom =
+        cameraStageActive && Number.isFinite(rawCameraZoom)
+          ? Math.max(1, Math.min(2.5, rawCameraZoom))
+          : 1;
+
+      const cameraOffsetX = cameraStageActive
+        ? Number(cameraRoot?.style.getPropertyValue("--hoo-camera-x")) || 0
+        : 0;
+
+      const cameraOffsetY = cameraStageActive
+        ? Number(cameraRoot?.style.getPropertyValue("--hoo-camera-y")) || 0
+        : 0;
+
+      const cameraRootRect = cameraRoot?.getBoundingClientRect();
+
+      const cameraOriginX = cameraRootRect?.left ?? 0;
+      const cameraOriginY = cameraRootRect?.top ?? 0;
+
+      const cameraPixelX =
+        cameraOriginX +
+        (currentPlayerPixelX - cameraOriginX) * cameraZoom +
+        cameraOffsetX;
+
+      const cameraPixelY =
+        cameraOriginY +
+        (currentPlayerPixelY - cameraOriginY) * cameraZoom +
+        cameraOffsetY;
+
+
+      // HOO_MOBILE_CAMERA_COLLISION_V2
+      // 화면에서 충돌을 비교하고 결과만 월드 좌표로 복원한다.
+      const cameraScreenX = (worldX: number) =>
+        cameraOriginX +
+        (worldX - cameraOriginX) * cameraZoom +
+        cameraOffsetX;
+
+      const cameraScreenY = (worldY: number) =>
+        cameraOriginY +
+        (worldY - cameraOriginY) * cameraZoom +
+        cameraOffsetY;
+
+      const cameraWorldX = (screenX: number) =>
+        cameraOriginX +
+        (screenX - cameraOriginX - cameraOffsetX) / cameraZoom;
+
+      const cameraWorldY = (screenY: number) =>
+        cameraOriginY +
+        (screenY - cameraOriginY - cameraOffsetY) / cameraZoom;
+
       const playerGroundOffsetX =
         playerCharacterRect
           ? playerCharacterRect.left +
             playerCharacterRect.width /
               2 -
-            currentPlayerPixelX
+            cameraPixelX
           : 0;
 
       const playerGroundOffsetY =
         playerCharacterRect
           ? playerCharacterRect.bottom -
-            currentPlayerPixelY
+            cameraPixelY
           : 0;
 
       for (
@@ -5339,10 +5404,12 @@ export default function HooWorldPage() {
             '[data-hoo-world-collision-anchor="true"]',
           );
 
-        const itemRect =
+        const screenItemRect =
           collisionAnchor
             ? collisionAnchor.getBoundingClientRect()
             : collisionObject.getBoundingClientRect();
+
+        const itemRect = screenItemRect;
 
         if (
           itemRect.width <= 0 ||
@@ -5385,19 +5452,11 @@ export default function HooWorldPage() {
          * 아이템의 실제 접지 충돌면에 닿을 때만 막힌다.
          */
         const nextPlayerGroundPixelX =
-          (
-            x /
-            100
-          ) *
-            viewportWidth +
+          cameraScreenX((x / 100) * viewportWidth) +
           playerGroundOffsetX;
 
         const nextPlayerGroundPixelY =
-          (
-            y /
-            100
-          ) *
-            viewportHeight +
+          cameraScreenY((y / 100) * viewportHeight) +
           playerGroundOffsetY;
 
         const isInside =
@@ -5472,12 +5531,9 @@ export default function HooWorldPage() {
           "left"
         ) {
           x =
-            (
-              itemRect.left -
-              playerGroundOffsetX
-            ) /
-            viewportWidth *
-            100;
+            (cameraWorldX(
+              itemRect.left - playerGroundOffsetX
+            ) / viewportWidth) * 100;
 
           continue;
         }
@@ -5487,12 +5543,9 @@ export default function HooWorldPage() {
           "right"
         ) {
           x =
-            (
-              itemRect.right -
-              playerGroundOffsetX
-            ) /
-            viewportWidth *
-            100;
+            (cameraWorldX(
+              itemRect.right - playerGroundOffsetX
+            ) / viewportWidth) * 100;
 
           continue;
         }
@@ -5502,23 +5555,17 @@ export default function HooWorldPage() {
           "top"
         ) {
           y =
-            (
-              collisionTopPixel -
-              playerGroundOffsetY
-            ) /
-            viewportHeight *
-            100;
+            (cameraWorldY(
+              collisionTopPixel - playerGroundOffsetY
+            ) / viewportHeight) * 100;
 
           continue;
         }
 
         y =
-          (
-            itemRect.bottom -
-            playerGroundOffsetY
-          ) /
-          viewportHeight *
-          100;
+          (cameraWorldY(
+            itemRect.bottom - playerGroundOffsetY
+          ) / viewportHeight) * 100;
       }
 
       return {
@@ -9867,8 +9914,11 @@ export default function HooWorldPage() {
       ? localFoodEffectLevel
       : 0;
 
+  useHooWorldMobileDrag(playerElementRef);
+  const mobileCameraRef = useHooWorldMobileCamera();
+
   return (
-    <main className="relative h-[100dvh] min-h-[640px] w-full overflow-hidden bg-[#7fa75d] text-[#2d3329]">
+    <main ref={mobileCameraRef} className="relative h-[100dvh] min-h-[640px] w-full overflow-hidden bg-[#7fa75d] text-[#2d3329]">
       <HooWorldNatureAmbience
         enabled={
           isNatureAmbienceEnabled
@@ -9886,6 +9936,7 @@ export default function HooWorldPage() {
         }
       />
 
+      <div className="hidden md:contents" data-hoo-desktop-minimap="true">
       <HooWorldMiniMap
         regionId={
           worldRegionId
@@ -9900,6 +9951,7 @@ export default function HooWorldPage() {
           unlockedWorldRegionIds
         }
       />
+      </div>
 
       {worldRegionNotice && (
         <div className="pointer-events-none fixed left-1/2 top-[198px] z-[97] -translate-x-1/2 rounded-full border border-white/45 bg-[#203528]/88 px-4 py-2 text-xs font-black text-white shadow-[0_8px_24px_rgba(20,35,23,0.28)] backdrop-blur-md">
@@ -9915,6 +9967,39 @@ export default function HooWorldPage() {
           3. 맵 외곽의 빽빽한 숲
       ───────────────────────── */}
 
+      {/* HOO_MOBILE_CAMERA_VISUAL_PREVIEW_V1 */}
+      <style>{`
+        @media (max-width: 767px) {
+          main[data-hoo-mobile-camera-stage="active"]
+          [data-hoo-mobile-camera-world="true"] {
+            display: block;
+            position: absolute;
+            inset: 0;
+            transform-origin: top left;
+            transform:
+              translate3d(
+                var(--hoo-camera-x, 0px),
+                var(--hoo-camera-y, 0px),
+                0
+              )
+              scale(var(--hoo-camera-zoom, 1));
+          }
+
+          main[data-hoo-mobile-camera-stage="active"]
+          [data-hoo-mobile-camera-world="true"]
+          [data-hoo-world-local-player="true"],
+          main[data-hoo-mobile-camera-stage="active"]
+          [data-hoo-mobile-camera-world="true"]
+          [data-hoo-world-collision-object="true"] {
+            scale: var(--hoo-camera-inverse-zoom, 1);
+          }
+        }
+      `}</style>
+
+      <div
+        data-hoo-mobile-camera-world="true"
+        className="contents"
+      >
       {/* 전체 잔디 바닥 */}
       <div className="absolute inset-0 z-0 bg-gradient-to-b from-[#a8cd7d] via-[#8db664] to-[#6f944f]" />
 
@@ -12168,7 +12253,9 @@ export default function HooWorldPage() {
           기존 기능 UI 유지
       ───────────────────────── */}
 
-            <header className="absolute inset-x-0 top-0 z-50 flex items-start justify-between gap-3 p-4 sm:p-6">
+            </div>
+
+      <header className="absolute inset-x-0 top-0 z-50 flex items-start justify-between gap-3 p-4 sm:p-6">
         <div className="flex items-start gap-2">
           <Link
             href="/"
