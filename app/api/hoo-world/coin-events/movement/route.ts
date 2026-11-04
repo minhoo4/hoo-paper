@@ -7,8 +7,39 @@ export const dynamic = "force-dynamic";
 
 const headers = { "Cache-Control": "no-store" };
 
-function json(body: unknown, status = 200) {
-  return NextResponse.json(body, { status, headers });
+const json = (body: unknown, status = 200) =>
+  NextResponse.json(body, { status, headers });
+
+function adminClient() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) return null;
+
+  return createAdmin(url, key, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
+}
+
+async function getAuthorizedUser() {
+  const session = await createSession();
+  const { data, error } = await session.auth.getUser();
+
+  return error ? null : data.user;
+}
+
+function eligible(userId: string) {
+  const tester =
+    process.env.HOO_WORLD_REWARD_AUTHORITY_TEST_USER_ID;
+
+  return (
+    process.env.HOO_WORLD_REWARD_AUTHORITY_ENABLED === "true" &&
+    !!tester &&
+    tester === userId
+  );
 }
 
 export async function GET() {
@@ -22,39 +53,28 @@ export async function GET() {
   }
 
   try {
-    const session = await createSession();
+    const user = await getAuthorizedUser();
 
-    const { data: auth, error: authError } =
-      await session.auth.getUser();
-
-    if (authError || !auth.user) {
+    if (!user) {
       return json({
         success: false,
         code: "AUTH_REQUIRED",
       }, 401);
     }
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const admin = adminClient();
 
-    if (!url || !key) {
+    if (!admin) {
       return json({
         success: false,
         code: "SERVER_NOT_READY",
       }, 503);
     }
 
-    const admin = createAdmin(url, key, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    });
-
     const { data, error } = await admin
       .from("hoo_world_reward_move_states_v1")
       .select("x,y,field_id,last_sequence")
-      .eq("user_id", auth.user.id)
+      .eq("user_id", user.id)
       .maybeSingle();
 
     if (error) {
@@ -66,12 +86,13 @@ export async function GET() {
 
     return json({
       success: true,
+      authority_eligible: eligible(user.id),
       x: Number(data?.x ?? 50),
       y: Number(data?.y ?? 78),
       field_id: Number(data?.field_id ?? 1),
       last_sequence: Number(data?.last_sequence ?? 0),
-      proof_issued: false,
       reward_enabled: false,
+      proof_issued: false,
     });
 
   } catch (error) {
@@ -85,8 +106,6 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  // 서버 이동 검증 연동이 완료되기 전에는
-  // 외부에서 이동 상태를 생성할 수 없도록 차단한다.
   if (
     process.env.HOO_WORLD_REWARD_MOVEMENT_ENABLED !== "true"
   ) {
@@ -97,23 +116,28 @@ export async function POST(request: Request) {
   }
 
   try {
-    const session = await createSession();
+    const user = await getAuthorizedUser();
 
-    const { data: auth, error: authError } =
-      await session.auth.getUser();
-
-    if (authError || !auth.user) {
+    if (!user) {
       return json({
         success: false,
         code: "AUTH_REQUIRED",
       }, 401);
     }
 
-    const length = Number(
+    // 테스트 계정 외의 이동 상태 변경 차단
+    if (!eligible(user.id)) {
+      return json({
+        success: false,
+        code: "MOVEMENT_AUTHORITY_NOT_RELEASED",
+      }, 403);
+    }
+
+    const size = Number(
       request.headers.get("content-length") ?? 0
     );
 
-    if (length > 2048) {
+    if (size > 2048) {
       return json({
         success: false,
         code: "REQUEST_TOO_LARGE",
@@ -123,7 +147,11 @@ export async function POST(request: Request) {
     const body: unknown = await request.json()
       .catch(() => null);
 
-    if (!body || typeof body !== "object") {
+    if (
+      !body ||
+      typeof body !== "object" ||
+      Array.isArray(body)
+    ) {
       return json({
         success: false,
         code: "INVALID_REQUEST",
@@ -131,18 +159,59 @@ export async function POST(request: Request) {
     }
 
     const input = body as Record<string, unknown>;
+    const admin = adminClient();
 
-    const dx = input.dx;
-    const dy = input.dy;
-    const sequence = input.sequence;
+    if (!admin) {
+      return json({
+        success: false,
+        code: "SERVER_NOT_READY",
+      }, 503);
+    }
+
+    // 새 서버 이동 세션 발급
+    if (input.action === "start") {
+      const { data, error } = await admin.rpc(
+        "hoo_world_reward_move_join_v2",
+        { p_user_id: user.id }
+      );
+
+      if (error) {
+        console.error("Movement start error", error.code);
+
+        return json({
+          success: false,
+          code: "MOVEMENT_START_FAILED",
+        }, 503);
+      }
+
+      return json(data);
+    }
+
+    if (input.action !== "step") {
+      return json({
+        success: false,
+        code: "INVALID_ACTION",
+      }, 400);
+    }
+
+    const {
+      dx,
+      dy,
+      sequence,
+      sessionId,
+    } = input;
 
     if (
       !Number.isInteger(dx) ||
       !Number.isInteger(dy) ||
-      !Number.isSafeInteger(sequence) ||
       ![-1, 0, 1].includes(dx as number) ||
       ![-1, 0, 1].includes(dy as number) ||
-      (sequence as number) <= 0
+      !Number.isSafeInteger(sequence) ||
+      (sequence as number) <= 0 ||
+      typeof sessionId !== "string" ||
+      !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(
+        sessionId
+      )
     ) {
       return json({
         success: false,
@@ -150,27 +219,11 @@ export async function POST(request: Request) {
       }, 400);
     }
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!url || !key) {
-      return json({
-        success: false,
-        code: "SERVER_NOT_READY",
-      }, 503);
-    }
-
-    const admin = createAdmin(url, key, {
-      auth: {
-        persistSession: false,
-        autoRefreshToken: false,
-      },
-    });
-
     const { data, error } = await admin.rpc(
-      "hoo_world_reward_move_sync_v1",
+      "hoo_world_reward_move_step_v2",
       {
-        p_user_id: auth.user.id,
+        p_user_id: user.id,
+        p_session_id: sessionId,
         p_dx: dx,
         p_dy: dy,
         p_sequence: sequence,
@@ -178,20 +231,18 @@ export async function POST(request: Request) {
     );
 
     if (error) {
-      console.error("World reward movement failed", {
-        code: error.code,
-      });
+      console.error("Movement step error", error.code);
 
       return json({
         success: false,
-        code: "MOVEMENT_SYNC_FAILED",
-      }, 503);
+        code: "MOVEMENT_STEP_FAILED",
+      }, 409);
     }
 
     return json(data);
 
   } catch (error) {
-    console.error("World reward movement error", error);
+    console.error("Movement request error", error);
 
     return json({
       success: false,

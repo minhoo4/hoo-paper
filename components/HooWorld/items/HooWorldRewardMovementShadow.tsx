@@ -24,10 +24,20 @@ type Props = {
   movementInputRef: MutableRefObject<MovementInput>;
 };
 
-const API = "/api/hoo-world/coin-events/movement";
+type MovementResponse = {
+  success?: boolean;
+  stale?: boolean;
+  session_id?: string;
+  x?: number;
+  y?: number;
+  last_sequence?: number;
+  authority_eligible?: boolean;
+};
 
-const SHADOW_ENABLED =
-  process.env.NEXT_PUBLIC_HOO_WORLD_REWARD_SHADOW_ENABLED === "true";
+const AUTHORITY_ENABLED =
+  process.env.NEXT_PUBLIC_HOO_WORLD_REWARD_AUTHORITY_ENABLED === "true";
+
+const API = "/api/hoo-world/coin-events/movement";
 
 export default function HooWorldRewardMovementShadow({
   enabled,
@@ -37,28 +47,104 @@ export default function HooWorldRewardMovementShadow({
 }: Props) {
   useEffect(() => {
     if (
-      !SHADOW_ENABLED ||
+      !AUTHORITY_ENABLED ||
       !enabled ||
       regionId !== HOO_WORLD_DEFAULT_REGION_ID
-    ) {
-      return;
-    }
+    ) return;
 
     let disposed = false;
     let ready = false;
     let busy = false;
     let sequence = 0;
-    let timer: ReturnType<typeof setInterval> | null = null;
+    let sessionId = "";
 
     let lastDirection = "0,0";
-    let lastSent = 0;
+    let lastSentAt = 0;
+
+    let timer: ReturnType<typeof setInterval> | null = null;
 
     let queued: {
       dx: number;
       dy: number;
-      x: number;
-      y: number;
     } | null = null;
+
+    function publish(
+      data: MovementResponse,
+      initial: boolean
+    ) {
+      const x = Number(data.x);
+      const y = Number(data.y);
+
+      if (
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        x < 5 || x > 95 ||
+        y < 9 || y > 93
+      ) return;
+
+      const local = playerPositionRef.current;
+
+      const difference = Math.hypot(
+        local.x - x,
+        local.y - y
+      );
+
+      // 서버 좌표를 캐릭터에 반영
+      if (initial || difference > 0.75) {
+        window.dispatchEvent(
+          new CustomEvent(
+            "hoo-world:reward-authority-position",
+            {
+              detail: {
+                x,
+                y,
+                fieldId: 1,
+                sessionId,
+              },
+            }
+          )
+        );
+      }
+
+      if (
+        initial ||
+        (queued === null && lastDirection === "0,0")
+      ) {
+        console.info(
+          initial
+            ? "HOO_WORLD_AUTHORITY_START"
+            : "HOO_WORLD_AUTHORITY_STOP",
+          {
+            difference: Number(difference.toFixed(2)),
+            serverX: Number(x.toFixed(2)),
+            serverY: Number(y.toFixed(2)),
+            sequence: data.last_sequence,
+          }
+        );
+      }
+    }
+
+    async function request(
+      body: Record<string, unknown>
+    ): Promise<MovementResponse> {
+      const response = await fetch(API, {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `MOVEMENT_HTTP_${response.status}`
+        );
+      }
+
+      return await response.json() as MovementResponse;
+    }
 
     async function flush() {
       if (!ready || busy || disposed) return;
@@ -67,71 +153,38 @@ export default function HooWorldRewardMovementShadow({
 
       try {
         while (queued && !disposed && ready) {
-          const input = queued;
+          const move = queued;
           queued = null;
+
           sequence += 1;
 
-          const response = await fetch(API, {
-            method: "POST",
-            credentials: "same-origin",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            cache: "no-store",
-            body: JSON.stringify({
-              dx: input.dx,
-              dy: input.dy,
-              sequence,
-            }),
+          const result = await request({
+            action: "step",
+            sessionId,
+            dx: move.dx,
+            dy: move.dy,
+            sequence,
           });
 
-          if (!response.ok) {
-            ready = false;
-            break;
-          }
-
-          const data = await response.json();
+          if (disposed) return;
 
           if (
-            data?.success !== true ||
-            data?.stale === true
+            result.success !== true ||
+            result.stale === true ||
+            result.session_id !== sessionId
           ) {
             ready = false;
-            break;
+            return;
           }
 
-          const serverX = Number(data.x);
-          const serverY = Number(data.y);
-
-          // 이동 중에는 네트워크 지연으로
-          // 좌표 비교 시점이 달라질 수 있다.
-          // 정지 요청 처리 후에만 비교한다.
-          if (
-            input.dx === 0 &&
-            input.dy === 0 &&
-            Number.isFinite(serverX) &&
-            Number.isFinite(serverY)
-          ) {
-            const local = playerPositionRef.current;
-
-            const gap = Math.hypot(
-              serverX - local.x,
-              serverY - local.y
-            );
-
-            console.info("HOO_WORLD_SHADOW_STOP_CHECK", {
-              clientX: Number(local.x.toFixed(2)),
-              clientY: Number(local.y.toFixed(2)),
-              serverX: Number(serverX.toFixed(2)),
-              serverY: Number(serverY.toFixed(2)),
-              difference: Number(gap.toFixed(2)),
-              sequence: data.last_sequence,
-            });
-          }
+          publish(result, false);
         }
       } catch (error) {
         ready = false;
-        console.warn("Reward movement sync stopped", error);
+        console.warn(
+          "HOO_WORLD_AUTHORITY_STOPPED",
+          error
+        );
       } finally {
         busy = false;
       }
@@ -139,64 +192,47 @@ export default function HooWorldRewardMovementShadow({
 
     async function initialize() {
       try {
+        // 서버에서 테스트 대상 여부 확인
         const response = await fetch(API, {
-          cache: "no-store",
           credentials: "same-origin",
+          cache: "no-store",
         });
 
         if (!response.ok || disposed) return;
 
-        const data = await response.json();
-        const initialSequence = Number(data?.last_sequence);
+        const availability =
+          await response.json() as MovementResponse;
 
         if (
-          data?.success !== true ||
-          !Number.isSafeInteger(initialSequence) ||
-          initialSequence < 0
-        ) {
-          return;
-        }
+          !availability.authority_eligible ||
+          disposed
+        ) return;
 
-        sequence = initialSequence;
+        // 서버가 위치 및 세션 발급
+        const result = await request({
+          action: "start",
+        });
+
+        if (
+          disposed ||
+          result.success !== true ||
+          typeof result.session_id !== "string"
+        ) return;
+
+        sessionId = result.session_id;
+        sequence = 0;
         ready = true;
 
-        const local = playerPositionRef.current;
-        const serverX = Number(data.x);
-        const serverY = Number(data.y);
+        publish(result, true);
 
-        if (
-          Number.isFinite(serverX) &&
-          Number.isFinite(serverY)
-        ) {
-          console.info("HOO_WORLD_SHADOW_START_CHECK", {
-            clientX: Number(local.x.toFixed(2)),
-            clientY: Number(local.y.toFixed(2)),
-            serverX: Number(serverX.toFixed(2)),
-            serverY: Number(serverY.toFixed(2)),
-            difference: Number(
-              Math.hypot(
-                serverX - local.x,
-                serverY - local.y
-              ).toFixed(2)
-            ),
-            sequence: initialSequence,
-          });
-        }
-
+        // 로컬 입력을 관찰하되 DB 폴링은 하지 않음
         timer = setInterval(() => {
-          if (!ready || disposed) return;
-
-          const current = { ...playerPositionRef.current };
-
-          if (
-            !Number.isFinite(current.x) ||
-            !Number.isFinite(current.y)
-          ) {
-            return;
-          }
+          if (disposed || !ready) return;
 
           const input = movementInputRef.current;
-          const visible = document.visibilityState === "visible";
+
+          const visible =
+            document.visibilityState === "visible";
 
           const dx = visible
             ? Number(input.right) - Number(input.left)
@@ -209,36 +245,28 @@ export default function HooWorldRewardMovementShadow({
           const direction = `${dx},${dy}`;
           const now = Date.now();
 
+          // 정지 상태 반복 요청 차단
           if (
             direction === "0,0" &&
             lastDirection === "0,0"
-          ) {
-            return;
-          }
+          ) return;
 
+          // 같은 방향은 최소 800ms 간격
           if (
             direction === lastDirection &&
-            now - lastSent < 1000
-          ) {
-            return;
-          }
+            now - lastSentAt < 800
+          ) return;
 
+          lastSentAt = now;
           lastDirection = direction;
-          lastSent = now;
 
-          queued = {
-            dx,
-            dy,
-            x: current.x,
-            y: current.y,
-          };
-
+          queued = { dx, dy };
           void flush();
-        }, 200);
+        }, 100);
 
       } catch (error) {
         console.warn(
-          "Reward movement initialization failed",
+          "HOO_WORLD_AUTHORITY_START_FAILED",
           error
         );
       }
@@ -253,7 +281,12 @@ export default function HooWorldRewardMovementShadow({
 
       if (timer) clearInterval(timer);
     };
-  }, [enabled, regionId, playerPositionRef, movementInputRef]);
+  }, [
+    enabled,
+    regionId,
+    playerPositionRef,
+    movementInputRef,
+  ]);
 
   return null;
 }

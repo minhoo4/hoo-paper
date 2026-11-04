@@ -6502,6 +6502,50 @@ export default function HooWorldPage() {
       applyPlayerTransform();
     }
 
+
+    // HOO WORLD SERVER AUTHORITY V2
+    // 테스트 계정 전용 / 보상 지급 없음
+    function handleRewardAuthorityPosition(event: Event) {
+      if (
+        process.env.NEXT_PUBLIC_HOO_WORLD_REWARD_AUTHORITY_ENABLED !== "true" ||
+        worldRegionIdRef.current !== HOO_WORLD_DEFAULT_REGION_ID ||
+        isControllingAdminCharacterRef.current
+      ) return;
+
+      const detail = (event as CustomEvent<{
+        x?: number;
+        y?: number;
+        fieldId?: number;
+      }>).detail;
+
+      const x = detail?.x;
+      const y = detail?.y;
+
+      if (
+        typeof x !== "number" ||
+        typeof y !== "number" ||
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        x < 5 || x > 95 ||
+        y < 9 || y > 93 ||
+        detail.fieldId !== 1
+      ) return;
+
+      playerPositionRef.current.x = x;
+      playerPositionRef.current.y = y;
+
+      applyPlayerTransform();
+
+      lastMovementBroadcastAtRef.current = 0;
+
+      void updatePositionRef.current(
+        x,
+        y,
+        playerFacingRef.current,
+        hasMovementInput()
+      );
+    }
+
     const initialPosition =
       constrainToWalkableField(
         playerPositionRef.current
@@ -6523,6 +6567,11 @@ export default function HooWorldPage() {
           resetPlayerWalkMotion();
         },
       );
+
+    window.addEventListener(
+      "hoo-world:reward-authority-position",
+      handleRewardAuthorityPosition,
+    );
 
     window.addEventListener(
       "hoo-world:item-move-mode",
@@ -6564,6 +6613,11 @@ export default function HooWorldPage() {
       resetPlayerWalkMotion();
 
       clearMovementInput();
+
+      window.removeEventListener(
+        "hoo-world:reward-authority-position",
+        handleRewardAuthorityPosition,
+      );
 
       window.removeEventListener(
         "hoo-world:item-move-mode",
