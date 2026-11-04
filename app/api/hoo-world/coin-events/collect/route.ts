@@ -138,14 +138,24 @@ export async function POST(request: Request) {
       }, 409);
     }
 
-    if (!data || data.success !== true) {
+    // DB 지급 RPC의 공식 결과는 { ok: true }.
+    // 성공한 지급을 실패로 오인하지 않도록 정규화한다.
+    if (!data || data.ok !== true) {
       return respond({
         success: false,
-        code: data?.reason ?? "COLLECT_REJECTED",
+        code:
+          typeof data?.code === "string"
+            ? data.code
+            : typeof data?.reason === "string"
+              ? data.reason
+              : "COLLECT_REJECTED",
       }, 409);
     }
 
-    return respond(data);
+    return respond({
+      ...data,
+      success: true,
+    });
 
   } catch (error) {
     console.error("World reward collect error", error);
