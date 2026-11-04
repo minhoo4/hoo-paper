@@ -36,7 +36,7 @@ import {
 } from "@/components/HooWorld/audio/hooWorldMusicPlaylist";
 
 import HooWorldMiniMap from "@/components/HooWorld/world/HooWorldMiniMap";
-import { useHooWorldMobileDrag } from "@/components/HooWorld/hooks/useHooWorldMobileDrag";
+import { useHooWorldMobileDoubleTapMove } from "@/components/HooWorld/hooks/useHooWorldMobileDoubleTapMove";
 import { useHooWorldMobileCamera } from "@/components/HooWorld/hooks/useHooWorldMobileCamera";
 import {
   useHooWorldRegionUnlocks,
@@ -9914,7 +9914,10 @@ export default function HooWorldPage() {
       ? localFoodEffectLevel
       : 0;
 
-  useHooWorldMobileDrag(playerElementRef);
+  useHooWorldMobileDoubleTapMove(
+    playerElementRef,
+    playerPositionRef,
+  );
   const mobileCameraRef = useHooWorldMobileCamera();
 
   return (
