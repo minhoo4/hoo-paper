@@ -25,7 +25,10 @@ export async function GET() {
   };
 
   if (!canaryId) {
-    return Response.json(emptySnapshot, {
+    return Response.json({
+      ...emptySnapshot,
+      canary_diagnostic: "ENV_MISSING",
+    }, {
       headers: { "Cache-Control": "no-store" },
     });
   }
@@ -41,7 +44,15 @@ export async function GET() {
     canaryError ||
     canaryAuth.user?.id !== canaryId
   ) {
-    return Response.json(emptySnapshot, {
+    return Response.json({
+      ...emptySnapshot,
+      canary_diagnostic:
+        canaryError
+          ? "AUTH_ERROR"
+          : canaryAuth.user?.id
+            ? "ACCOUNT_MISMATCH"
+            : "LOGIN_REQUIRED",
+    }, {
       headers: { "Cache-Control": "no-store" },
     });
   }
