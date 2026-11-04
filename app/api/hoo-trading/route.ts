@@ -215,8 +215,26 @@ export async function POST(req:Request){
   // One safe retry can replay several bounded batches instead of only 120 ticks.
   // Never execute a new order until the global market and all pending stops
   // have been replayed, even if that requires more than one request.
-  const clock=await catchUp(960);
-  if(!clock.caughtUp)return NextResponse.json({error:`시장 동기화 중: 남은 ${clock.remaining.toLocaleString('ko-KR')}틱. 동일 요청으로 다시 확인해주세요.`,requestId,clock},{status:503,headers:{...headers,'Retry-After':'1'}});
+  // HOO_FAST_CLOSE_V1_QUOTE_READY: skip heavy replay only when V6 and the settled market clock agree.
+  // This is a read-only preflight. The order RPC still serializes and validates price.
+  let fastCloseReady=false;
+  if(input.command.action==='close'){
+   const db=admin();
+   const [marketClock,v6Clock]=await Promise.all([
+    db.from('hootrading_market_state').select('last_second').eq('id',1).maybeSingle(),
+    db.from('hootrading_v6_stream').select('mode,last_second').eq('id',1).maybeSingle()
+   ]);
+   const marketSecond=Number(marketClock.data?.last_second);
+   const streamSecond=Number(v6Clock.data?.last_second);
+   const wallSecond=Math.floor(Date.now()/1000);
+   fastCloseReady=!marketClock.error&&!v6Clock.error&&v6Clock.data?.mode==='active'
+    &&Number.isSafeInteger(marketSecond)&&marketSecond===streamSecond
+    &&marketSecond>=wallSecond-1&&marketSecond<=wallSecond;
+  }
+  if(!fastCloseReady){
+    const clock=await catchUp(960);
+    if(!clock.caughtUp)return NextResponse.json({error:`시장 동기화 중: 남은 ${clock.remaining.toLocaleString('ko-KR')}틱. 동일 요청으로 다시 확인해주세요.`,requestId,clock},{status:503,headers:{...headers,'Retry-After':'1'}});
+  }
   committed=await executeOrder(user.id,requestId,input.command);
   // Receipt and raw state already committed together; no post-commit DB read.
   return NextResponse.json({ok:true,...presentState(committed.state,input.timeframe),receipt:committed.receipt,clock},{headers});
