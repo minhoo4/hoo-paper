@@ -52,6 +52,11 @@ type Props = {
   playerPositionRef: MutableRefObject<Position>;
 };
 
+// 출시 전에는 코인 API를 호출하지 않는다.
+// 실제 후코인 지급 권한과는 별개인 표시 전용 스위치.
+const REWARD_EVENTS_VISIBLE =
+  process.env.NEXT_PUBLIC_HOO_WORLD_COIN_EVENTS_ENABLED === "true";
+
 const INTERACTION_DISTANCE = 2.5;
 
 function distance(
@@ -134,6 +139,9 @@ export default function HooWorldCoinEvents({
   // 최초 진입 및 실제 이벤트 일정에 맞춰 조회.
   // 반복적인 DB 폴링은 사용하지 않는다.
   useEffect(() => {
+    // 출시 전에는 네트워크 요청 및 타이머 생성 금지
+    if (!REWARD_EVENTS_VISIBLE) return;
+
     let disposed = false;
     let busy = false;
 
