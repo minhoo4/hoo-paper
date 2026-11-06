@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import dynamic from "next/dynamic";
 
@@ -1649,6 +1649,9 @@ const uiOpacityButtonRef =
   );
 
   /* 투두리스트 */
+
+// 새 운영일에는 홈을 새로고침하지 않고 일별 데이터만 다시 읽는다.
+const [dayRefreshVersion, setDayRefreshVersion] = useState(0);
 
 const [todos, setTodos] =
   useState<TodoItem[]>([]);
@@ -4219,7 +4222,7 @@ useEffect(() => {
 
     subscription.unsubscribe();
   };
-}, [supabase]);
+}, [supabase, dayRefreshVersion]);
 
 /* ─────────────────────────────
    HOO 오후 9시 브리핑 자동 감지
@@ -4431,7 +4434,7 @@ if (
       handleVisibilityChange,
     );
   };
-}, [supabase]);
+}, [supabase, dayRefreshVersion]);
 
 
 /* ─────────────────────────────
@@ -7906,6 +7909,7 @@ useEffect(() => {
 }, [
   schedules,
   supabase,
+  dayRefreshVersion,
 ]);
 
 /* ─────────────────────────────
@@ -8313,7 +8317,7 @@ useEffect(() => {
   return () => {
     cancelled = true;
   };
-}, [supabase]);
+}, [supabase, dayRefreshVersion]);
 
 /* ─────────────────────────────
    투두리스트 로컬 캐시 저장
@@ -8356,44 +8360,44 @@ useEffect(() => {
       ? "preparing"
       : "active";
 
-  let scheduledReloadTimer:
+  let scheduledRefreshTimer:
     number | null = null;
 
-  function clearScheduledReload() {
+  function clearScheduledRefresh() {
     if (
-      scheduledReloadTimer === null
+      scheduledRefreshTimer === null
     ) {
       return;
     }
 
     window.clearTimeout(
-      scheduledReloadTimer,
+      scheduledRefreshTimer,
     );
 
-    scheduledReloadTimer =
+    scheduledRefreshTimer =
       null;
   }
 
-  function scheduleTodoReload() {
+  function scheduleDailyRefresh() {
     if (
-      scheduledReloadTimer !== null
+      scheduledRefreshTimer !== null
     ) {
       return;
     }
 
     /*
-     * 새벽 4시 크론과 브라우저 새로고침이
+     * 새벽 4시 크론과 데이터 조회가
      * 동시에 실행되는 경쟁 상태를 방지한다.
      *
      * 크론이 오늘의 투두와 브리핑을 저장할
-     * 시간을 확보한 뒤 화면을 새로 불러온다.
+     * 시간을 확보한 뒤 일별 데이터만 갱신한다.
      */
-    scheduledReloadTimer =
+    scheduledRefreshTimer =
       window.setTimeout(() => {
-        scheduledReloadTimer =
+        scheduledRefreshTimer =
           null;
 
-        window.location.reload();
+        setDayRefreshVersion(version => version + 1);
       }, 10_000);
   }
 
@@ -8427,7 +8431,7 @@ useEffect(() => {
       dateChanged &&
       currentPhase === "preparing"
     ) {
-      clearScheduledReload();
+      clearScheduledRefresh();
 
       setTodos([]);
 
@@ -8454,7 +8458,7 @@ useEffect(() => {
       previousPhase =
         currentPhase;
 
-      scheduleTodoReload();
+      scheduleDailyRefresh();
 
       return;
     }
@@ -8473,7 +8477,7 @@ useEffect(() => {
       previousPhase =
         currentPhase;
 
-      scheduleTodoReload();
+      scheduleDailyRefresh();
 
       return;
     }
@@ -8514,7 +8518,7 @@ useEffect(() => {
   );
 
   return () => {
-    clearScheduledReload();
+    clearScheduledRefresh();
 
     window.clearInterval(
       todoDayCycleInterval,
@@ -16332,4 +16336,3 @@ className="fixed bottom-[calc(16px+var(--hoo-safe-bottom))] left-4 z-[10010] fle
   </main>
 );
 }
-
