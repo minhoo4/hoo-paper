@@ -13,6 +13,8 @@ import {
   createV6Anchor,
 } from '../../../../lib/hoo-trading/v6-live';
 import { marketSecond } from '../../../../lib/hoo-trading/market';
+import { catchUpV6 } from '../../../../lib/hoo-trading/v6-live';
+import { applyArmedV6Rebase } from '../../../../lib/hoo-trading/v6-rebase';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -82,6 +84,37 @@ export async function GET(req: Request) {
         },
         { headers: noStore }
       );
+    }
+
+    // Disabled by default. Only a short-lived, explicitly armed DB request
+    // authorizes one price-preserving rebase. Cron job 12 can stay disabled.
+    if (process.env.HOO_V6_REBASE_ENABLE === '1') {
+      const rebased = await applyArmedV6Rebase(db);
+      if (rebased.applied) {
+        // IMPORTANT: the atomic rebase has ALREADY COMMITTED at this point.
+        // Produce a first confirmed bar before considering the chart usable.
+        try {
+          const clock = await catchUpV6(db, 45);
+          const firstTickConfirmed = clock.lastSecond > rebased.toSecond;
+          return NextResponse.json({
+            ok: firstTickConfirmed,
+            marketRebased: true,
+            firstTickConfirmed,
+            fromSecond: rebased.fromSecond,
+            toSecond: rebased.toSecond,
+            economyStillPaused: true,
+            ...clock,
+          }, { status: firstTickConfirmed ? 200 : 202, headers: noStore });
+        } catch (error) {
+          console.error('V6 first-tick check:', error instanceof Error ? error.name : 'unknown');
+          return NextResponse.json({
+            ok: false,
+            marketRebased: true,
+            firstTickConfirmed: false,
+            economyStillPaused: true,
+          }, { status: 202, headers: noStore });
+        }
+      }
     }
 
     const { data: stream, error: clockError } = await db
